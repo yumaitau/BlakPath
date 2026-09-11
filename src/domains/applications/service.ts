@@ -1,13 +1,15 @@
-import { and, desc, eq, isNull, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, exists, isNull, or, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import {
   applications,
   applicationAssignments,
   applicationNotes,
   applicationStatusHistory,
+  clients,
   membershipRoles,
   memberships,
   roles,
+  teamMemberships,
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
@@ -136,6 +138,30 @@ async function activeAssigneeIds(applicationId: string): Promise<string[]> {
   return rows.map((r) => r.assigneeUserId);
 }
 
+/** Load user ids in the team owning the application's client, if any. */
+async function clientTeamMemberIds(application: ApplicationRow): Promise<string[]> {
+  if (!application.clientId) return [];
+  const scope = currentScope();
+  const rows = await scope.db
+    .select({ userId: teamMemberships.userId })
+    .from(clients)
+    .innerJoin(
+      teamMemberships,
+      and(
+        eq(teamMemberships.teamId, clients.assignedTeamId),
+        eq(teamMemberships.organisationId, clients.organisationId),
+      ),
+    )
+    .where(
+      scope.where(
+        clients.organisationId,
+        eq(clients.id, application.clientId),
+        isNull(clients.deletedAt),
+      ),
+    );
+  return [...new Set(rows.map((r) => r.userId))];
+}
+
 /**
  * Fetch an application the actor is permitted to read. Throws a non-leaking
  * {@link AuthorizationError} when it does not exist OR the actor may not read
@@ -147,12 +173,14 @@ export async function getApplication(id: string): Promise<ApplicationDetail> {
 
   const application = await loadApplication(id);
   const assigneeUserIds = application ? await activeAssigneeIds(id) : [];
+  const teamMemberUserIds = application ? await clientTeamMemberIds(application) : [];
 
   const readable =
     application !== null &&
     canReadApplication(subject, {
       applicantUserId: application.applicantUserId,
       assigneeUserIds,
+      teamMemberUserIds,
     });
 
   if (!application || !readable) {
@@ -251,6 +279,21 @@ export async function createApplication(
   const input = createApplicationSchema.parse(rawInput);
   const scope = currentScope();
 
+  // Optional client link must belong to this tenant, else the matter could
+  // silently attach to another tenant's person record.
+  let clientId: string | null = null;
+  if (input.clientId) {
+    const [client] = await scope.db
+      .select({ id: clients.id })
+      .from(clients)
+      .where(
+        scope.where(clients.organisationId, eq(clients.id, input.clientId), isNull(clients.deletedAt)),
+      )
+      .limit(1);
+    if (!client) throw new AuthorizationError('POLICY_DENIED');
+    clientId = client.id;
+  }
+
   const id = uuidv7();
   const reference = makeReference(id);
 
@@ -262,6 +305,7 @@ export async function createApplication(
         reference,
         applicantName: input.applicantName,
         applicantUserId: input.applicantUserId ?? null,
+        clientId,
         priority: input.priority,
         intake: input.intake ?? null,
         createdByUserId: ctx.userId,
@@ -499,12 +543,32 @@ export async function listApplications(
     filters.push(eq(applications.applicantUserId, input.applicantUserId));
   }
 
-  // Narrow to own/assigned unless the actor may read the whole tenant.
+  // Narrow to own/assigned/team unless the actor may read the whole tenant.
   if (!readsAllApplications(subject)) {
     filters.push(
       or(
         eq(applications.applicantUserId, subject.userId),
         eq(applications.currentAssigneeUserId, subject.userId),
+        exists(
+          scope.db
+            .select({ one: clients.id })
+            .from(clients)
+            .innerJoin(
+              teamMemberships,
+              and(
+                eq(teamMemberships.teamId, clients.assignedTeamId),
+                eq(teamMemberships.organisationId, clients.organisationId),
+              ),
+            )
+            .where(
+              and(
+                eq(clients.organisationId, applications.organisationId),
+                eq(clients.id, applications.clientId),
+                isNull(clients.deletedAt),
+                eq(teamMemberships.userId, subject.userId),
+              ),
+            ),
+        ),
       ),
     );
   }

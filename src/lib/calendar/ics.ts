@@ -20,6 +20,10 @@ export interface IcsEvent {
   url?: string | null;
   status?: IcsEventStatus;
   categories?: string[];
+  /** Recurrence rule (RRULE value without the name). */
+  rrule?: string | null;
+  /** Exception dates as UTC Dates. */
+  exdates?: Date[];
 }
 
 const DEFAULT_DURATION_MS = 60 * 60 * 1000;
@@ -94,6 +98,10 @@ function eventLines(event: IcsEvent, stamp: string): string[] {
   if (event.location) lines.push(`LOCATION:${escapeIcsText(event.location)}`);
   if (event.url) lines.push(`URL:${escapeIcsText(event.url)}`);
   if (event.status) lines.push(`STATUS:${event.status}`);
+  if (event.rrule) lines.push(`RRULE:${event.rrule}`);
+  if (event.exdates && event.exdates.length > 0) {
+    lines.push(`EXDATE:${event.exdates.map((d) => formatIcsUtc(d)).join(',')}`);
+  }
   if (event.categories && event.categories.length > 0) {
     lines.push(`CATEGORIES:${event.categories.map(escapeIcsText).join(',')}`);
   }
@@ -135,6 +143,8 @@ export interface ParsedIcsEvent {
   description?: string;
   location?: string;
   status?: string;
+  rrule?: string;
+  exdates?: Date[];
 }
 
 /** Unfold RFC 5545 lines: a leading space/tab continues the previous line. */
@@ -200,6 +210,8 @@ export function parseIcs(text: string): ParsedIcsEvent[] {
     description?: string;
     location?: string;
     status?: string;
+    rrule?: string;
+    exdates?: Date[];
   } = {};
 
   for (const line of lines) {
@@ -220,6 +232,8 @@ export function parseIcs(text: string): ParsedIcsEvent[] {
           ...(current.description ? { description: current.description } : {}),
           ...(current.location ? { location: current.location } : {}),
           ...(current.status ? { status: current.status } : {}),
+          ...(current.rrule ? { rrule: current.rrule } : {}),
+          ...(current.exdates && current.exdates.length > 0 ? { exdates: current.exdates } : {}),
         });
       }
       continue;
@@ -249,6 +263,17 @@ export function parseIcs(text: string): ParsedIcsEvent[] {
       case 'STATUS':
         current.status = value.trim().toUpperCase();
         break;
+      case 'RRULE':
+        current.rrule = value.trim();
+        break;
+      case 'EXDATE': {
+        const dates = value
+          .split(',')
+          .map((part) => parseIcsDate(part))
+          .filter((d): d is Date => d !== null);
+        if (dates.length > 0) current.exdates = [...(current.exdates ?? []), ...dates];
+        break;
+      }
       default:
         break;
     }

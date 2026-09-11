@@ -3,6 +3,7 @@ import {
   calendarEventAttendees,
   calendarEventReminders,
   calendarEvents,
+  featureFlags,
 } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
@@ -24,6 +25,7 @@ import {
   type UpdateCalendarEventInput,
 } from './schemas';
 import { expandOccurrences, overlaps } from './recurrence';
+import { CalendarConflictError } from './errors';
 
 /**
  * Calendar service — tenant-scoped, permission-checked, audited.
@@ -62,8 +64,7 @@ async function resourceConflicts(input: {
   start: Date;
   end: Date | null;
   ignoreId?: string;
-}): Promise<CalendarEventRow[]> {
-  if (!input.resource) return [];
+}): Promise<CalendarEventRow[]> {  if (!input.resource) return [];
   const ctx = requireTenantContext();
   void ctx;
   const scope = currentScope();
@@ -86,6 +87,29 @@ async function resourceConflicts(input: {
   );
 }
 
+/**
+ * Whether this tenant hard-blocks resource double-booking. Tenant override
+ * wins; platform default row (null organisation) next; absent = warn-only.
+ */
+async function resourceHardBlock(): Promise<boolean> {
+  const scope = currentScope();
+  const rows = await scope.db
+    .select()
+    .from(featureFlags)
+    .where(eq(featureFlags.key, 'calendar-resource-hard-block'))
+    .limit(10);
+  const orgRow = rows.find((r) => r.organisationId === scope.organisationId);
+  if (orgRow) return orgRow.enabled;
+  const platform = rows.find((r) => r.organisationId === null);
+  return platform?.enabled ?? false;
+}
+
+function throwIfBlocked(conflicts: CalendarEventRow[], force: boolean | undefined, hardBlock: boolean): void {
+  if (conflicts.length > 0 && hardBlock && !force) {
+    throw new CalendarConflictError(conflicts);
+  }
+}
+
 export async function createCalendarEvent(
   raw: CreateCalendarEventInput,
 ): Promise<{ event: CalendarEventRow; conflicts: CalendarEventRow[] }> {
@@ -93,6 +117,16 @@ export async function createCalendarEvent(
   requirePermission(subjectFromContext(ctx), 'calendar:create');
   const input = createCalendarEventSchema.parse(raw);
   const scope = currentScope();
+  // Hard-block check runs BEFORE insert so a rejected booking leaves no row.
+  throwIfBlocked(
+    await resourceConflicts({
+      resource: input.resource ?? null,
+      start: input.startAt,
+      end: input.endAt ?? null,
+    }),
+    input.force,
+    await resourceHardBlock(),
+  );
   const inserted = await scope.db
     .insert(calendarEvents)
     .values(
@@ -105,6 +139,7 @@ export async function createCalendarEvent(
         endAt: input.endAt ?? null,
         allDay: input.allDay ?? false,
         rrule: input.rrule ?? null,
+        exdate: input.exdate ?? null,
         timezone: input.timezone ?? 'Australia/Sydney',
         meetingId: input.meetingId ?? null,
         createdByUserId: ctx.userId,
@@ -159,6 +194,7 @@ export async function listOccurrences(range: { from: Date; to: Date }): Promise<
       start: event.startAt,
       end: event.endAt,
       rrule: event.rrule,
+      exdate: event.exdate,
       from: range.from,
       to: range.to,
     }).map((o) => ({ event, start: o.start, end: o.end })),
@@ -174,6 +210,17 @@ export async function updateCalendarEvent(
   const input = updateCalendarEventSchema.parse(raw);
   const existing = await loadEvent(id);
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  // Hard-block check runs BEFORE update so a rejected move leaves no change.
+  throwIfBlocked(
+    await resourceConflicts({
+      resource: input.resource !== undefined ? input.resource : existing.resource,
+      start: input.startAt ?? existing.startAt,
+      end: input.endAt !== undefined ? input.endAt : existing.endAt,
+      ignoreId: id,
+    }),
+    input.force,
+    await resourceHardBlock(),
+  );
   const scope = currentScope();
   const updated = await scope.db
     .update(calendarEvents)
@@ -186,6 +233,7 @@ export async function updateCalendarEvent(
       ...(input.endAt !== undefined ? { endAt: input.endAt } : {}),
       ...(input.allDay !== undefined ? { allDay: input.allDay } : {}),
       ...(input.rrule !== undefined ? { rrule: input.rrule } : {}),
+      ...(input.exdate !== undefined ? { exdate: input.exdate } : {}),
       ...(input.status !== undefined ? { status: input.status } : {}),
     })
     .where(scope.where(calendarEvents.organisationId, eq(calendarEvents.id, id)))
@@ -246,8 +294,61 @@ export async function addAttendee(eventId: string, raw: AddAttendeeInput) {
   return must(inserted[0], 'attendee');
 }
 
-export async function addReminder(eventId: string, raw: AddReminderInput) {
+/**
+ * Email invitations to attendees holding an email address (no app account).
+ * Queued through the Email queue (SES in prod) — plain text, no bearer links,
+ * reply by signing in. Returns invited count.
+ */
+export async function inviteAttendees(eventId: string): Promise<{ invited: number }> {
   const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'calendar:update-any');
+  const event = await loadEvent(eventId);
+  if (!event) throw new AuthorizationError('POLICY_DENIED');
+  const scope = currentScope();
+  const attendees = await scope.db
+    .select()
+    .from(calendarEventAttendees)
+    .where(
+      scope.where(
+        calendarEventAttendees.organisationId,
+        eq(calendarEventAttendees.eventId, eventId),
+      ),
+    )
+    .limit(100);
+  const { addJob, QueueName } = await import('@/lib/queues');
+  let invited = 0;
+  for (const a of attendees) {
+    if (!a.email || a.userId) continue;
+    const when = event.startAt.toISOString();
+    await addJob(
+      QueueName.Email,
+      'event-invite',
+      {
+        organisationId: scope.organisationId,
+        correlationId: ctx.correlationId,
+        to: a.email,
+        subject: `Invitation: ${event.title}`,
+        text: [
+          `You are invited: ${event.title}.`,
+          `When: ${when}${event.location ? ` at ${event.location}` : ''}.`,
+          'Sign in to BlakPath to respond.',
+        ].join('\n'),
+      },
+      { jobId: `event-invite:${a.id}` },
+    );
+    invited += 1;
+  }
+  await recordAudit({
+    action: 'calendar.updated',
+    resourceType: 'calendar_event',
+    resourceId: eventId,
+    result: 'success',
+    reason: `invited ${invited} attendee(s)`,
+  });
+  return { invited };
+}
+
+export async function addReminder(eventId: string, raw: AddReminderInput) {  const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'calendar:update-any');
   const input = addReminderSchema.parse(raw);
   const event = await loadEvent(eventId);

@@ -2,6 +2,14 @@ import { z } from 'zod';
 
 /** Input validation for calendar domain (zod v4). */
 
+const exdateSchema = z
+  .string()
+  .trim()
+  .max(2000)
+  .regex(/^(\d{8}T\d{6}Z)(,\d{8}T\d{6}Z)*$/, {
+    message: 'Exceptions must be comma-separated UTC timestamps.',
+  });
+
 export const createCalendarEventSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
@@ -21,6 +29,9 @@ export const createCalendarEventSchema = z
       .optional(),
     timezone: z.string().trim().max(100).optional(),
     meetingId: z.uuid().optional(),
+    exdate: exdateSchema.optional(),
+    /** Acknowledge resource conflicts and save anyway (warn-only tenants). */
+    force: z.boolean().optional(),
   })
   .refine((v) => !v.endAt || v.endAt > v.startAt, {
     message: 'Event must end after it starts.',
@@ -45,8 +56,11 @@ export const updateCalendarEventSchema = z
       .nullable()
       .optional(),
     status: z.enum(['scheduled', 'cancelled', 'completed']).optional(),
+    exdate: exdateSchema.nullable().optional(),
+    /** Acknowledge resource conflicts and save anyway (warn-only tenants). */
+    force: z.boolean().optional(),
   })
-  .refine((v) => v.title !== undefined || v.startAt !== undefined || v.status !== undefined || v.location !== undefined || v.description !== undefined || v.resource !== undefined || v.endAt !== undefined || v.allDay !== undefined || v.rrule !== undefined, {
+  .refine((v) => v.title !== undefined || v.startAt !== undefined || v.status !== undefined || v.location !== undefined || v.description !== undefined || v.resource !== undefined || v.endAt !== undefined || v.allDay !== undefined || v.rrule !== undefined || v.exdate !== undefined, {
     message: 'At least one field must change.',
   });
 export type UpdateCalendarEventInput = z.input<typeof updateCalendarEventSchema>;

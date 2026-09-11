@@ -13,13 +13,15 @@ export {
   type CreateCalendarEventInput,
   type UpdateCalendarEventInput,
 } from './schemas';
-export { expandOccurrences, overlaps, parseRrule } from './recurrence';
+export { expandOccurrences, formatExdates, overlaps, parseExdates, parseRrule } from './recurrence';
+export { CalendarConflictError } from './errors';
 export {
   addAttendee,
   addReminder,
   countUpcoming,
   createCalendarEvent,
   deleteCalendarEvent,
+  inviteAttendees,
   listCalendarEvents,
   listOccurrences,
   processReminderSweep,

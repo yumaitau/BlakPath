@@ -148,6 +148,10 @@ export type AuditAction =
   | 'consent.updated'
   | 'consent.withdrawn'
   | 'consent.expired'
+  // Representative access (consent-backed).
+  | 'representative.requested'
+  | 'representative.activated'
+  | 'representative.revoked'
   // Messages / communications.
   | 'message.sent'
   | 'message.viewed'
@@ -202,6 +206,8 @@ export type AuditAction =
   | 'export.generated'
   | 'export.downloaded'
   | 'export.failed'
+  // Legacy data import.
+  | 'import.completed'
   // Retention / lifecycle of data.
   | 'retention.policy_applied'
   | 'retention.record_purged'
@@ -258,6 +264,7 @@ export type ResourceType =
   | 'family_link'
   | 'consent'
   | 'representative_authorisation'
+  | 'representative_authorisation'
   | 'workflow'
   | 'assignment'
   | 'task'
@@ -281,6 +288,7 @@ export type ResourceType =
   | 'decision'
   | 'certificate'
   | 'export'
+  | 'import'
   | 'retention_policy'
   | 'break_glass_request'
   | 'integration'

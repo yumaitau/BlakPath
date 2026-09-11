@@ -23,6 +23,8 @@ export const createApplicationSchema = z.object({
   applicantName: applicantNameSchema,
   /** Link to an existing applicant account, when there is one. */
   applicantUserId: z.uuid().optional(),
+  /** Owning client record (must belong to the tenant). */
+  clientId: z.uuid().optional(),
   priority: z.enum(APPLICATION_PRIORITIES).default('normal'),
   intake: intakeSchema.optional(),
 });

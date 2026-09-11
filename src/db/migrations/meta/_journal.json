@@ -113,6 +113,20 @@
       "when": 1789095803186,
       "tag": "0015_sso-consent-email-client",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789097694339,
+      "tag": "0016_invitation-teams",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789098259962,
+      "tag": "0017_calendar-exdate",
+      "breakpoints": true
     }
   ]
 }

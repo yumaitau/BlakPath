@@ -18,6 +18,8 @@ import {
  *   - `application:read-any`      — any application in the tenant.
  *   - `application:read-assigned` — one currently assigned to the actor.
  *   - `application:read-own`      — one the actor is the applicant on.
+ *   - team ground                 — one whose owning client sits in the actor's
+ *     team (`application:read-assigned` + team membership of the matter).
  */
 
 /** The minimum an application must expose for a read decision. */
@@ -26,6 +28,8 @@ export interface ApplicationReadResource {
   readonly applicantUserId: string | null;
   /** User ids with an ACTIVE assignment on the application. */
   readonly assigneeUserIds: ReadonlySet<string> | readonly string[];
+  /** User ids in the team owning the matter's client (empty when unassigned). */
+  readonly teamMemberUserIds?: ReadonlySet<string> | readonly string[];
 }
 
 function isAssignedTo(resource: ApplicationReadResource, userId: string): boolean {
@@ -52,11 +56,22 @@ export const canReadOwnApplication: Policy<ApplicationReadResource> = requiring(
   (subject, resource) => resource.applicantUserId === subject.userId,
 );
 
+/** Actor holds read-assigned AND sits in the team owning the matter's client. */
+export const canReadTeamApplication: Policy<ApplicationReadResource> = requiring(
+  'application:read-assigned',
+  (subject, resource) => {
+    const ids = resource.teamMemberUserIds ?? [];
+    const set = ids instanceof Set ? ids : new Set(ids);
+    return set.has(subject.userId);
+  },
+);
+
 /** The composed read policy: any single ground is sufficient. */
 export const canReadApplication: Policy<ApplicationReadResource> = some(
   canReadAnyApplication,
   canReadAssignedApplication,
   canReadOwnApplication,
+  canReadTeamApplication,
 );
 
 /**

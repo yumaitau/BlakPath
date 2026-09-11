@@ -66,6 +66,12 @@ const serverSchema = z
     // Shared secret gating the SES SNS event webhook (bounce/complaint).
     // Unset locally; required in production where SES events are wired.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),
+    // Bearer credential for SCIM directory provisioning. Unset = SCIM off.
+    SCIM_BEARER_TOKEN: z.string().min(32).optional(),
+    // Entra ID OIDC client for federated sign-in. Unset = SSO unavailable.
+    SSO_ENTRA_ISSUER: z.string().url().optional(),
+    SSO_ENTRA_CLIENT_ID: z.string().min(1).optional(),
+    SSO_ENTRA_CLIENT_SECRET: z.string().min(1).optional(),
 
     // Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),

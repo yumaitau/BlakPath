@@ -163,6 +163,10 @@ test('a linked applicant uploads evidence into quarantine without download acces
   browser,
   baseURL,
 }) => {
+  test.skip(
+    process.env.RUN_EVIDENCE_E2E !== 'true',
+    'Needs real object storage: local MinIO or S3 staging (see docs/eks-runbook.md).',
+  );
   test.setTimeout(60_000);
   await signInAndSelectOrganisation(page);
   await page.goto('/settings/people');

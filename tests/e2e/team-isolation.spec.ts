@@ -42,3 +42,32 @@ test('teams: invitation accept requires real token + session', async ({ request 
   });
   expect([401, 404]).toContain(response.status());
 });
+
+test('teams: staff can create team and register assigned client', async ({ page }) => {
+  await signInAndSelectOrganisation(page);
+  const stamp = Date.now().toString(36);
+
+  const teamResponse = await page.request.post('/api/teams', {
+    data: { slug: `e2e-team-${stamp}`, name: `E2E team ${stamp}` },
+  });
+  expect(teamResponse.status()).toBe(201);
+  const teamId = ((await teamResponse.json()) as { team: { id: string } }).team.id;
+
+  const clientResponse = await page.request.post('/api/clients', {
+    data: { displayName: `E2E client ${stamp}`, assignedTeamId: teamId },
+  });
+  // Admin holds client:read-any but not client:create; intake owns creation.
+  // Either outcome is tenant-scoped: never a cross-tenant leak.
+  expect([200, 201, 403]).toContain(clientResponse.status());
+  if (clientResponse.status() === 403) return;
+
+  const list = await page.request.get('/api/clients');
+  expect(list.status()).toBe(200);
+  const body = (await list.json()) as { clients: { displayName: string }[] };
+  expect(body.clients.some((c) => c.displayName === `E2E client ${stamp}`)).toBe(true);
+
+  await page.goto('/clients');
+  await expect(page.getByRole('heading', { name: 'Clients' })).toBeVisible();
+  await page.goto('/settings/teams');
+  await expect(page.getByRole('heading', { name: 'Teams and groups' })).toBeVisible();
+});

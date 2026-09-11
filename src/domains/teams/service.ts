@@ -1,4 +1,4 @@
-import { asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, exists, isNull, or } from 'drizzle-orm';
 import {
   clients,
   groupMemberships,
@@ -10,6 +10,7 @@ import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
+  hasPermission,
   requireAny,
   requirePermission,
   subjectFromContext,
@@ -143,12 +144,38 @@ export async function createClient(raw: CreateClientInput): Promise<ClientRow> {
 
 export async function listClients(): Promise<ClientRow[]> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), CLIENT_READ);
+  const subject = subjectFromContext(ctx);
+  requireAny(subject, CLIENT_READ);
   const scope = currentScope();
+  // read-any sees the whole tenant; read-assigned sees own linked record plus
+  // clients sitting in the actor's teams.
+  const assignmentFilter = hasPermission(subject, 'client:read-any')
+    ? undefined
+    : or(
+        eq(clients.linkedUserId, subject.userId),
+        exists(
+          scope.db
+            .select({ one: teamMemberships.id })
+            .from(teamMemberships)
+            .where(
+              and(
+                eq(teamMemberships.organisationId, clients.organisationId),
+                eq(teamMemberships.teamId, clients.assignedTeamId),
+                eq(teamMemberships.userId, subject.userId),
+              ),
+            ),
+        ),
+      );
   return scope.db
     .select()
     .from(clients)
-    .where(scope.where(clients.organisationId, isNull(clients.deletedAt)))
+    .where(
+      scope.where(
+        clients.organisationId,
+        isNull(clients.deletedAt),
+        ...(assignmentFilter ? [assignmentFilter] : []),
+      ),
+    )
     .orderBy(asc(clients.displayName))
     .limit(500);
 }

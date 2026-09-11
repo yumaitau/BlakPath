@@ -4,6 +4,12 @@ Runner: Playwright, `tests/e2e`, chromium, single worker. Helpers:
 `tests/e2e/helpers/auth.ts` (isolated client IP, cookie reuse),
 `tests/e2e/helpers/accessibility.ts` (axe WCAG 2.2 AA).
 
+## Environment gates
+
+- Evidence upload journey requires real object storage: run with
+  `RUN_EVIDENCE_E2E=true` against local MinIO (`docker compose up minio
+  minio-init`) or S3 staging buckets. Without it the test skips; the path is
+  covered in staging per `docs/eks-runbook.md`.
 ## Suites
 
 1. `auth-onboarding.spec.ts` — sign-up, verify-email gate, sign-in,
@@ -20,7 +26,9 @@ Runner: Playwright, `tests/e2e`, chromium, single worker. Helpers:
    recurring RRULE expand, attendee invite/response, reminder set,
    drag reschedule persist + reload, ICS import/export round-trip,
    resource conflict warning.
-5. Existing kept: `core-staff-flow`, `product-workflows`,
+5. `sso-consent.spec.ts` — SSO bindings gating, consent gate on
+   representative access, SCIM-off denial without enumeration.
+6. Existing kept: `core-staff-flow`, `product-workflows`,
    `membership-lifecycle`, `api-boundaries`, `accessibility`.
 
 ## Rules

@@ -93,6 +93,10 @@ export function MeetingCalendar({
   const [startAt, setStartAt] = useState('');
   const [location, setLocation] = useState('');
   const [mounted, setMounted] = useState(false);
+  const [moveMessage, setMoveMessage] = useState<string | null>(null);
+  const [moveId, setMoveId] = useState('');
+  const [moveDate, setMoveDate] = useState('');
+  const [dragId, setDragId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   // Time-dependent display (today highlights, local-zone times) must only
@@ -105,6 +109,62 @@ export function MeetingCalendar({
 
   const todayKey = ymd(now);
   const allEvents = useMemo(() => [...events, ...calendarEvents], [events, calendarEvents]);
+  // Only general calendar events are movable via the events API; committee
+  // meetings live in the meetings domain.
+  const movableIds = useMemo(() => new Set(calendarEvents.map((e) => e.id)), [calendarEvents]);
+
+  async function moveEvent(eventId: string, targetDay: Date): Promise<void> {
+    const current = allEvents.find((e) => e.id === eventId);
+    if (!current || !movableIds.has(eventId)) {
+      setMoveMessage('Only calendar events can be moved; meetings stay put.');
+      return;
+    }
+    const from = new Date(current.start);
+    const to = new Date(targetDay);
+    to.setHours(from.getHours(), from.getMinutes(), 0, 0);
+    const shiftMs = to.getTime() - from.getTime();
+    const end = current.end ? new Date(new Date(current.end).getTime() + shiftMs).toISOString() : null;
+    try {
+      const res = await fetch(`/api/calendar/events/${eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startAt: to.toISOString(), ...(end ? { endAt: end } : {}) }),
+      });
+      if (res.status === 409) {
+        const data = (await res.json()) as { conflicts?: { title: string }[] };
+        const names = (data.conflicts ?? []).map((c) => c.title).join(', ');
+        setMoveMessage(`Blocked: resource already booked${names ? ` (${names})` : ''}.`);
+        return;
+      }
+      if (res.status === 403) {
+        setMoveMessage('No permission to move events.');
+        return;
+      }
+      if (!res.ok) {
+        setMoveMessage('Could not move event.');
+        return;
+      }
+      setMoveMessage('Event moved. Refresh to see it.');
+    } catch {
+      setMoveMessage('Could not move event.');
+    }
+  }
+
+  function onMoveSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!moveId || !moveDate) {
+      setMoveMessage('Choose event and new date.');
+      return;
+    }
+    const [y, m, d] = moveDate.split('-').map(Number);
+    if (!y || !m || !d) {
+      setMoveMessage('Enter valid date.');
+      return;
+    }
+    startTransition(async () => {
+      await moveEvent(moveId, new Date(y, m - 1, d));
+    });
+  }
 
   const eventsByDay = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
@@ -317,7 +377,7 @@ export function MeetingCalendar({
               <div>
                 <p className="text-sm font-medium">{event.title}</p>
                 <p className="text-muted-foreground text-xs">
-                  {new Date(event.start).toLocaleString()}
+                  {new Date(event.start).toLocaleString('en-AU')}
                   {event.location ? ` · ${event.location}` : ''}
                 </p>
               </div>
@@ -326,24 +386,67 @@ export function MeetingCalendar({
           ))}
         </ul>
       ) : mode === 'week' ? (
-        <div className="grid grid-cols-7 gap-2" aria-label="Week view">
-          {week.map((day) => {
-            const key = ymd(day);
-            const dayEvents = eventsByDay.get(key) ?? [];
-            return (
-              <div key={key} className={cn('min-h-32 rounded-lg border p-2', key === todayKey && 'border-primary')}>
-                <p className="text-xs font-medium">{day.toLocaleDateString([], { weekday: 'short', day: 'numeric' })}</p>
-                <ul className="mt-1 space-y-1">
-                  {dayEvents.map((event) => (
-                    <li key={event.id} className="truncate rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary" title={event.title}>
-                      {formatTime(event.start)} {event.title}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <div className="grid grid-cols-7 gap-2" aria-label="Week view">
+            {week.map((day) => {
+              const key = ymd(day);
+              const dayEvents = eventsByDay.get(key) ?? [];
+              return (
+                <div
+                  key={key}
+                  className={cn('min-h-32 rounded-lg border p-2', key === todayKey && 'border-primary')}
+                  onDragOver={(e) => {
+                    if (dragId) e.preventDefault();
+                  }}
+                  onDrop={() => {
+                    if (dragId) {
+                      const id = dragId;
+                      setDragId(null);
+                      startTransition(async () => {
+                        await moveEvent(id, day);
+                      });
+                    }
+                  }}
+                >
+                  <p className="text-xs font-medium">{day.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric' })}</p>
+                  <ul className="mt-1 space-y-1">
+                    {dayEvents.map((event) => (
+                      <li
+                        key={event.id}
+                        className="truncate rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary"
+                        title={movableIds.has(event.id) ? `Drag to move: ${event.title}` : event.title}
+                        draggable={movableIds.has(event.id)}
+                        onDragStart={() => setDragId(event.id)}
+                        onDragEnd={() => setDragId(null)}
+                      >
+                        {formatTime(event.start)} {event.title}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+          <form onSubmit={onMoveSubmit} className="flex flex-wrap items-end gap-2 rounded-lg border p-3" aria-label="Move calendar event">
+            <div className="flex flex-col gap-1">
+              <label htmlFor="cal-move-event" className="text-xs font-medium">Event</label>
+              <select id="cal-move-event" className="rounded border px-2 py-1 text-sm" value={moveId} onChange={(e) => setMoveId(e.target.value)}>
+                <option value="">Choose event…</option>
+                {calendarEvents.map((e) => (
+                  <option key={e.id} value={e.id}>{e.title}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="cal-move-date" className="text-xs font-medium">New date</label>
+              <input id="cal-move-date" type="date" className="rounded border px-2 py-1 text-sm" value={moveDate} onChange={(e) => setMoveDate(e.target.value)} />
+            </div>
+            <Button type="submit" size="sm" disabled={pending}>Move event</Button>
+            {moveMessage ? (
+              <p role="status" className="text-muted-foreground w-full text-sm">{moveMessage}</p>
+            ) : null}
+          </form>
+        </>
       ) : (
         <div className="border-border overflow-hidden rounded-lg border">
           <div className="border-border bg-muted/40 grid grid-cols-7 border-b">

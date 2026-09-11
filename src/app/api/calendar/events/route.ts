@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
 import {
+  CalendarConflictError,
   createCalendarEvent,
   listCalendarEvents,
   type CreateCalendarEventInput,
@@ -34,6 +35,15 @@ export async function POST(request: NextRequest): Promise<Response> {
     const result = await withRequestTenant(() => createCalendarEvent(body));
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
+    if (error instanceof CalendarConflictError) {
+      return NextResponse.json(
+        {
+          error: 'Resource conflict',
+          conflicts: error.conflicts.map((c) => ({ id: c.id, title: c.title, startAt: c.startAt })),
+        },
+        { status: 409 },
+      );
+    }
     return toErrorResponse(error);
   }
 }

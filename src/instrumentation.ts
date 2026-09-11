@@ -22,4 +22,14 @@ export async function register(): Promise<void> {
     const { logger } = await import('@/lib/observability/logger');
     logger.error({ err }, 'failed to install auth mailer transport');
   }
+
+  // Register federated SSO providers from env. Absent env = unavailable
+  // (secure default). Best-effort like the mailer above.
+  try {
+    const { registerEntraFromEnv } = await import('@/lib/auth/sso-entra');
+    registerEntraFromEnv();
+  } catch (err) {
+    const { logger } = await import('@/lib/observability/logger');
+    logger.error({ err }, 'failed to register SSO providers');
+  }
 }

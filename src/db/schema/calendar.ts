@@ -36,6 +36,8 @@ export const calendarEvents = pgTable(
     allDay: boolean('all_day').notNull().default(false),
     /** RFC 5545 RRULE string, e.g. `FREQ=WEEKLY;COUNT=6`. Null = single. */
     rrule: text('rrule'),
+    /** EXDATE exceptions as comma-separated UTC basic format (no spaces). */
+    exdate: text('exdate'),
     /** IANA zone where event authored, e.g. `Australia/Sydney`. */
     timezone: text('timezone').notNull().default('Australia/Sydney'),
     /** `scheduled` | `cancelled` | `completed` (app-checked). */

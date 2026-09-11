@@ -164,8 +164,7 @@ jobs:
         run: pnpm build
 
   e2e:
-    name: Browser and accessibility acceptance
-    runs-on: ubuntu-latest
+    name: Browser and accessibility acceptance    runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [test, build]
     services:
@@ -198,6 +197,7 @@ jobs:
       S3_SECRET_ACCESS_KEY: test-secret
       CLAMAV_HOST: localhost
       SMTP_HOST: localhost
+      RUN_EVIDENCE_E2E: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -233,3 +233,16 @@ jobs:
         with:
           name: playwright-report
           path: playwright-report/
+
+  # ---------------------------------------------------------------------------
+  # EKS manifests. Kustomize must build cleanly; no cluster required.
+  # ---------------------------------------------------------------------------
+  manifests:
+    name: Validate Kubernetes manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Build kustomization
+        run: kubectl kustomize infra/k8s > /dev/null && echo "kustomize build OK"

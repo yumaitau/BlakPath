@@ -11,6 +11,8 @@ import {
   organisations,
   roles,
   sessions,
+  teamMemberships,
+  teams,
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
@@ -338,6 +340,7 @@ export async function addMember(input: {
 export async function createMembershipInvitation(input: {
   email: string;
   roleId: string;
+  teamId?: string;
 }): Promise<{
   invitation: ManagedMembershipInvitation;
   token: string;
@@ -374,6 +377,24 @@ export async function createMembershipInvitation(input: {
       .limit(1);
     if (!organisation) throw new AuthorizationError('POLICY_DENIED');
 
+    // Optional team assignment: the team must belong to this organisation,
+    // otherwise the invitation carries no team.
+    let teamId: string | null = null;
+    if (input.teamId) {
+      const [team] = await db
+        .select({ id: teams.id })
+        .from(teams)
+        .where(
+          and(
+            eq(teams.id, input.teamId),
+            eq(teams.organisationId, scope.organisationId),
+          ),
+        )
+        .limit(1);
+      if (!team) throw new AuthorizationError('POLICY_DENIED');
+      teamId = team.id;
+    }
+
     await db.transaction(async (tx) => {
       await tx
         .update(membershipInvitations)
@@ -390,6 +411,7 @@ export async function createMembershipInvitation(input: {
         organisationId: scope.organisationId,
         email,
         roleId: role.id,
+        teamId,
         tokenHash: hashToken(token),
         invitedByUserId,
         status: 'pending',
@@ -554,6 +576,7 @@ async function resolvePendingInvitation(token: string) {
       email: membershipInvitations.email,
       roleId: membershipInvitations.roleId,
       roleName: roles.name,
+      teamId: membershipInvitations.teamId,
       status: membershipInvitations.status,
       expiresAt: membershipInvitations.expiresAt,
     })
@@ -662,6 +685,21 @@ export async function acceptMembershipInvitation(input: {
         membershipId,
         roleId: invitation.roleId,
       });
+      if (invitation.teamId) {
+        // Team join on acceptance. teamMemberships has no cross-team unique
+        // violation risk beyond (team,user); ignore duplicates from re-accepts.
+        await tx
+          .insert(teamMemberships)
+          .values({
+            organisationId: invitation.organisationId,
+            teamId: invitation.teamId,
+            userId: input.userId,
+            role: 'member',
+          })
+          .onConflictDoNothing({
+            target: [teamMemberships.teamId, teamMemberships.userId],
+          });
+      }
       await tx
         .update(sessions)
         .set({ activeOrganisationId: invitation.organisationId })
@@ -693,6 +731,17 @@ export async function acceptMembershipInvitation(input: {
     sessionId: input.sessionId,
     after: { data: { role: invitation.roleName }, allow: ['role'] },
   });
+  if (invitation.teamId) {
+    await recordAudit({
+      action: 'team.member_added',
+      resourceType: 'team',
+      resourceId: invitation.teamId,
+      result: 'success',
+      organisationId: invitation.organisationId,
+      actorUserId: input.userId,
+      sessionId: input.sessionId,
+    });
+  }
   return {
     organisationId: invitation.organisationId,
     organisationName: invitation.organisationName,

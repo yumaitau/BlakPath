@@ -16,6 +16,7 @@ import {
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { consentRecords } from './consent';
+import { teams } from './teams';
 
 /**
  * Membership & RBAC tables.
@@ -149,6 +150,8 @@ export const membershipInvitations = pgTable(
     roleId: refId('role_id')
       .notNull()
       .references(() => roles.id, { onDelete: 'restrict' }),
+    /** Optional team the invitee joins on acceptance (same organisation). */
+    teamId: refId('team_id').references(() => teams.id, { onDelete: 'set null' }),
     tokenHash: text('token_hash').notNull(),
     status: membershipInvitationStatus('status').notNull().default('pending'),
     invitedByUserId: refId('invited_by_user_id').references(() => users.id, {
