@@ -1,4 +1,5 @@
 import nodemailer, { type Transporter } from 'nodemailer';
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
 import type { AuthMailer, AuthEmailMessage } from '@/lib/auth/emails';
@@ -6,21 +7,16 @@ import type { AuthMailer, AuthEmailMessage } from '@/lib/auth/emails';
 /**
  * SMTP email transport.
  *
- * There are two kinds of outbound email in BlakPath and they take different
- * paths on purpose:
- *   - AUTH emails (verification, password reset) are sent SYNCHRONOUSLY via the
- *     `authMailer` below, because better-auth calls the mailer inline and the
- *     link is a short-lived bearer secret we do not want sitting in a queue.
- *   - TENANT emails (invitations, notification copies) go through the Email
- *     queue and are delivered by the worker (`sendEmail`).
+ * Three paths, chosen per environment:
+ *   - Production WITHOUT SMTP_USER: SES API via the pod/task IAM role
+ *     (EKS Pod Identity). No static credentials anywhere — preferred.
+ *   - SMTP_USER set: SES SMTP interface (or any relay). Kept for
+ *     environments without an IAM path.
+ *   - Local dev: Mailpit over plain SMTP.
  *
- * Both share one lazily-created nodemailer transport (a module-level singleton,
- * mirroring `src/lib/redis.ts` / `src/lib/storage/s3.ts`). In development this
- * talks to Mailpit via `SMTP_HOST`/`SMTP_PORT` and just works.
- *
- * The verification/reset URL is a bearer secret: it belongs in the email body,
- * but it MUST NEVER be logged. We log only the template and a redacted
- * recipient, never the address in full or the link.
+ * AUTH emails (verification, password reset) send synchronously; TENANT
+ * emails (invitations, notification copies) go through the Email queue.
+ * Bodies may contain bearer links: logged metadata only, never content.
  */
 
 const globalForMailer = globalThis as unknown as { __blakpathMailer?: Transporter };
@@ -57,10 +53,10 @@ export interface SendEmailInput {
 }
 
 /**
- * Send a single email through the shared SMTP transport. Used by the worker's
- * Email/Notification processors. Logs only the redacted recipient and subject —
- * never the body (which may contain a bearer link). Suppressed addresses
- * (SES bounce/complaint) are skipped silently.
+ * Send a single email. Production without SMTP_USER uses the SES API under
+ * the workload IAM role; otherwise the shared SMTP transport. Used by the
+ * worker's Email/Notification processors. Logs only redacted recipient and
+ * subject — never the body (which may contain a bearer link).
  */
 export async function sendEmail({
   to,
@@ -71,6 +67,26 @@ export async function sendEmail({
   const { isSuppressed } = await import('@/domains/email/service');
   if (await isSuppressed(to)) {
     logger.info({ to: redact(to) }, 'email suppressed (bounce/complaint) — skipping');
+    return;
+  }
+  if (!env.SMTP_USER) {
+    const client = new SESv2Client({ region: env.S3_REGION });
+    await client.send(
+      new SendEmailCommand({
+        FromEmailAddress: env.SMTP_FROM,
+        Destination: { ToAddresses: [to] },
+        Content: {
+          Simple: {
+            Subject: { Data: subject, Charset: 'UTF-8' },
+            Body: {
+              Text: { Data: text, Charset: 'UTF-8' },
+              ...(html !== undefined ? { Html: { Data: html, Charset: 'UTF-8' } } : {}),
+            },
+          },
+        },
+      }),
+    );
+    logger.info({ to: redact(to), subject, via: 'ses-api' }, 'email sent');
     return;
   }
   const transport = getTransport();
