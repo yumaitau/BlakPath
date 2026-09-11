@@ -10,6 +10,8 @@ import {
   FolderOpen,
   LayoutDashboard,
   Settings,
+  UserCog,
+  Users,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -27,9 +29,11 @@ export interface StaffOrganisation {
 const navigation = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/applications', label: 'Applications', icon: FolderOpen },
+  { href: '/clients', label: 'Clients', icon: Users },
   { href: '/board', label: 'Board', icon: Columns3 },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays },
   { href: '/forms', label: 'Forms', icon: ClipboardList },
+  { href: '/settings/teams', label: 'Teams', icon: UserCog },
   { href: '/settings/security', label: 'Settings', icon: Settings },
 ] as const;
 
