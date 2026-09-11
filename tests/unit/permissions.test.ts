@@ -79,6 +79,18 @@ describe('permission catalogue', () => {
       'membership:manage',
       'break-glass:request',
       'break-glass:approve',
+      'team:create',
+      'team:manage',
+      'group:create',
+      'group:manage',
+      'client:create',
+      'client:read-assigned',
+      'client:read-any',
+      'client:assign-team',
+      'calendar:create',
+      'calendar:read-any',
+      'calendar:update-any',
+      'calendar:delete-any',
     ];
     expect([...ALL_PERMISSIONS].sort()).toEqual([...expected].sort());
     // No determination/scoring capability may ever exist.

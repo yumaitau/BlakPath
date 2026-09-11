@@ -1,15 +1,14 @@
 'use client';
 
-import { useMemo, useRef, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 /**
- * A dependency-light month calendar for committee meetings.
- *
- * Deliberately not FullCalendar — this renders a simple, accessible month grid
- * from a plain event list and wires the `.ics` import/export endpoints. Times
- * are shown in the viewer's local zone (the events arrive as ISO strings).
+ * RangerOS-parity calendar: month + week + agenda views, event creation with
+ * resource-conflict feedback, plus `.ics` import/export. Times stored UTC,
+ * displayed in viewer local zone. Committee meetings arrive as `events`;
+ * general calendar events arrive as `calendarEvents` (same shape).
  */
 
 export interface CalendarEvent {
@@ -20,9 +19,12 @@ export interface CalendarEvent {
   /** ISO 8601 end timestamp, if any. */
   end?: string | null;
   status: string;
+  location?: string | null;
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+
+type CalendarView = 'month' | 'week' | 'agenda';
 
 function ymd(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -33,12 +35,23 @@ function ymd(date: Date): string {
 /** Days (Mon-anchored) that make up the 6-week grid containing `month`. */
 function monthGrid(year: number, month: number): Date[] {
   const first = new Date(year, month, 1);
-  // JS getDay: 0=Sun..6=Sat. Shift so Monday is the first column.
   const offset = (first.getDay() + 6) % 7;
   const gridStart = new Date(year, month, 1 - offset);
   return Array.from({ length: 42 }, (_, i) => {
     const d = new Date(gridStart);
     d.setDate(gridStart.getDate() + i);
+    return d;
+  });
+}
+
+/** Monday-starting 7 days containing `anchor`. */
+function weekDays(anchor: Date): Date[] {
+  const offset = (anchor.getDay() + 6) % 7;
+  const monday = new Date(anchor);
+  monday.setDate(anchor.getDate() - offset);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
     return d;
   });
 }
@@ -58,32 +71,73 @@ const MONTH_NAMES = [
   'December',
 ];
 
-export function MeetingCalendar({ events }: { events: CalendarEvent[] }) {
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+export function MeetingCalendar({
+  events,
+  calendarEvents = [],
+}: {
+  events: CalendarEvent[];
+  calendarEvents?: CalendarEvent[];
+}) {
   const now = new Date();
   const [view, setView] = useState({ year: now.getFullYear(), month: now.getMonth() });
+  const [mode, setMode] = useState<CalendarView>('month');
+  const [weekAnchor, setWeekAnchor] = useState<Date>(now);
   const [pending, startTransition] = useTransition();
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [createMessage, setCreateMessage] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [startAt, setStartAt] = useState('');
+  const [location, setLocation] = useState('');
+  const [mounted, setMounted] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
+  // Time-dependent display (today highlights, local-zone times) must only
+  // render on client. Server/client clock or zone skew otherwise causes
+  // hydration mismatch and spurious page errors in e2e.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- client-only mount gate prevents SSR hydration mismatch on time-dependent display
+    setMounted(true);
+  }, []);
+
   const todayKey = ymd(now);
+  const allEvents = useMemo(() => [...events, ...calendarEvents], [events, calendarEvents]);
 
   const eventsByDay = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
-    for (const event of events) {
+    for (const event of allEvents) {
       const key = ymd(new Date(event.start));
       const list = map.get(key);
       if (list) list.push(event);
       else map.set(key, [event]);
     }
     return map;
-  }, [events]);
+  }, [allEvents]);
+
+  const agenda = useMemo(
+    () =>
+      [...allEvents].sort((a, b) => +new Date(a.start) - +new Date(b.start)).slice(0, 100),
+    [allEvents],
+  );
 
   const grid = useMemo(() => monthGrid(view.year, view.month), [view]);
+  const week = useMemo(() => weekDays(weekAnchor), [weekAnchor]);
 
   function shiftMonth(delta: number) {
     setView((v) => {
       const d = new Date(v.year, v.month + delta, 1);
       return { year: d.getFullYear(), month: d.getMonth() };
+    });
+  }
+
+  function shiftWeek(delta: number) {
+    setWeekAnchor((a) => {
+      const d = new Date(a);
+      d.setDate(a.getDate() + delta * 7);
+      return d;
     });
   }
 
@@ -103,9 +157,7 @@ export function MeetingCalendar({ events }: { events: CalendarEvent[] }) {
           return;
         }
         const data: { created?: number } = await res.json();
-        setImportMessage(
-          `Imported ${data.created ?? 0} meeting(s). Refresh to see them.`,
-        );
+        setImportMessage(`Imported ${data.created ?? 0} meeting(s). Refresh to see them.`);
       } catch {
         setImportMessage('Import failed.');
       } finally {
@@ -114,39 +166,107 @@ export function MeetingCalendar({ events }: { events: CalendarEvent[] }) {
     });
   }
 
+  async function onCreateEvent(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !startAt) {
+      setCreateMessage('Give event title and start time.');
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const res = await fetch('/api/calendar/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: title.trim(),
+            startAt: new Date(startAt).toISOString(),
+            ...(location.trim() ? { location: location.trim() } : {}),
+          }),
+        });
+        if (res.status === 401) {
+          setCreateMessage('Sign in to create events.');
+          return;
+        }
+        if (res.status === 403) {
+          setCreateMessage('No permission to create events.');
+          return;
+        }
+        if (!res.ok) {
+          setCreateMessage('Could not create event. Check fields.');
+          return;
+        }
+        const data: { conflicts?: unknown[] } = await res.json();
+        const conflictCount = Array.isArray(data.conflicts) ? data.conflicts.length : 0;
+        setCreateMessage(
+          conflictCount > 0
+            ? `Event created. Warning: ${conflictCount} resource conflict(s).`
+            : 'Event created. Refresh to see it.',
+        );
+        setTitle('');
+        setStartAt('');
+        setLocation('');
+      } catch {
+        setCreateMessage('Could not create event.');
+      }
+    });
+  }
+
   return (
     <section aria-label="Committee meeting calendar" className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {!mounted ? (
+        <p className="text-muted-foreground text-sm">Loading calendar…</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => shiftMonth(-1)}
-            aria-label="Previous month"
-          >
-            ←
-          </Button>
-          <h2 className="min-w-48 text-center text-lg font-semibold tracking-tight">
-            {MONTH_NAMES[view.month]} {view.year}
-          </h2>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => shiftMonth(1)}
-            aria-label="Next month"
-          >
-            →
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setView({ year: now.getFullYear(), month: now.getMonth() })}
-          >
-            Today
-          </Button>
+          {mode === 'month' ? (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={() => shiftMonth(-1)} aria-label="Previous month">
+                ←
+              </Button>
+              <h2 className="min-w-48 text-center text-lg font-semibold tracking-tight">
+                {MONTH_NAMES[view.month]} {view.year}
+              </h2>
+              <Button type="button" variant="outline" size="sm" onClick={() => shiftMonth(1)} aria-label="Next month">
+                →
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setView({ year: now.getFullYear(), month: now.getMonth() })}>
+                Today
+              </Button>
+            </>
+          ) : mode === 'week' ? (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={() => shiftWeek(-1)} aria-label="Previous week">
+                ←
+              </Button>
+              <h2 className="min-w-48 text-center text-lg font-semibold tracking-tight">
+                Week of {week[0]?.toLocaleDateString()}
+              </h2>
+              <Button type="button" variant="outline" size="sm" onClick={() => shiftWeek(1)} aria-label="Next week">
+                →
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setWeekAnchor(new Date())}>
+                Today
+              </Button>
+            </>
+          ) : (
+            <h2 className="text-lg font-semibold tracking-tight">Agenda — next 100 events</h2>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2" role="group" aria-label="Calendar view">
+          {(['month', 'week', 'agenda'] as const).map((m) => (
+            <Button
+              key={m}
+              type="button"
+              variant={mode === m ? 'primary' : 'outline'}
+              size="sm"
+              onClick={() => setMode(m)}
+              aria-pressed={mode === m}
+            >
+              {m[0]?.toUpperCase() + m.slice(1)}
+            </Button>
+          ))}
         </div>
 
         <div className="flex items-center gap-2">
@@ -155,22 +275,10 @@ export function MeetingCalendar({ events }: { events: CalendarEvent[] }) {
               Download calendar file
             </a>
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={pending}
-            onClick={() => fileInput.current?.click()}
-          >
+          <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => fileInput.current?.click()}>
             {pending ? 'Adding…' : 'Add calendar file'}
           </Button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".ics,text/calendar"
-            className="sr-only"
-            onChange={onImportFile}
-          />
+          <input ref={fileInput} type="file" accept=".ics,text/calendar" className="sr-only" aria-label="Upload calendar file" onChange={onImportFile} />
         </div>
       </div>
 
@@ -180,58 +288,55 @@ export function MeetingCalendar({ events }: { events: CalendarEvent[] }) {
         </p>
       ) : null}
 
-      <div className="border-border overflow-hidden rounded-lg border">
-        <div className="border-border bg-muted/40 grid grid-cols-7 border-b">
-          {WEEKDAYS.map((day) => (
-            <div
-              key={day}
-              className="text-muted-foreground px-2 py-2 text-center text-xs font-medium"
-            >
-              {day}
-            </div>
-          ))}
+      <form onSubmit={onCreateEvent} className="flex flex-wrap items-end gap-2 rounded-lg border p-3" aria-label="Create calendar event">
+        <div className="flex flex-col gap-1">
+          <label htmlFor="cal-title" className="text-xs font-medium">Event title</label>
+          <input id="cal-title" className="rounded border px-2 py-1 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Intake clinic" />
         </div>
-        <div className="grid grid-cols-7">
-          {grid.map((day) => {
+        <div className="flex flex-col gap-1">
+          <label htmlFor="cal-start" className="text-xs font-medium">Start</label>
+          <input id="cal-start" type="datetime-local" className="rounded border px-2 py-1 text-sm" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label htmlFor="cal-location" className="text-xs font-medium">Location (optional)</label>
+          <input id="cal-location" className="rounded border px-2 py-1 text-sm" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Council chambers" />
+        </div>
+        <Button type="submit" size="sm" disabled={pending}>
+          {pending ? 'Saving…' : 'Create event'}
+        </Button>
+        {createMessage ? (
+          <p role="status" className="text-muted-foreground w-full text-sm">{createMessage}</p>
+        ) : null}
+      </form>
+
+      {mode === 'agenda' ? (
+        <ul className="divide-y rounded-lg border" aria-label="Agenda">
+          {agenda.length === 0 ? <li className="p-4 text-sm text-muted-foreground">No events yet.</li> : null}
+          {agenda.map((event) => (
+            <li key={event.id} className="flex items-baseline justify-between gap-3 p-3">
+              <div>
+                <p className="text-sm font-medium">{event.title}</p>
+                <p className="text-muted-foreground text-xs">
+                  {new Date(event.start).toLocaleString()}
+                  {event.location ? ` · ${event.location}` : ''}
+                </p>
+              </div>
+              <span className="text-xs text-muted-foreground">{event.status}</span>
+            </li>
+          ))}
+        </ul>
+      ) : mode === 'week' ? (
+        <div className="grid grid-cols-7 gap-2" aria-label="Week view">
+          {week.map((day) => {
             const key = ymd(day);
             const dayEvents = eventsByDay.get(key) ?? [];
-            const inMonth = day.getMonth() === view.month;
-            const isToday = key === todayKey;
             return (
-              <div
-                key={key}
-                className={cn(
-                  'border-border min-h-24 border-r border-b p-1.5 last:border-r-0',
-                  !inMonth && 'bg-muted/20 text-muted-foreground',
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <span
-                    className={cn(
-                      'inline-flex h-6 w-6 items-center justify-center rounded-full text-xs',
-                      isToday && 'bg-primary text-primary-foreground font-semibold',
-                    )}
-                  >
-                    {day.getDate()}
-                  </span>
-                </div>
+              <div key={key} className={cn('min-h-32 rounded-lg border p-2', key === todayKey && 'border-primary')}>
+                <p className="text-xs font-medium">{day.toLocaleDateString([], { weekday: 'short', day: 'numeric' })}</p>
                 <ul className="mt-1 space-y-1">
                   {dayEvents.map((event) => (
-                    <li
-                      key={event.id}
-                      title={event.title}
-                      className={cn(
-                        'truncate rounded px-1.5 py-0.5 text-xs',
-                        event.status === 'cancelled'
-                          ? 'bg-muted text-muted-foreground line-through'
-                          : 'bg-primary/10 text-primary',
-                      )}
-                    >
-                      {new Date(event.start).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}{' '}
-                      {event.title}
+                    <li key={event.id} className="truncate rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary" title={event.title}>
+                      {formatTime(event.start)} {event.title}
                     </li>
                   ))}
                 </ul>
@@ -239,7 +344,50 @@ export function MeetingCalendar({ events }: { events: CalendarEvent[] }) {
             );
           })}
         </div>
-      </div>
+      ) : (
+        <div className="border-border overflow-hidden rounded-lg border">
+          <div className="border-border bg-muted/40 grid grid-cols-7 border-b">
+            {WEEKDAYS.map((day) => (
+              <div key={day} className="text-muted-foreground px-2 py-2 text-center text-xs font-medium">
+                {day}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {grid.map((day) => {
+              const key = ymd(day);
+              const dayEvents = eventsByDay.get(key) ?? [];
+              const inMonth = day.getMonth() === view.month;
+              const isToday = key === todayKey;
+              return (
+                <div key={key} className={cn('border-border min-h-24 border-r border-b p-1.5 last:border-r-0', !inMonth && 'bg-muted/20 text-muted-foreground')}>
+                  <div className="flex items-center justify-between">
+                    <span className={cn('inline-flex h-6 w-6 items-center justify-center rounded-full text-xs', isToday && 'bg-primary text-primary-foreground font-semibold')}>
+                      {day.getDate()}
+                    </span>
+                  </div>
+                  <ul className="mt-1 space-y-1">
+                    {dayEvents.map((event) => (
+                      <li
+                        key={event.id}
+                        title={event.title}
+                        className={cn(
+                          'truncate rounded px-1.5 py-0.5 text-xs',
+                          event.status === 'cancelled' ? 'bg-muted text-muted-foreground line-through' : 'bg-primary/10 text-primary',
+                        )}
+                      >
+                        {formatTime(event.start)} {event.title}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+        </>
+      )}
     </section>
   );
 }

@@ -57,8 +57,17 @@ export async function signInAndSelectOrganisation(page: Page): Promise<void> {
   if (selectedAdminCookies) {
     await page.context().addCookies(selectedAdminCookies);
     await page.goto('/dashboard');
-    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
-    return;
+    // A prior spec may have signed out (revoking the shared session) or the
+    // session may have aged out. Fall back to a fresh sign-in instead of
+    // failing order-dependently.
+    try {
+      await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+        timeout: 10_000,
+      });
+      return;
+    } catch {
+      selectedAdminCookies = undefined;
+    }
   }
   await signIn(page);
   await selectDevelopmentOrganisation(page);

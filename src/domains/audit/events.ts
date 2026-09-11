@@ -158,6 +158,17 @@ export type AuditAction =
   | 'meeting.updated'
   | 'meeting.cancelled'
   | 'meeting.agenda_changed'
+  // Calendar events (RangerOS parity).
+  | 'calendar.created'
+  | 'calendar.updated'
+  | 'calendar.deleted'
+  // Teams, groups, clients (council tenant model).
+  | 'team.created'
+  | 'team.member_added'
+  | 'group.created'
+  | 'group.member_added'
+  | 'client.created'
+  | 'client.assigned'
   // Meeting-pack access (panel materials).
   | 'meeting_pack.generated'
   | 'meeting_pack.viewed'
@@ -255,6 +266,10 @@ export type ResourceType =
   | 'review'
   | 'meeting'
   | 'agenda_item'
+  | 'calendar_event'
+  | 'team'
+  | 'group'
+  | 'client'
   | 'message'
   | 'notification'
   | 'meeting_pack'

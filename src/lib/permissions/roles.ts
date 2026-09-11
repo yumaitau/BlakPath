@@ -99,6 +99,11 @@ export const SYSTEM_ROLES = Object.freeze({
       'application:assign',
       'evidence:read-assigned',
       'evidence:request',
+      'client:create',
+      'client:read-any',
+      'client:assign-team',
+      'calendar:create',
+      'calendar:read-any',
     ],
   },
 
@@ -117,6 +122,9 @@ export const SYSTEM_ROLES = Object.freeze({
       'family-link:request',
       'review:create',
       'review:finalise',
+      'client:read-assigned',
+      'calendar:create',
+      'calendar:read-any',
     ],
   },
 
@@ -163,6 +171,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'conflict:declare',
       'decision:propose',
       'decision:vote',
+      'calendar:read-any',
     ],
   },
 
@@ -183,6 +192,9 @@ export const SYSTEM_ROLES = Object.freeze({
       'certificate:generate',
       'certificate:sign',
       'certificate:revoke',
+      'calendar:create',
+      'calendar:read-any',
+      'calendar:update-any',
     ],
   },
 
@@ -200,6 +212,8 @@ export const SYSTEM_ROLES = Object.freeze({
       'report:view',
       'report:export',
       'retention:manage',
+      'client:read-any',
+      'calendar:read-any',
     ],
   },
 
@@ -214,6 +228,12 @@ export const SYSTEM_ROLES = Object.freeze({
       'report:view',
       'audit:view',
       'break-glass:approve',
+      'team:create',
+      'team:manage',
+      'group:create',
+      'group:manage',
+      'client:read-any',
+      'calendar:read-any',
     ],
   },
 

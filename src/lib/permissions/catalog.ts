@@ -21,6 +21,10 @@ export const PERMISSION_CATEGORIES = [
   'family-link',
   'review',
   'meeting',
+  'calendar',
+  'team',
+  'group',
+  'client',
   'decision',
   'certificate',
   'reporting',
@@ -224,6 +228,66 @@ export const PERMISSION_CATALOG = Object.freeze({
     category: 'break-glass',
     description:
       'Approve a break-glass request (must be a different person from the requester).',
+  },
+  'team:create': {
+    key: 'team:create',
+    category: 'team',
+    description: 'Create a team inside the organisation.',
+  },
+  'team:manage': {
+    key: 'team:manage',
+    category: 'team',
+    description: 'Manage teams and assign staff to teams.',
+  },
+  'group:create': {
+    key: 'group:create',
+    category: 'group',
+    description: 'Create a group inside the organisation.',
+  },
+  'group:manage': {
+    key: 'group:manage',
+    category: 'group',
+    description: 'Manage groups and assign staff to groups.',
+  },
+  'client:create': {
+    key: 'client:create',
+    category: 'client',
+    description: 'Register a new client person record for the organisation.',
+  },
+  'client:read-assigned': {
+    key: 'client:read-assigned',
+    category: 'client',
+    description: 'View clients assigned to your team or group.',
+  },
+  'client:read-any': {
+    key: 'client:read-any',
+    category: 'client',
+    description: 'View any client in the organisation, regardless of assignment.',
+  },
+  'client:assign-team': {
+    key: 'client:assign-team',
+    category: 'client',
+    description: 'Assign or reassign a client to a team.',
+  },
+  'calendar:create': {
+    key: 'calendar:create',
+    category: 'calendar',
+    description: 'Create a calendar event.',
+  },
+  'calendar:read-any': {
+    key: 'calendar:read-any',
+    category: 'calendar',
+    description: 'View any calendar event in the organisation.',
+  },
+  'calendar:update-any': {
+    key: 'calendar:update-any',
+    category: 'calendar',
+    description: 'Reschedule or edit any calendar event.',
+  },
+  'calendar:delete-any': {
+    key: 'calendar:delete-any',
+    category: 'calendar',
+    description: 'Delete a calendar event.',
   },
 } as const satisfies Record<string, PermissionDefinition>);
 

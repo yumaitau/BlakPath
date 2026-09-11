@@ -1,8 +1,18 @@
 # BlakPath
 
-BlakPath is a secure, multi-tenant case-management and evidence platform for
-**authorised Aboriginal and Torres Strait Islander organisations** administering
-**Confirmation of Aboriginality (CoA)** applications.
+> **Public code. Open for audit.** This repository is public under
+> [`yumaitau`](https://github.com/yumaitau) so any community member, council,
+> auditor or researcher can read, review and verify exactly what the software
+> does. No hidden logic. No hidden determination. See
+> [`docs/threat-model.md`](docs/threat-model.md),
+> [`docs/privacy-architecture.md`](docs/privacy-architecture.md) and
+> [`docs/audit-log-design.md`](docs/audit-log-design.md) to verify.
+
+BlakPath is a trusted, community-controlled platform for **Confirmation of
+Aboriginality (CoA)**. It serves **authorised Aboriginal and Torres Strait
+Islander organisations** today, and is built to be reused by **any local
+council or community organisation** that needs a trauma-aware, accessible,
+auditable CoA workspace.
 
 It gives authorised staff a trauma-aware, accessible, auditable workspace to
 receive applications, hold sensitive supporting evidence, manage genealogy and
@@ -210,10 +220,23 @@ BlakPath/
 | [`docs/operations-runbook.md`](docs/operations-runbook.md)             | Alert signals and incident response actions                                                    |
 | [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md) | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |
 | [`docs/local-development.md`](docs/local-development.md)               | Setup, services, commands, testing, troubleshooting                                            |
+| [`docs/council-trust-model.md`](docs/council-trust-model.md)           | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
+| [`docs/calendar-vision.md`](docs/calendar-vision.md)                   | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                  |
+| [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                         | Full user-journey e2e matrix across auth, CoA, teams, calendar                                  |
 
-## Licence & governance
+## Licence & governance — open code, community authority
 
-BlakPath is intended for use by authorised Aboriginal and Torres Strait Islander
-organisations. Data governance and cultural authority sit with those
-organisations and their communities. The software is a custodial tool, not a
+BlakPath code is public and auditable. Data governance and cultural authority
+stay with the relevant Aboriginal and Torres Strait Islander organisations,
+councils and communities. The software is a custodial tool, not a
 decision-maker.
+
+- **Use by any local council:** any council or authorised community
+  organisation can deploy its own isolated tenant, configure its own roles,
+  teams and groups, and administer CoA without sharing data with other
+  tenants. Tenant isolation is enforced per `organisation_id`
+  (`docs/tenant-isolation.md`).
+- **Audit it:** all sensitive actions are permission-checked and written to an
+  append-only, hash-chained audit trail (`docs/audit-log-design.md`).
+  Report issues via GitHub Issues; security issues via the process in
+  `docs/operations-runbook.md`.
