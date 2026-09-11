@@ -14,7 +14,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:7350f7c
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
           imagePullPolicy: IfNotPresent
           command: [pnpm, exec, tsx, src/db/migrate.ts]
           envFrom:

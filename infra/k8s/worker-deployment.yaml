@@ -23,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: worker
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:f00ae65
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
           imagePullPolicy: IfNotPresent
           command: [pnpm, exec, tsx, worker/index.ts]
           envFrom:
