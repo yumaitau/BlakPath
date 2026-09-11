@@ -1,22 +1,18 @@
-import { env } from '@/lib/env';
-
 /**
  * Authentication transactional-email port.
  *
  * SECURITY / DESIGN INTENT
  * ------------------------
  * The auth layer must be able to send verification and password-reset links
- * without hard-wiring a specific transport (SMTP, SES, a queue). Email delivery
- * is owned elsewhere in the platform; this module defines the *contract* the
- * auth layer needs and ships a safe default so the module is runnable in
- * isolation.
+ * without hard-wiring transport specifics at import time. Delivery goes
+ * through the shared SMTP transport (SES SMTP interface in production) via a
+ * lazy dynamic import, so every bundle — dev server, standalone production,
+ * worker — resolves the same real transport without relying on a
+ * separately-registered module singleton.
  *
- * The default transport does NOT log the verification/reset URL or token at
- * info level, because those links are bearer secrets — anyone with the link can
- * complete the action. It records only that a message was queued, plus the
- * recipient and template, which is enough for operability without leaking
- * credentials into logs. A real transport should be injected via
- * `setAuthMailer` from the email module during app startup.
+ * Bearer links never touch logs: only the template and a redacted recipient
+ * are recorded. A different transport can still be injected via
+ * `setAuthMailer` (tests, explicit overrides).
  */
 
 /** Copy is trauma-aware, plain, respectful Australian English. */
@@ -38,40 +34,26 @@ export interface AuthMailer {
 }
 
 /**
- * Safe default transport.
+ * Default transport.
  *
- * In non-production it writes a single, secret-free line to stdout so a
- * developer using Mailpit knows a mail was triggered. It never prints the
- * bearer link. In production, if no real transport has been injected it FAILS
- * LOUDLY rather than silently dropping a security-critical email.
+ * Sends through the real SMTP transport (SES SMTP interface in production,
+ * Mailpit locally) via a lazy dynamic import — static import would create a
+ * module cycle, and the previous setter-only design silently failed in
+ * production bundles where the instrumentation module registry never reached
+ * route handlers (found live on EKS: password resets threw "No AuthMailer
+ * configured"). Never logs the bearer link. `setAuthMailer` remains for tests
+ * and explicit overrides.
  */
 const defaultMailer: AuthMailer = {
-  async sendVerificationEmail({ to }) {
-    dispatchOrThrow('verification', to);
+  async sendVerificationEmail(message) {
+    const { authMailer } = await import('@/lib/email/mailer');
+    await authMailer.sendVerificationEmail(message);
   },
-  async sendPasswordResetEmail({ to }) {
-    dispatchOrThrow('password-reset', to);
+  async sendPasswordResetEmail(message) {
+    const { authMailer } = await import('@/lib/email/mailer');
+    await authMailer.sendPasswordResetEmail(message);
   },
 };
-
-function dispatchOrThrow(template: 'verification' | 'password-reset', to: string): void {
-  if (env.NODE_ENV === 'production') {
-    throw new Error(
-      `No AuthMailer configured: refusing to silently drop the "${template}" email. ` +
-        'Inject a transport via setAuthMailer() during startup.',
-    );
-  }
-  // Development/test only. Recipient + template only — never the token or URL.
-
-  console.info(`[auth-mail] queued ${template} email to ${redact(to)}`);
-}
-
-/** Redacts the local part of an address so logs never carry a full identity. */
-function redact(address: string): string {
-  const at = address.indexOf('@');
-  if (at <= 1) return '***';
-  return `${address[0]}***${address.slice(at)}`;
-}
 
 let mailer: AuthMailer = defaultMailer;
 
