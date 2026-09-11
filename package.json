@@ -12,7 +12,12 @@
       "esbuild@<=0.24.2": ">=0.25.0",
       "file-type@>=13.0.0 <21.3.1": ">=21.3.1",
       "postcss@<8.5.10": ">=8.5.10",
-      "uuid@<11.1.1": ">=11.1.1"
+      "uuid@<11.1.1": ">=11.1.1",
+      "next@<16.3.3": ">=16.3.3",
+      "postcss@<8.5.18": ">=8.5.18",
+      "nanoid@<3.3.18": ">=3.3.18",
+      "browserslist@<=4.28.6": ">=4.28.7",
+      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0"
     },
     "auditConfig": {
       "ignoreGhsas": [
@@ -77,9 +82,9 @@
     "file-type": "^19.5.0",
     "ioredis": "^5.4.1",
     "lucide-react": "^0.454.0",
-    "nanoid": "^5.0.7",
+    "nanoid": "^5.1.16",
     "next": "^16.0.0",
-    "nodemailer": "^9.0.1",
+    "nodemailer": "^9.1.0",
     "pdf-lib": "^1.17.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.4",

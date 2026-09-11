@@ -164,7 +164,8 @@ jobs:
         run: pnpm build
 
   e2e:
-    name: Browser and accessibility acceptance    runs-on: ubuntu-latest
+    name: Browser and accessibility acceptance
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [test, build]
     services:
