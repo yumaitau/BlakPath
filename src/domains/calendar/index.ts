@@ -22,6 +22,8 @@ export {
   deleteCalendarEvent,
   listCalendarEvents,
   listOccurrences,
+  processReminderSweep,
+  respondAttendee,
   updateCalendarEvent,
   type CalendarEventRow,
 } from './service';

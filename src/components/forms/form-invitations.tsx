@@ -44,7 +44,9 @@ function statusLabel(status: string): string {
 
 function formatExpiry(expiresAt: string | null): string {
   if (!expiresAt) return 'No expiry';
-  return `Expires ${new Date(expiresAt).toLocaleDateString([], {
+  // Pinned locale: server and browser defaults differ (en-AU vs en-US),
+  // which caused hydration mismatch. Australian format is correct for product.
+  return `Expires ${new Date(expiresAt).toLocaleDateString('en-AU', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

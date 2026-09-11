@@ -94,6 +94,8 @@ export const calendarEventReminders = pgTable(
     minutesBefore: integer('minutes_before').notNull().default(30),
     /** in-app | email (app-checked). */
     channel: text('channel').notNull().default('in-app'),
+    /** When the reminder was dispatched; null = pending. */
+    sentAt: timestamp('sent_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [

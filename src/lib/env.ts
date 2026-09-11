@@ -63,6 +63,9 @@ const serverSchema = z
     SMTP_USER: z.string().optional(),
     SMTP_PASSWORD: z.string().optional(),
     SMTP_FROM: z.string().default('BlakPath <no-reply@blakpath.local>'),
+    // Shared secret gating the SES SNS event webhook (bounce/complaint).
+    // Unset locally; required in production where SES events are wired.
+    EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),
 
     // Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
@@ -76,6 +79,7 @@ const serverSchema = z
     // restart cannot silently skip a tenant's maintenance work.
     AUDIT_VERIFY_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
+    REMINDER_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
 
     // Feature toggles

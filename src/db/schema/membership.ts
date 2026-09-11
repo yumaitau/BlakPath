@@ -15,6 +15,7 @@ import {
 } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { consentRecords } from './consent';
 
 /**
  * Membership & RBAC tables.
@@ -196,7 +197,9 @@ export const representativeAuthorisations = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     /** Link to a consent record; consent domain is fleshed out later. */
-    consentRecordId: refId('consent_record_id'),
+    consentRecordId: refId('consent_record_id').references(() => consentRecords.id, {
+      onDelete: 'set null',
+    }),
     ...timestamps,
   },
   (table) => [

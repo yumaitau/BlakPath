@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blakpath-config
+  namespace: blakpath
+data:
+  APP_URL: https://blakpath.example.gov.au
+  APP_REGION: ap-southeast-2
+  S3_REGION: ap-southeast-2
+  S3_BUCKET_EVIDENCE: blakpath-evidence
+  S3_BUCKET_QUARANTINE: blakpath-quarantine
+  S3_FORCE_PATH_STYLE: "false"
+  # SES via SMTP interface in ap-southeast-2. Credentials come from Secrets
+  # Manager via External Secrets Operator, never baked into images.
+  SMTP_HOST: email-smtp.ap-southeast-2.amazonaws.com
+  SMTP_PORT: "587"
+  SMTP_FROM: BlakPath <no-reply@blakpath.example.gov.au>
+  CLAMAV_HOST: clamav
+  CLAMAV_PORT: "3310"
+  AI_FEATURES_ENABLED: "false"
+  OTEL_SERVICE_NAME: blakpath

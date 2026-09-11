@@ -73,7 +73,9 @@ const PRIORITY_CHIP: Record<BoardPriority, string> = {
 };
 
 function formatDue(dueAt: string): string {
-  return new Date(dueAt).toLocaleDateString([], {
+  // Pinned locale: server and browser defaults differ; unpinned formatting
+  // caused hydration mismatch elsewhere (form invitations).
+  return new Date(dueAt).toLocaleDateString('en-AU', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

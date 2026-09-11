@@ -11,6 +11,7 @@ import {
 import { applicationPriority, applicationStatus, assignmentStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { clients } from './teams';
 
 /**
  * Application tables (Phase 2).
@@ -57,6 +58,10 @@ export const applications = pgTable(
     priority: applicationPriority('priority').notNull().default('normal'),
     /** Denormalised active assignee for scoped listings; history is authoritative. */
     currentAssigneeUserId: refId('current_assignee_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    /** Owning client person record (council tenant model). */
+    clientId: refId('client_id').references(() => clients.id, {
       onDelete: 'set null',
     }),
     /** Who started the application (applicant or an intake officer acting for them). */

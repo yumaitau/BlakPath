@@ -223,6 +223,17 @@ const retentionProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Reminder processor. Dispatches due calendar reminders for the tenant as
+ * notifications (email copies queued by the notification system). Idempotent
+ * per reminder row: dispatched rows are marked sent.
+ */
+const reminderProcessor: ProcessorFn = async (job) => {
+  const { organisationId, correlationId } = job.data;
+  const { processReminderSweep } = await import('@/domains/calendar/service');
+  await processReminderSweep({ organisationId, correlationId });
+};
+
+/**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
  * runs. Adding a real processor later is a one-line swap here.
@@ -235,6 +246,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Retention]: retentionProcessor,
   [QueueName.Export]: exportProcessor,
   [QueueName.Webhook]: webhookProcessor,
+  [QueueName.Reminder]: reminderProcessor,
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: blakpath
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - serviceaccounts.yaml
+  - externalsecret.yaml
+  - web-deployment.yaml
+  - worker-deployment.yaml
+  - service-ingress.yaml
+  - autoscaling.yaml
+images:
+  - name: ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath-web
+    newTag: TAG
+  - name: ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath-worker
+    newTag: TAG

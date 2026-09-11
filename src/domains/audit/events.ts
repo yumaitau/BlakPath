@@ -153,6 +153,8 @@ export type AuditAction =
   | 'message.viewed'
   | 'message.deleted'
   | 'notification.sent'
+  | 'email.suppressed'
+  | 'email.suppression_cleared'
   // Meeting lifecycle & agenda.
   | 'meeting.created'
   | 'meeting.updated'
@@ -272,6 +274,7 @@ export type ResourceType =
   | 'client'
   | 'message'
   | 'notification'
+  | 'email_suppression'
   | 'meeting_pack'
   | 'conflict'
   | 'vote'

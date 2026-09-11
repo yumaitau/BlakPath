@@ -59,7 +59,8 @@ export interface SendEmailInput {
 /**
  * Send a single email through the shared SMTP transport. Used by the worker's
  * Email/Notification processors. Logs only the redacted recipient and subject —
- * never the body (which may contain a bearer link).
+ * never the body (which may contain a bearer link). Suppressed addresses
+ * (SES bounce/complaint) are skipped silently.
  */
 export async function sendEmail({
   to,
@@ -67,6 +68,11 @@ export async function sendEmail({
   text,
   html,
 }: SendEmailInput): Promise<void> {
+  const { isSuppressed } = await import('@/domains/email/service');
+  if (await isSuppressed(to)) {
+    logger.info({ to: redact(to) }, 'email suppressed (bounce/complaint) — skipping');
+    return;
+  }
   const transport = getTransport();
   await transport.sendMail({
     from: env.SMTP_FROM,

@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: blakpath-web
+  namespace: blakpath
+spec:
+  type: ClusterIP
+  selector:
+    app: blakpath-web
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blakpath-web
+  namespace: blakpath
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # Replace with the WAFv2 Web ACL ARN protecting this ingress.
+    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:ap-southeast-2:ACCOUNT_ID:regional/webacl/blakpath/ID
+    alb.ingress.kubernetes.io/healthcheck-path: /api/ready
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/success-codes: 200-499
+spec:
+  ingressClassName: alb
+  rules:
+    - host: blakpath.example.gov.au
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: blakpath-web
+                port:
+                  number: 80

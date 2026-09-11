@@ -35,18 +35,21 @@ type ScheduledQueue = {
 export interface SchedulerIntervals {
   auditVerifyMs: number;
   retentionSweepMs: number;
+  reminderSweepMs?: number;
 }
 
 export interface ReconcileSchedulesInput {
   organisationIds: readonly string[];
   auditQueue: ScheduledQueue;
   retentionQueue: ScheduledQueue;
+  reminderQueue?: ScheduledQueue;
   intervals: SchedulerIntervals;
 }
 
 export interface ReconcileSchedulesResult {
   auditSchedulers: number;
   retentionSchedulers: number;
+  reminderSchedulers: number;
   removedSchedulers: number;
 }
 
@@ -116,7 +119,7 @@ export async function reconcileTenantSchedules(
   input: ReconcileSchedulesInput,
 ): Promise<ReconcileSchedulesResult> {
   const organisationIds = [...new Set(input.organisationIds)].filter(Boolean);
-  const [auditRemoved, retentionRemoved] = await Promise.all([
+  const [auditRemoved, retentionRemoved, reminderRemoved] = await Promise.all([
     reconcileQueue(
       input.auditQueue,
       QueueName.AuditVerify,
@@ -129,12 +132,21 @@ export async function reconcileTenantSchedules(
       organisationIds,
       input.intervals.retentionSweepMs,
     ),
+    input.reminderQueue
+      ? reconcileQueue(
+          input.reminderQueue,
+          QueueName.Reminder,
+          organisationIds,
+          input.intervals.reminderSweepMs ?? 900_000,
+        )
+      : Promise.resolve(0),
   ]);
 
   return {
     auditSchedulers: organisationIds.length,
     retentionSchedulers: organisationIds.length,
-    removedSchedulers: auditRemoved + retentionRemoved,
+    reminderSchedulers: input.reminderQueue ? organisationIds.length : 0,
+    removedSchedulers: auditRemoved + retentionRemoved + reminderRemoved,
   };
 }
 
@@ -149,9 +161,11 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
     organisationIds: active.map((organisation) => organisation.id),
     auditQueue: getQueue(QueueName.AuditVerify),
     retentionQueue: getQueue(QueueName.Retention),
+    reminderQueue: getQueue(QueueName.Reminder),
     intervals: {
       auditVerifyMs: env.AUDIT_VERIFY_INTERVAL_MS,
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
+      reminderSweepMs: env.REMINDER_SWEEP_INTERVAL_MS,
     },
   });
 }

@@ -4,7 +4,7 @@ import {
   calendarEventReminders,
   calendarEvents,
 } from '@/db/schema';
-import { currentScope } from '@/db/tenant-db';
+import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -271,4 +271,140 @@ export async function countUpcoming(): Promise<number> {
   const rows = await listCalendarEvents({ from: new Date() });
   void and;
   return rows.length;
+}
+
+/** RSVP to an event as attendee. Member updates own row; editors update any. */export async function respondAttendee(
+  attendeeId: string,
+  responseStatus: 'accepted' | 'declined' | 'tentative' | 'needs-action',
+) {
+  const ctx = requireTenantContext();
+  const scope = currentScope();
+  const rows = await scope.db
+    .select()
+    .from(calendarEventAttendees)
+    .where(
+      scope.where(calendarEventAttendees.organisationId, eq(calendarEventAttendees.id, attendeeId)),
+    )
+    .limit(1);
+  const row = scope.assertOwned(rows[0]);
+  if (!row) throw new AuthorizationError('POLICY_DENIED');
+  const subject = subjectFromContext(ctx);
+  const canEditAny = (() => {
+    try {
+      requirePermission(subject, 'calendar:update-any');
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  if (!canEditAny && row.userId !== ctx.userId) {
+    try {
+      requireAny(subject, CALENDAR_READ);
+    } catch {
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+    if (row.userId !== ctx.userId) throw new AuthorizationError('POLICY_DENIED');
+  }
+  const updated = await scope.db
+    .update(calendarEventAttendees)
+    .set({ responseStatus })
+    .where(
+      scope.where(calendarEventAttendees.organisationId, eq(calendarEventAttendees.id, attendeeId)),
+    )
+    .returning();
+  const updatedRow = must(updated[0], 'attendee');
+  await recordAudit({
+    action: 'calendar.updated',
+    resourceType: 'calendar_event',
+    resourceId: row.eventId,
+    result: 'success',
+    reason: `rsvp ${responseStatus}`,
+  });
+  return updatedRow;
+}
+
+/**
+ * Dispatch due reminders for one tenant. Runs in the worker (explicit scope,
+ * no ambient context). A reminder is due when its event starts within
+ * [now, now + 24h] and the notify time (start − minutesBefore) has passed.
+ * Each pending reminder notifies every attendee holding a user account via
+ * the notification system (which also queues the email copy), then marks the
+ * reminder sent so it fires once.
+ */
+export async function processReminderSweep(input: {
+  organisationId: string;
+  correlationId: string;
+  now?: Date;
+}): Promise<{ sent: number }> {
+  const { organisationId, correlationId, now: nowRaw } = input;
+  const now = nowRaw ?? new Date();
+  const horizon = new Date(now.getTime() + 24 * 3_600_000);
+  const scope = scopeFor(organisationId);
+
+  const pending = await scope.db
+    .select({
+      reminderId: calendarEventReminders.id,
+      minutesBefore: calendarEventReminders.minutesBefore,
+      eventId: calendarEvents.id,
+      title: calendarEvents.title,
+      startAt: calendarEvents.startAt,
+      location: calendarEvents.location,
+    })
+    .from(calendarEventReminders)
+    .innerJoin(calendarEvents, eq(calendarEventReminders.eventId, calendarEvents.id))
+    .where(
+      and(
+        eq(calendarEventReminders.organisationId, organisationId),
+        isNull(calendarEventReminders.sentAt),
+        eq(calendarEvents.organisationId, organisationId),
+        eq(calendarEvents.status, 'scheduled'),
+        isNull(calendarEvents.deletedAt),
+        gte(calendarEvents.startAt, new Date(now.getTime() - 2 * 3_600_000)),
+        lte(calendarEvents.startAt, horizon),
+      ),
+    )
+    .limit(200);
+
+  const { createNotification } = await import('@/domains/notifications/service');
+  let sent = 0;
+  for (const item of pending) {
+    const notifyAt = item.startAt.getTime() - item.minutesBefore * 60_000;
+    if (notifyAt > now.getTime()) continue;
+    const attendees = await scope.db
+      .select()
+      .from(calendarEventAttendees)
+      .where(
+        and(
+          eq(calendarEventAttendees.organisationId, organisationId),
+          eq(calendarEventAttendees.eventId, item.eventId),
+        ),
+      )
+      .limit(100);
+    const userIds = [...new Set(attendees.map((a) => a.userId).filter((u): u is string => !!u))];
+    for (const userId of userIds) {
+      await createNotification(
+        {
+          organisationId,
+          userId,
+          type: 'calendar-reminder',
+          title: `Reminder: ${item.title}`,
+          body: `Starts ${item.startAt.toISOString()}${item.location ? ` at ${item.location}` : ''}.`,
+          resourceType: 'calendar_event',
+          resourceId: item.eventId,
+        },
+        correlationId,
+      );
+      sent += 1;
+    }
+    await scope.db
+      .update(calendarEventReminders)
+      .set({ sentAt: now })
+      .where(
+        and(
+          eq(calendarEventReminders.organisationId, organisationId),
+          eq(calendarEventReminders.id, item.reminderId),
+        ),
+      );
+  }
+  return { sent };
 }

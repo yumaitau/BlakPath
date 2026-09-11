@@ -6,6 +6,7 @@ vi.mock('@/lib/queues', () => ({
   QueueName: {
     AuditVerify: 'audit-verify',
     Retention: 'retention',
+    Reminder: 'reminder',
   },
   getQueue: vi.fn(),
 }));
@@ -89,7 +90,31 @@ describe('tenant maintenance scheduler', () => {
     expect(report).toEqual({
       auditSchedulers: 2,
       retentionSchedulers: 2,
+      reminderSchedulers: 0,
       removedSchedulers: 2,
     });
+  });
+
+  it('schedules reminder sweeps when a reminder queue is supplied', async () => {
+    const auditQueue = fakeQueue();
+    const retentionQueue = fakeQueue();
+    const reminderQueue = fakeQueue();
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue,
+      retentionQueue,
+      reminderQueue,
+      intervals: { auditVerifyMs: 60_000, retentionSweepMs: 120_000 },
+    });
+    expect(reminderQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.Reminder, 'org-a'),
+        every: 900_000,
+        name: 'sweep',
+        organisationId: 'org-a',
+      },
+    ]);
+    expect(report.reminderSchedulers).toBe(1);
+    expect(report.removedSchedulers).toBe(0);
   });
 });

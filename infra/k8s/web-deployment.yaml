@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blakpath-web
+  namespace: blakpath
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: blakpath-web
+  template:
+    metadata:
+      labels:
+        app: blakpath-web
+    spec:
+      serviceAccountName: blakpath-web
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath-web:TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-runtime-secret
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-runtime-secret
+                  key: REDIS_URL
+            - name: BETTER_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-runtime-secret
+                  key: BETTER_AUTH_SECRET
+            - name: ENCRYPTION_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-runtime-secret
+                  key: ENCRYPTION_MASTER_KEY
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-runtime-secret
+                  key: SMTP_USER
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-runtime-secret
+                  key: SMTP_PASSWORD
+            - name: EMAIL_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-runtime-secret
+                  key: EMAIL_WEBHOOK_SECRET
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
