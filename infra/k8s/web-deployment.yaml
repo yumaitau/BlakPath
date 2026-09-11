@@ -33,7 +33,7 @@ spec:
           emptyDir: {}
       containers:
         - name: web
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app:504f8fc
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app:f6b3689
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
