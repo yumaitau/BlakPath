@@ -17,6 +17,7 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
 ## Data services
+
 - RDS Postgres with point-in-time recovery. Proxy in front for failover.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
