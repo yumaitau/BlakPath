@@ -19,7 +19,11 @@ import { AuthorizationError } from '@/lib/permissions/errors';
 
 export type RepresentativeRow = typeof representativeAuthorisations.$inferSelect;
 
-const REP_WRITE = ['application:create', 'application:update-intake', 'application:assign'] as const;
+const REP_WRITE = [
+  'application:create',
+  'application:update-intake',
+  'application:assign',
+] as const;
 
 const requestSchema = z.object({
   subjectUserId: z.uuid(),
@@ -114,7 +118,9 @@ export async function requestRepresentativeAccess(
   return row;
 }
 
-export async function activateRepresentativeAccess(id: string): Promise<RepresentativeRow> {
+export async function activateRepresentativeAccess(
+  id: string,
+): Promise<RepresentativeRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), REP_WRITE);
   const scope = currentScope();
@@ -122,11 +128,15 @@ export async function activateRepresentativeAccess(id: string): Promise<Represen
     .select()
     .from(representativeAuthorisations)
     .where(
-      scope.where(representativeAuthorisations.organisationId, eq(representativeAuthorisations.id, id)),
+      scope.where(
+        representativeAuthorisations.organisationId,
+        eq(representativeAuthorisations.id, id),
+      ),
     )
     .limit(1);
   const existing = scope.assertOwned(rows[0]);
-  if (!existing || existing.status !== 'pending') throw new AuthorizationError('POLICY_DENIED');
+  if (!existing || existing.status !== 'pending')
+    throw new AuthorizationError('POLICY_DENIED');
   if (
     !existing.consentRecordId ||
     !(await liveConsent(scope, existing.consentRecordId, existing.subjectUserId))
@@ -144,7 +154,10 @@ export async function activateRepresentativeAccess(id: string): Promise<Represen
     .update(representativeAuthorisations)
     .set({ status: 'active', grantedAt: new Date() })
     .where(
-      scope.where(representativeAuthorisations.organisationId, eq(representativeAuthorisations.id, id)),
+      scope.where(
+        representativeAuthorisations.organisationId,
+        eq(representativeAuthorisations.id, id),
+      ),
     )
     .returning();
   const row = must(updated[0], 'representative authorisation');
@@ -165,7 +178,10 @@ export async function revokeRepresentativeAccess(id: string): Promise<Representa
     .update(representativeAuthorisations)
     .set({ status: 'revoked', revokedAt: new Date() })
     .where(
-      scope.where(representativeAuthorisations.organisationId, eq(representativeAuthorisations.id, id)),
+      scope.where(
+        representativeAuthorisations.organisationId,
+        eq(representativeAuthorisations.id, id),
+      ),
     )
     .returning();
   const row = updated[0];

@@ -14,7 +14,11 @@ import { createInvitedAccount } from '@/domains/memberships';
  */
 export async function POST(request: NextRequest): Promise<Response> {
   try {
-    const body = (await request.json()) as { token: string; name: string; password: string };
+    const body = (await request.json()) as {
+      token: string;
+      name: string;
+      password: string;
+    };
     const result = await createInvitedAccount(body);
     return NextResponse.json(result, { status: 201 });
   } catch (error) {

@@ -27,7 +27,9 @@ function must<T>(row: T | undefined, what: string): T {
   return row;
 }
 
-export async function createSsoBinding(raw: z.input<typeof bindingSchema>): Promise<SsoBindingRow> {
+export async function createSsoBinding(
+  raw: z.input<typeof bindingSchema>,
+): Promise<SsoBindingRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const input = bindingSchema.parse(raw);
@@ -67,14 +69,22 @@ export async function listSsoBindings(): Promise<SsoBindingRow[]> {
 }
 
 /** Enable only when the binding domain is verified for this tenant. */
-export async function setSsoBindingEnabled(id: string, enabled: boolean): Promise<SsoBindingRow> {
+export async function setSsoBindingEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<SsoBindingRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const scope = currentScope();
   const rows = await scope.db
     .select()
     .from(organisationSsoProviders)
-    .where(scope.where(organisationSsoProviders.organisationId, eq(organisationSsoProviders.id, id)))
+    .where(
+      scope.where(
+        organisationSsoProviders.organisationId,
+        eq(organisationSsoProviders.id, id),
+      ),
+    )
     .limit(1);
   const binding = scope.assertOwned(rows[0]);
   if (!binding) throw new AuthorizationError('POLICY_DENIED');
@@ -97,7 +107,12 @@ export async function setSsoBindingEnabled(id: string, enabled: boolean): Promis
   const updated = await scope.db
     .update(organisationSsoProviders)
     .set({ enabled })
-    .where(scope.where(organisationSsoProviders.organisationId, eq(organisationSsoProviders.id, id)))
+    .where(
+      scope.where(
+        organisationSsoProviders.organisationId,
+        eq(organisationSsoProviders.id, id),
+      ),
+    )
     .returning();
   const row = must(updated[0], 'sso binding');
   await recordAudit({

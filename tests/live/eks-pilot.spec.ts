@@ -27,7 +27,9 @@ test('live pilot: sign in, pages load, team/client/event created', async ({ page
   await page.getByLabel('Email').fill(EMAIL);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page).toHaveURL(/\/(?:select-organisation|dashboard)$/, { timeout: 30_000 });
+  await expect(page).toHaveURL(/\/(?:select-organisation|dashboard)$/, {
+    timeout: 30_000,
+  });
   if (/\/select-organisation$/.test(page.url())) {
     await page.getByRole('button', { name: /Pilot Council/ }).click();
   }
@@ -56,7 +58,9 @@ test('live pilot: sign in, pages load, team/client/event created', async ({ page
 
   await test.step('calendar creates event across views', async () => {
     await page.goto('/meetings');
-    await expect(page.getByRole('heading', { name: /Agenda|Week of|20\d\d/ }).first()).toBeVisible({
+    await expect(
+      page.getByRole('heading', { name: /Agenda|Week of|20\d\d/ }).first(),
+    ).toBeVisible({
       timeout: 15_000,
     });
     await page.getByRole('button', { name: 'Agenda' }).click();
@@ -76,7 +80,9 @@ test('live pilot: sign in, pages load, team/client/event created', async ({ page
 
   await test.step('board and applications render', async () => {
     await page.goto('/board');
-    await expect(page.getByRole('button', { name: 'Add task' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Add task' })).toBeVisible({
+      timeout: 15_000,
+    });
     await page.goto('/applications');
     await expect(
       page.getByRole('heading', { name: 'Applications', exact: true }),

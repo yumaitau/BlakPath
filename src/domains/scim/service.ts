@@ -3,13 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { z } from 'zod';
 import { db } from '@/db/client';
-import {
-  membershipRoles,
-  memberships,
-  organisations,
-  roles,
-  users,
-} from '@/db/schema';
+import { membershipRoles, memberships, organisations, roles, users } from '@/db/schema';
 import { recordAudit } from '@/domains/audit/service';
 import { env } from '@/lib/env';
 import { AuthorizationError } from '@/lib/permissions/errors';
@@ -71,7 +65,12 @@ function mapGroupsToRoles(input: ScimUserInput): SystemRoleSlug[] {
   const names = [
     ...(input.groups ?? []).map((g) => g.display),
     ...(input.entitlements ?? []).map((e) => e.value),
-  ].map((n) => n.trim().toLowerCase().replace(/[^a-z-]/g, ''));
+  ].map((n) =>
+    n
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z-]/g, ''),
+  );
   const slugs = names.filter((n): n is SystemRoleSlug => isSystemRoleSlug(n));
   return slugs.filter((s) => ALLOWED_SCIM_ROLES.includes(s));
 }
@@ -122,7 +121,9 @@ export async function provisionScimUser(
   const [existing] = await db
     .select({ id: memberships.id })
     .from(memberships)
-    .where(and(eq(memberships.organisationId, organisationId), eq(memberships.userId, userId)))
+    .where(
+      and(eq(memberships.organisationId, organisationId), eq(memberships.userId, userId)),
+    )
     .limit(1);
   let membershipId = existing?.id;
   if (existing) {
@@ -154,7 +155,9 @@ export async function provisionScimUser(
       await db
         .insert(membershipRoles)
         .values({ id: uuidv7(), membershipId, roleId })
-        .onConflictDoNothing({ target: [membershipRoles.membershipId, membershipRoles.roleId] });
+        .onConflictDoNothing({
+          target: [membershipRoles.membershipId, membershipRoles.roleId],
+        });
     }
   }
 
@@ -184,7 +187,12 @@ export async function setScimUserActive(
   const updated = await db
     .update(memberships)
     .set({ status: active ? 'active' : 'suspended' })
-    .where(and(eq(memberships.organisationId, organisationId), eq(memberships.userId, user.id)))
+    .where(
+      and(
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.userId, user.id),
+      ),
+    )
     .returning({ id: memberships.id });
   if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
   await recordAudit({

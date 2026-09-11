@@ -69,7 +69,8 @@ describe('coa signatures (local key)', () => {
 
   it('rejects tampered payloads and signatures', async () => {
     vi.stubEnv('COA_SIGNING_LOCAL_KEY_PEM', pem);
-    const { signCoaPayload, verifyCoaSignature, canonicalCoaPayload } = await freshSigning();
+    const { signCoaPayload, verifyCoaSignature, canonicalCoaPayload } =
+      await freshSigning();
     const PAYLOAD = payload(canonicalCoaPayload);
     const seal = await signCoaPayload(PAYLOAD);
     const tampered = { ...seal };

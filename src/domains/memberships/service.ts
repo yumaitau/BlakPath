@@ -460,10 +460,7 @@ export async function createMembershipInvitation(input: {
         .select({ id: teams.id })
         .from(teams)
         .where(
-          and(
-            eq(teams.id, input.teamId),
-            eq(teams.organisationId, scope.organisationId),
-          ),
+          and(eq(teams.id, input.teamId), eq(teams.organisationId, scope.organisationId)),
         )
         .limit(1);
       if (!team) throw new AuthorizationError('POLICY_DENIED');
@@ -675,7 +672,8 @@ async function resolvePendingInvitation(token: string) {
 
 export async function getMembershipInvitationPreview(
   token: string,
-): Promise<MembershipInvitationPreview> {  const invitation = await resolvePendingInvitation(token);
+): Promise<MembershipInvitationPreview> {
+  const invitation = await resolvePendingInvitation(token);
   return {
     organisationName: invitation.organisationName,
     roleName: invitation.roleName,

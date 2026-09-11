@@ -167,8 +167,8 @@ export default function SignInPage() {
       </Button>
 
       <p className="text-muted-foreground text-center text-sm">
-        BlakPath is invite-only. Ask your organisation for an invitation if you
-        need access.
+        BlakPath is invite-only. Ask your organisation for an invitation if you need
+        access.
       </p>
     </AuthCard>
   );

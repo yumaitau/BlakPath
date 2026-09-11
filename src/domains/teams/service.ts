@@ -1,11 +1,5 @@
 import { and, asc, eq, exists, isNull, or } from 'drizzle-orm';
-import {
-  clients,
-  groupMemberships,
-  groups,
-  teamMemberships,
-  teams,
-} from '@/db/schema';
+import { clients, groupMemberships, groups, teamMemberships, teams } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -56,10 +50,22 @@ export async function createTeam(raw: CreateTeamInput): Promise<TeamRow> {
   const scope = currentScope();
   const inserted = await scope.db
     .insert(teams)
-    .values(scope.insertValues({ slug: input.slug, name: input.name, description: input.description ?? null }))
+    .values(
+      scope.insertValues({
+        slug: input.slug,
+        name: input.name,
+        description: input.description ?? null,
+      }),
+    )
     .returning();
   const row = must(inserted[0], 'team');
-  await recordAudit({ action: 'team.created', resourceType: 'team', resourceId: row.id, result: 'success', after: { data: { slug: row.slug }, allow: ['slug'] } });
+  await recordAudit({
+    action: 'team.created',
+    resourceType: 'team',
+    resourceId: row.id,
+    result: 'success',
+    after: { data: { slug: row.slug }, allow: ['slug'] },
+  });
   return row;
 }
 
@@ -67,7 +73,11 @@ export async function listTeams(): Promise<TeamRow[]> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), TEAM_READ);
   const scope = currentScope();
-  return scope.db.select().from(teams).where(scope.where(teams.organisationId)).orderBy(asc(teams.name));
+  return scope.db
+    .select()
+    .from(teams)
+    .where(scope.where(teams.organisationId))
+    .orderBy(asc(teams.name));
 }
 
 export async function addTeamMember(raw: AddTeamMemberInput) {
@@ -77,10 +87,21 @@ export async function addTeamMember(raw: AddTeamMemberInput) {
   const scope = currentScope();
   const inserted = await scope.db
     .insert(teamMemberships)
-    .values(scope.insertValues({ teamId: input.teamId, userId: input.userId, role: input.role ?? 'member' }))
+    .values(
+      scope.insertValues({
+        teamId: input.teamId,
+        userId: input.userId,
+        role: input.role ?? 'member',
+      }),
+    )
     .returning();
   const row = must(inserted[0], 'team membership');
-  await recordAudit({ action: 'team.member_added', resourceType: 'team', resourceId: input.teamId, result: 'success' });
+  await recordAudit({
+    action: 'team.member_added',
+    resourceType: 'team',
+    resourceId: input.teamId,
+    result: 'success',
+  });
   return row;
 }
 
@@ -91,10 +112,23 @@ export async function createGroup(raw: CreateGroupInput): Promise<GroupRow> {
   const scope = currentScope();
   const inserted = await scope.db
     .insert(groups)
-    .values(scope.insertValues({ slug: input.slug, name: input.name, description: input.description ?? null, teamId: input.teamId ?? null }))
+    .values(
+      scope.insertValues({
+        slug: input.slug,
+        name: input.name,
+        description: input.description ?? null,
+        teamId: input.teamId ?? null,
+      }),
+    )
     .returning();
   const row = must(inserted[0], 'group');
-  await recordAudit({ action: 'group.created', resourceType: 'group', resourceId: row.id, result: 'success', after: { data: { slug: row.slug }, allow: ['slug'] } });
+  await recordAudit({
+    action: 'group.created',
+    resourceType: 'group',
+    resourceId: row.id,
+    result: 'success',
+    after: { data: { slug: row.slug }, allow: ['slug'] },
+  });
   return row;
 }
 
@@ -102,7 +136,11 @@ export async function listGroups(): Promise<GroupRow[]> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), TEAM_READ);
   const scope = currentScope();
-  return scope.db.select().from(groups).where(scope.where(groups.organisationId)).orderBy(asc(groups.name));
+  return scope.db
+    .select()
+    .from(groups)
+    .where(scope.where(groups.organisationId))
+    .orderBy(asc(groups.name));
 }
 
 export async function addGroupMember(raw: AddGroupMemberInput) {
@@ -115,7 +153,12 @@ export async function addGroupMember(raw: AddGroupMemberInput) {
     .values(scope.insertValues({ groupId: input.groupId, userId: input.userId }))
     .returning();
   const row = must(inserted[0], 'group membership');
-  await recordAudit({ action: 'group.member_added', resourceType: 'group', resourceId: input.groupId, result: 'success' });
+  await recordAudit({
+    action: 'group.member_added',
+    resourceType: 'group',
+    resourceId: input.groupId,
+    result: 'success',
+  });
   return row;
 }
 
@@ -138,7 +181,12 @@ export async function createClient(raw: CreateClientInput): Promise<ClientRow> {
     )
     .returning();
   const row = must(inserted[0], 'client');
-  await recordAudit({ action: 'client.created', resourceType: 'client', resourceId: row.id, result: 'success' });
+  await recordAudit({
+    action: 'client.created',
+    resourceType: 'client',
+    resourceId: row.id,
+    result: 'success',
+  });
   return row;
 }
 
@@ -180,7 +228,10 @@ export async function listClients(): Promise<ClientRow[]> {
     .limit(500);
 }
 
-export async function assignClient(id: string, raw: AssignClientInput): Promise<ClientRow> {
+export async function assignClient(
+  id: string,
+  raw: AssignClientInput,
+): Promise<ClientRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'client:assign-team');
   const input = assignClientSchema.parse(raw);
@@ -192,6 +243,11 @@ export async function assignClient(id: string, raw: AssignClientInput): Promise<
     .returning();
   const row = updated[0];
   if (!row) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({ action: 'client.assigned', resourceType: 'client', resourceId: id, result: 'success' });
+  await recordAudit({
+    action: 'client.assigned',
+    resourceType: 'client',
+    resourceId: id,
+    result: 'success',
+  });
   return row;
 }

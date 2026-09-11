@@ -1,4 +1,10 @@
-import { createHmac, createPublicKey, createVerify, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  createHmac,
+  createPublicKey,
+  createVerify,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import { env } from '@/lib/env';
 import {
   registerSsoProvider,
@@ -76,7 +82,11 @@ function b64urlJson<T>(value: T): string {
 
 /** Sign opaque state binding organisation + nonce, 10-minute expiry. */
 export function signState(organisationId: string, secret: string): string {
-  const payload = b64urlJson({ org: organisationId, nonce: randomUUID(), exp: Date.now() + STATE_TTL_MS });
+  const payload = b64urlJson({
+    org: organisationId,
+    nonce: randomUUID(),
+    exp: Date.now() + STATE_TTL_MS,
+  });
   const sig = createHmac('sha256', secret).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
@@ -128,10 +138,14 @@ function verifyIdToken(
     Buffer.from(s, 'base64url'),
   );
   if (!ok) throw new Error('SSO id_token signature invalid.');
-  const claims = JSON.parse(Buffer.from(p, 'base64url').toString()) as Record<string, unknown>;
+  const claims = JSON.parse(Buffer.from(p, 'base64url').toString()) as Record<
+    string,
+    unknown
+  >;
   if (claims.iss !== expected.issuer) throw new Error('SSO issuer mismatch.');
   const aud = claims.aud;
-  const audOk = aud === expected.audience || (Array.isArray(aud) && aud.includes(expected.audience));
+  const audOk =
+    aud === expected.audience || (Array.isArray(aud) && aud.includes(expected.audience));
   if (!audOk) throw new Error('SSO audience mismatch.');
   if (typeof claims.exp !== 'number' || claims.exp * 1000 < Date.now()) {
     throw new Error('SSO id_token expired.');

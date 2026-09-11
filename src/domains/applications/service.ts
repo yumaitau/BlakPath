@@ -287,7 +287,11 @@ export async function createApplication(
       .select({ id: clients.id })
       .from(clients)
       .where(
-        scope.where(clients.organisationId, eq(clients.id, input.clientId), isNull(clients.deletedAt)),
+        scope.where(
+          clients.organisationId,
+          eq(clients.id, input.clientId),
+          isNull(clients.deletedAt),
+        ),
       )
       .limit(1);
     if (!client) throw new AuthorizationError('POLICY_DENIED');

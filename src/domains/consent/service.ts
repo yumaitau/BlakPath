@@ -14,8 +14,16 @@ import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 
 export type ConsentRow = typeof consentRecords.$inferSelect;
 
-const CONSENT_WRITE = ['application:create', 'application:update-intake', 'application:assign'] as const;
-const CONSENT_READ = [...CONSENT_WRITE, 'application:read-any', 'application:read-assigned'] as const;
+const CONSENT_WRITE = [
+  'application:create',
+  'application:update-intake',
+  'application:assign',
+] as const;
+const CONSENT_READ = [
+  ...CONSENT_WRITE,
+  'application:read-any',
+  'application:read-assigned',
+] as const;
 
 const recordSchema = z.object({
   subjectUserId: z.uuid(),
@@ -29,7 +37,9 @@ function must<T>(row: T | undefined, what: string): T {
   return row;
 }
 
-export async function recordConsent(raw: z.input<typeof recordSchema>): Promise<ConsentRow> {
+export async function recordConsent(
+  raw: z.input<typeof recordSchema>,
+): Promise<ConsentRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_WRITE);
   const input = recordSchema.parse(raw);
@@ -87,12 +97,20 @@ export async function listConsents(subjectUserId: string): Promise<ConsentRow[]>
   return scope.db
     .select()
     .from(consentRecords)
-    .where(scope.where(consentRecords.organisationId, eq(consentRecords.subjectUserId, subjectUserId)))
+    .where(
+      scope.where(
+        consentRecords.organisationId,
+        eq(consentRecords.subjectUserId, subjectUserId),
+      ),
+    )
     .orderBy(asc(consentRecords.grantedAt));
 }
 
 /** True when a live (granted, unexpired, unrevoked) grant exists. */
-export async function hasLiveConsent(subjectUserId: string, purpose: string): Promise<boolean> {
+export async function hasLiveConsent(
+  subjectUserId: string,
+  purpose: string,
+): Promise<boolean> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_READ);
   const scope = currentScope();

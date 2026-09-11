@@ -9,7 +9,10 @@ function watchForPageErrors(page: Page): Error[] {
 }
 
 function icsDate(value: Date): string {
-  return value.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return value
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 test('calendar: month navigation, ICS import/export, recurring survives', async ({

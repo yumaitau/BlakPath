@@ -39,7 +39,10 @@ export function TeamManagement({
   function onCreateTeam(e: React.FormEvent) {
     e.preventDefault();
     startTransition(async () => {
-      const ok = await post('/api/teams', { name: teamName.trim(), slug: teamSlug.trim() });
+      const ok = await post('/api/teams', {
+        name: teamName.trim(),
+        slug: teamSlug.trim(),
+      });
       if (ok) {
         setMessage('Team created. Refresh to see it.');
         setTeamName('');
@@ -51,7 +54,10 @@ export function TeamManagement({
   function onCreateGroup(e: React.FormEvent) {
     e.preventDefault();
     startTransition(async () => {
-      const ok = await post('/api/groups', { name: groupName.trim(), slug: groupSlug.trim() });
+      const ok = await post('/api/groups', {
+        name: groupName.trim(),
+        slug: groupSlug.trim(),
+      });
       if (ok) {
         setMessage('Group created. Refresh to see it.');
         setGroupName('');
@@ -73,7 +79,7 @@ export function TeamManagement({
         <h2 className="text-lg font-semibold">Teams</h2>
         <ul className="mt-2 divide-y rounded-lg border">
           {initialTeams.length === 0 ? (
-            <li className="p-3 text-sm text-muted-foreground">No teams yet.</li>
+            <li className="text-muted-foreground p-3 text-sm">No teams yet.</li>
           ) : null}
           {initialTeams.map((t) => (
             <li key={t.id} className="p-3 text-sm">
@@ -82,16 +88,38 @@ export function TeamManagement({
             </li>
           ))}
         </ul>
-        <form onSubmit={onCreateTeam} className="mt-3 flex flex-wrap items-end gap-2" aria-label="Create team">
+        <form
+          onSubmit={onCreateTeam}
+          className="mt-3 flex flex-wrap items-end gap-2"
+          aria-label="Create team"
+        >
           <div className="flex flex-col gap-1">
-            <label htmlFor="team-name" className="text-xs font-medium">Team name</label>
-            <input id="team-name" className="rounded border px-2 py-1 text-sm" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="Intake" />
+            <label htmlFor="team-name" className="text-xs font-medium">
+              Team name
+            </label>
+            <input
+              id="team-name"
+              className="rounded border px-2 py-1 text-sm"
+              value={teamName}
+              onChange={(e) => setTeamName(e.target.value)}
+              placeholder="Intake"
+            />
           </div>
           <div className="flex flex-col gap-1">
-            <label htmlFor="team-slug" className="text-xs font-medium">Slug</label>
-            <input id="team-slug" className="rounded border px-2 py-1 text-sm" value={teamSlug} onChange={(e) => setTeamSlug(e.target.value)} placeholder="intake" />
+            <label htmlFor="team-slug" className="text-xs font-medium">
+              Slug
+            </label>
+            <input
+              id="team-slug"
+              className="rounded border px-2 py-1 text-sm"
+              value={teamSlug}
+              onChange={(e) => setTeamSlug(e.target.value)}
+              placeholder="intake"
+            />
           </div>
-          <Button type="submit" size="sm" disabled={pending}>Create team</Button>
+          <Button type="submit" size="sm" disabled={pending}>
+            Create team
+          </Button>
         </form>
       </section>
 
@@ -99,7 +127,7 @@ export function TeamManagement({
         <h2 className="text-lg font-semibold">Groups</h2>
         <ul className="mt-2 divide-y rounded-lg border">
           {initialGroups.length === 0 ? (
-            <li className="p-3 text-sm text-muted-foreground">No groups yet.</li>
+            <li className="text-muted-foreground p-3 text-sm">No groups yet.</li>
           ) : null}
           {initialGroups.map((g) => (
             <li key={g.id} className="p-3 text-sm">
@@ -108,21 +136,45 @@ export function TeamManagement({
             </li>
           ))}
         </ul>
-        <form onSubmit={onCreateGroup} className="mt-3 flex flex-wrap items-end gap-2" aria-label="Create group">
+        <form
+          onSubmit={onCreateGroup}
+          className="mt-3 flex flex-wrap items-end gap-2"
+          aria-label="Create group"
+        >
           <div className="flex flex-col gap-1">
-            <label htmlFor="group-name" className="text-xs font-medium">Group name</label>
-            <input id="group-name" className="rounded border px-2 py-1 text-sm" value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="Duty desk" />
+            <label htmlFor="group-name" className="text-xs font-medium">
+              Group name
+            </label>
+            <input
+              id="group-name"
+              className="rounded border px-2 py-1 text-sm"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder="Duty desk"
+            />
           </div>
           <div className="flex flex-col gap-1">
-            <label htmlFor="group-slug" className="text-xs font-medium">Slug</label>
-            <input id="group-slug" className="rounded border px-2 py-1 text-sm" value={groupSlug} onChange={(e) => setGroupSlug(e.target.value)} placeholder="duty-desk" />
+            <label htmlFor="group-slug" className="text-xs font-medium">
+              Slug
+            </label>
+            <input
+              id="group-slug"
+              className="rounded border px-2 py-1 text-sm"
+              value={groupSlug}
+              onChange={(e) => setGroupSlug(e.target.value)}
+              placeholder="duty-desk"
+            />
           </div>
-          <Button type="submit" size="sm" disabled={pending}>Create group</Button>
+          <Button type="submit" size="sm" disabled={pending}>
+            Create group
+          </Button>
         </form>
       </section>
 
       {message ? (
-        <p role="status" className="text-muted-foreground text-sm">{message}</p>
+        <p role="status" className="text-muted-foreground text-sm">
+          {message}
+        </p>
       ) : null}
     </div>
   );

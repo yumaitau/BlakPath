@@ -17,9 +17,11 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
   const api = page.request;
   const stamp = Date.now();
 
-  const app = await (await api.post('/api/applications', {
-    data: { applicantName: `Sealed lifecycle applicant ${stamp}` },
-  })).json() as { application: { id: string } };
+  const app = (await (
+    await api.post('/api/applications', {
+      data: { applicantName: `Sealed lifecycle applicant ${stamp}` },
+    })
+  ).json()) as { application: { id: string } };
   const applicationId = app.application.id;
 
   async function transition(action: string, expected: number): Promise<void> {
@@ -33,9 +35,11 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
   await transition('begin_intake', 200);
   await transition('start_review', 200);
 
-  const review = await (await api.post(`/api/applications/${applicationId}/reviews`, {
-    data: { content: 'Human reviewer observations for the committee.' },
-  })).json() as { review: { id: string } };
+  const review = (await (
+    await api.post(`/api/applications/${applicationId}/reviews`, {
+      data: { content: 'Human reviewer observations for the committee.' },
+    })
+  ).json()) as { review: { id: string } };
   const finaliseReview = await api.patch(`/api/reviews/${review.review.id}`, {
     data: { operation: 'finalise' },
   });
@@ -43,9 +47,11 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
   await transition('ready_for_committee', 200);
   await transition('schedule_committee', 200);
 
-  const decision = await (await api.post(`/api/applications/${applicationId}/decisions`, {
-    data: { outcome: 'confirmed', rationale: 'Committee satisfied on the evidence.' },
-  })).json() as { decision: { id: string } };
+  const decision = (await (
+    await api.post(`/api/applications/${applicationId}/decisions`, {
+      data: { outcome: 'confirmed', rationale: 'Committee satisfied on the evidence.' },
+    })
+  ).json()) as { decision: { id: string } };
   const decisionId = decision.decision.id;
   const vote = await api.patch(`/api/decisions/${decisionId}`, {
     data: { operation: 'vote', choice: 'for' },
@@ -57,15 +63,17 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
   expect(finalise.status()).toBe(200);
   // Finalising drives record_decision internally; the matter is now decided.
 
-  const cert = await (await api.post('/api/certificates', {
-    data: { decisionId },
-  })).json() as { id: string };
+  const cert = (await (
+    await api.post('/api/certificates', {
+      data: { decisionId },
+    })
+  ).json()) as { id: string };
   const sign = await api.post(`/api/certificates/${cert.id}/sign`);
   expect(sign.status()).toBe(200);
 
-  const { items } = (await api.get(
-    `/api/certificates?applicationId=${applicationId}`,
-  ).then((r) => r.json())) as {
+  const { items } = (await api
+    .get(`/api/certificates?applicationId=${applicationId}`)
+    .then((r) => r.json())) as {
     items: { verificationCode: string; signature: string; signingKeyId: string }[];
   };
   const sealed = items.find((c) => c.signature);
@@ -73,7 +81,9 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
 
   await page.goto(`/verify/${sealed!.verificationCode}`);
   await expect(page.getByRole('heading', { name: 'Valid certificate' })).toBeVisible();
-  await expect(page.getByText('Verified — sealed by the issuing organisation')).toBeVisible();
+  await expect(
+    page.getByText('Verified — sealed by the issuing organisation'),
+  ).toBeVisible();
   await expectNoWcagViolations(page);
   expect(pageErrors.map((error) => error.message)).toEqual([]);
 });

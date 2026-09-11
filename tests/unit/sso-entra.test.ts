@@ -1,10 +1,6 @@
 import { createSign, generateKeyPairSync } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  EntraSsoProvider,
-  signState,
-  verifyState,
-} from '@/lib/auth/sso-entra';
+import { EntraSsoProvider, signState, verifyState } from '@/lib/auth/sso-entra';
 
 const ISSUER = 'https://login.microsoftonline.com/tenant-id/v2.0';
 const CLIENT_ID = 'test-client-id';
@@ -71,7 +67,11 @@ describe('entra provider', () => {
             const body = new URLSearchParams((init?.body as string) ?? '');
             const code = body.get('code');
             if (code === 'bad-code') return {};
-            return { id_token: idToken(code === 'expired' ? { ...validClaims(), exp: 1 } : validClaims()) };
+            return {
+              id_token: idToken(
+                code === 'expired' ? { ...validClaims(), exp: 1 } : validClaims(),
+              ),
+            };
           }
           throw new Error(`unexpected fetch: ${href}`);
         };

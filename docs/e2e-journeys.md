@@ -8,8 +8,9 @@ Runner: Playwright, `tests/e2e`, chromium, single worker. Helpers:
 
 - Evidence upload journey requires real object storage: run with
   `RUN_EVIDENCE_E2E=true` against local MinIO (`docker compose up minio
-  minio-init`) or S3 staging buckets. Without it the test skips; the path is
+minio-init`) or S3 staging buckets. Without it the test skips; the path is
   covered in staging per `docs/eks-runbook.md`.
+
 ## Suites
 
 1. `auth-onboarding.spec.ts` — sign-up, verify-email gate, sign-in,

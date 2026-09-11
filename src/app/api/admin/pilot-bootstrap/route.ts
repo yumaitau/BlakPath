@@ -51,13 +51,18 @@ export async function POST(request: NextRequest): Promise<Response> {
   } catch {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
-  const provided = createHash('sha256').update(body.token ?? '').digest();
+  const provided = createHash('sha256')
+    .update(body.token ?? '')
+    .digest();
   const wanted = createHash('sha256').update(expected).digest();
   if (provided.length !== wanted.length || !timingSafeEqual(provided, wanted)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const existingOrgs = await db.select({ id: organisations.id }).from(organisations).limit(1);
+  const existingOrgs = await db
+    .select({ id: organisations.id })
+    .from(organisations)
+    .limit(1);
   if (existingOrgs.length > 0) {
     return NextResponse.json({ error: 'Already bootstrapped' }, { status: 409 });
   }
@@ -75,7 +80,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   });
 
   const userId = uuidv7();
-  await db.insert(users).values({ id: userId, name: 'Pilot Admin', email, emailVerified: true });
+  await db
+    .insert(users)
+    .values({ id: userId, name: 'Pilot Admin', email, emailVerified: true });
   await db.insert(accounts).values({
     id: uuidv7(),
     userId,

@@ -221,10 +221,10 @@ BlakPath/
 | [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md) | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |
 | [`docs/local-development.md`](docs/local-development.md)               | Setup, services, commands, testing, troubleshooting                                            |
 | [`docs/council-trust-model.md`](docs/council-trust-model.md)           | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
-| [`docs/calendar-vision.md`](docs/calendar-vision.md)                   | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                  |
-| [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                         | Full user-journey e2e matrix across auth, CoA, teams, calendar                                  |
-| [`docs/eks-runbook.md`](docs/eks-runbook.md)                           | EKS deploy, data services, SES, restore drill, alarms                                           |
-| [`docs/council-onboarding.md`](docs/council-onboarding.md)             | New council tenant: teams, identity/SSO, go-live gate, legacy import                            |
+| [`docs/calendar-vision.md`](docs/calendar-vision.md)                   | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                 |
+| [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                         | Full user-journey e2e matrix across auth, CoA, teams, calendar                                 |
+| [`docs/eks-runbook.md`](docs/eks-runbook.md)                           | EKS deploy, data services, SES, restore drill, alarms                                          |
+| [`docs/council-onboarding.md`](docs/council-onboarding.md)             | New council tenant: teams, identity/SSO, go-live gate, legacy import                           |
 
 ## Licence & governance — open code, community authority
 

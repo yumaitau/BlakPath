@@ -13,7 +13,13 @@ export {
   type CreateCalendarEventInput,
   type UpdateCalendarEventInput,
 } from './schemas';
-export { expandOccurrences, formatExdates, overlaps, parseExdates, parseRrule } from './recurrence';
+export {
+  expandOccurrences,
+  formatExdates,
+  overlaps,
+  parseExdates,
+  parseRrule,
+} from './recurrence';
 export { CalendarConflictError } from './errors';
 export {
   addAttendee,

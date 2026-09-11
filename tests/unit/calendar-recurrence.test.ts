@@ -42,7 +42,8 @@ describe('expandOccurrences', () => {
   });
 });
 
-describe('overlaps', () => {  it('detects overlap and adjacency', () => {
+describe('overlaps', () => {
+  it('detects overlap and adjacency', () => {
     const a = new Date('2026-09-01T09:00:00Z');
     const b = new Date('2026-09-01T09:30:00Z');
     const c = new Date('2026-09-01T10:00:00Z');

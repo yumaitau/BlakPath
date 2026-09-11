@@ -53,7 +53,8 @@ export function MembershipInvitationAcceptance({
     }
   }
 
-  async function accept() {    setBusy(true);
+  async function accept() {
+    setBusy(true);
     setError(null);
     try {
       const response = await fetch('/api/membership-invitations/accept', {
@@ -111,14 +112,15 @@ export function MembershipInvitationAcceptance({
           <div className="grid gap-4">
             <Alert tone="info" title="Sign in to continue">
               <p>
-                Sign in with the email address that received this invitation, then
-                reopen this link. New here? Create your account below — the
-                invitation itself verifies your email, so no separate signup is
-                needed.
+                Sign in with the email address that received this invitation, then reopen
+                this link. New here? Create your account below — the invitation itself
+                verifies your email, so no separate signup is needed.
               </p>
               <div className="mt-4">
                 <Button asChild size="sm">
-                  <Link href={`/sign-in?returnTo=${encodeURIComponent(`/join/${token}`)}`}>
+                  <Link
+                    href={`/sign-in?returnTo=${encodeURIComponent(`/join/${token}`)}`}
+                  >
                     Sign in
                   </Link>
                 </Button>

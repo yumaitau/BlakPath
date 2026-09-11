@@ -60,9 +60,22 @@ export const updateCalendarEventSchema = z
     /** Acknowledge resource conflicts and save anyway (warn-only tenants). */
     force: z.boolean().optional(),
   })
-  .refine((v) => v.title !== undefined || v.startAt !== undefined || v.status !== undefined || v.location !== undefined || v.description !== undefined || v.resource !== undefined || v.endAt !== undefined || v.allDay !== undefined || v.rrule !== undefined || v.exdate !== undefined, {
-    message: 'At least one field must change.',
-  });
+  .refine(
+    (v) =>
+      v.title !== undefined ||
+      v.startAt !== undefined ||
+      v.status !== undefined ||
+      v.location !== undefined ||
+      v.description !== undefined ||
+      v.resource !== undefined ||
+      v.endAt !== undefined ||
+      v.allDay !== undefined ||
+      v.rrule !== undefined ||
+      v.exdate !== undefined,
+    {
+      message: 'At least one field must change.',
+    },
+  );
 export type UpdateCalendarEventInput = z.input<typeof updateCalendarEventSchema>;
 
 export const addAttendeeSchema = z.object({

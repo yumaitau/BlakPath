@@ -33,7 +33,9 @@ test('coa: staff can walk dashboard, board, applications, meetings, forms', asyn
 
   await test.step('applications list is tenant-scoped', async () => {
     await page.goto('/applications');
-    await expect(page.getByRole('heading', { name: 'Applications', exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'Applications', exact: true }),
+    ).toBeVisible();
     const response = await page.request.get('/api/applications');
     expect([200, 403]).toContain(response.status());
   });
@@ -41,7 +43,9 @@ test('coa: staff can walk dashboard, board, applications, meetings, forms', asyn
   await test.step('meetings calendar renders', async () => {
     await page.goto('/meetings');
     await expect(
-      page.getByRole('region', { name: /calendar/i }).or(page.getByLabel(/meeting calendar/i)),
+      page
+        .getByRole('region', { name: /calendar/i })
+        .or(page.getByLabel(/meeting calendar/i)),
     ).toBeVisible({ timeout: 15_000 });
   });
 

@@ -23,7 +23,11 @@ export async function PATCH(
       return NextResponse.json(
         {
           error: 'Resource conflict',
-          conflicts: error.conflicts.map((c) => ({ id: c.id, title: c.title, startAt: c.startAt })),
+          conflicts: error.conflicts.map((c) => ({
+            id: c.id,
+            title: c.title,
+            startAt: c.startAt,
+          })),
         },
         { status: 409 },
       );

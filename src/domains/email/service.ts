@@ -50,7 +50,10 @@ export async function recordSuppression(raw: {
     .select({ id: emailSuppressions.id })
     .from(emailSuppressions)
     .where(
-      and(eq(emailSuppressions.addressHash, addressHash), isNull(emailSuppressions.clearedAt)),
+      and(
+        eq(emailSuppressions.addressHash, addressHash),
+        isNull(emailSuppressions.clearedAt),
+      ),
     )
     .limit(1);
   if (existing.length > 0) return { suppressed: true };

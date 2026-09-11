@@ -34,8 +34,11 @@ test('consent: record, list, and gate representative access', async ({ page }) =
   expect([400, 403, 404]).toContain(denied.status());
 
   // SCIM is off without bearer: denied, no user enumeration.
-  const scim = await page.request.post('/api/scim/v2/00000000-0000-4000-8000-000000000000/Users', {
-    data: { userName: 'nobody@example.test' },
-  });
+  const scim = await page.request.post(
+    '/api/scim/v2/00000000-0000-4000-8000-000000000000/Users',
+    {
+      data: { userName: 'nobody@example.test' },
+    },
+  );
   expect([403, 404]).toContain(scim.status());
 });

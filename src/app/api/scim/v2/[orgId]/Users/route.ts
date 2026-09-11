@@ -8,7 +8,11 @@ import { provisionScimUser, setScimUserActive, verifyScimBearer } from '@/domain
 function scimError(error: unknown): Response {
   if (error instanceof AuthorizationError) {
     return NextResponse.json(
-      { schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '403', detail: 'Forbidden' },
+      {
+        schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+        status: '403',
+        detail: 'Forbidden',
+      },
       { status: 403 },
     );
   }
@@ -89,7 +93,8 @@ export async function DELETE(
     verifyScimBearer(request);
     const { orgId } = await params;
     const userName = new URL(request.url).searchParams.get('userName');
-    if (!userName) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    if (!userName)
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     await setScimUserActive(orgId, userName, false);
     return new NextResponse(null, { status: 204 });
   } catch (error) {

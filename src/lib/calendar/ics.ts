@@ -233,7 +233,9 @@ export function parseIcs(text: string): ParsedIcsEvent[] {
           ...(current.location ? { location: current.location } : {}),
           ...(current.status ? { status: current.status } : {}),
           ...(current.rrule ? { rrule: current.rrule } : {}),
-          ...(current.exdates && current.exdates.length > 0 ? { exdates: current.exdates } : {}),
+          ...(current.exdates && current.exdates.length > 0
+            ? { exdates: current.exdates }
+            : {}),
         });
       }
       continue;

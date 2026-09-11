@@ -64,7 +64,8 @@ async function resourceConflicts(input: {
   start: Date;
   end: Date | null;
   ignoreId?: string;
-}): Promise<CalendarEventRow[]> {  if (!input.resource) return [];
+}): Promise<CalendarEventRow[]> {
+  if (!input.resource) return [];
   const ctx = requireTenantContext();
   void ctx;
   const scope = currentScope();
@@ -82,8 +83,7 @@ async function resourceConflicts(input: {
     .limit(50);
   return rows.filter(
     (r) =>
-      r.id !== input.ignoreId &&
-      overlaps(input.start, input.end, r.startAt, r.endAt),
+      r.id !== input.ignoreId && overlaps(input.start, input.end, r.startAt, r.endAt),
   );
 }
 
@@ -104,7 +104,11 @@ async function resourceHardBlock(): Promise<boolean> {
   return platform?.enabled ?? false;
 }
 
-function throwIfBlocked(conflicts: CalendarEventRow[], force: boolean | undefined, hardBlock: boolean): void {
+function throwIfBlocked(
+  conflicts: CalendarEventRow[],
+  force: boolean | undefined,
+  hardBlock: boolean,
+): void {
   if (conflicts.length > 0 && hardBlock && !force) {
     throw new CalendarConflictError(conflicts);
   }
@@ -185,9 +189,10 @@ export async function listCalendarEvents(range?: {
 }
 
 /** Expand recurring masters into occurrences for agenda/week views. */
-export async function listOccurrences(range: { from: Date; to: Date }): Promise<
-  { event: CalendarEventRow; start: Date; end: Date | null }[]
-> {
+export async function listOccurrences(range: {
+  from: Date;
+  to: Date;
+}): Promise<{ event: CalendarEventRow; start: Date; end: Date | null }[]> {
   const events = await listCalendarEvents();
   return events.flatMap((event) =>
     expandOccurrences({
@@ -348,7 +353,8 @@ export async function inviteAttendees(eventId: string): Promise<{ invited: numbe
   return { invited };
 }
 
-export async function addReminder(eventId: string, raw: AddReminderInput) {  const ctx = requireTenantContext();
+export async function addReminder(eventId: string, raw: AddReminderInput) {
+  const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'calendar:update-any');
   const input = addReminderSchema.parse(raw);
   const event = await loadEvent(eventId);
@@ -374,7 +380,7 @@ export async function countUpcoming(): Promise<number> {
   return rows.length;
 }
 
-/** RSVP to an event as attendee. Member updates own row; editors update any. */export async function respondAttendee(
+/** RSVP to an event as attendee. Member updates own row; editors update any. */ export async function respondAttendee(
   attendeeId: string,
   responseStatus: 'accepted' | 'declined' | 'tentative' | 'needs-action',
 ) {
@@ -384,7 +390,10 @@ export async function countUpcoming(): Promise<number> {
     .select()
     .from(calendarEventAttendees)
     .where(
-      scope.where(calendarEventAttendees.organisationId, eq(calendarEventAttendees.id, attendeeId)),
+      scope.where(
+        calendarEventAttendees.organisationId,
+        eq(calendarEventAttendees.id, attendeeId),
+      ),
     )
     .limit(1);
   const row = scope.assertOwned(rows[0]);
@@ -410,7 +419,10 @@ export async function countUpcoming(): Promise<number> {
     .update(calendarEventAttendees)
     .set({ responseStatus })
     .where(
-      scope.where(calendarEventAttendees.organisationId, eq(calendarEventAttendees.id, attendeeId)),
+      scope.where(
+        calendarEventAttendees.organisationId,
+        eq(calendarEventAttendees.id, attendeeId),
+      ),
     )
     .returning();
   const updatedRow = must(updated[0], 'attendee');
@@ -481,7 +493,9 @@ export async function processReminderSweep(input: {
         ),
       )
       .limit(100);
-    const userIds = [...new Set(attendees.map((a) => a.userId).filter((u): u is string => !!u))];
+    const userIds = [
+      ...new Set(attendees.map((a) => a.userId).filter((u): u is string => !!u)),
+    ];
     for (const userId of userIds) {
       await createNotification(
         {

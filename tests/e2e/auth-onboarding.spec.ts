@@ -35,7 +35,9 @@ test('auth: open sign-up stays closed and explains invite-only', async ({
   request,
 }) => {
   await page.goto('/sign-up');
-  await expect(page.getByRole('heading', { name: 'BlakPath is invite-only' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'BlakPath is invite-only' }),
+  ).toBeVisible();
   await expectNoWcagViolations(page);
 
   // Framework registration endpoint refuses direct signups.

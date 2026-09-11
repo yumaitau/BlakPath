@@ -17,9 +17,9 @@ export default function SignUpPage() {
       subtitle="Accounts are created through an organisation invitation."
     >
       <p className="text-muted-foreground text-sm">
-        If your council or organisation invited you, open the invitation link to
-        create your account or join. Otherwise, contact the organisation you
-        work with and ask them to invite you.
+        If your council or organisation invited you, open the invitation link to create
+        your account or join. Otherwise, contact the organisation you work with and ask
+        them to invite you.
       </p>
       <p className="text-center text-sm">
         <Link

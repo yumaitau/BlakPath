@@ -50,7 +50,9 @@ function localKey(): KeyObject | null {
   const raw = env.COA_SIGNING_LOCAL_KEY_PEM;
   if (!raw) return null;
   if (isProduction()) {
-    throw new Error('COA_SIGNING_LOCAL_KEY_PEM is refused in production — configure KMS.');
+    throw new Error(
+      'COA_SIGNING_LOCAL_KEY_PEM is refused in production — configure KMS.',
+    );
   }
   // dotenv files often carry the PEM with literal \n escapes; normalise.
   const pem = raw.includes('\n') ? raw : raw.replace(/\\n/g, '\n');
@@ -90,9 +92,18 @@ export async function signCoaPayload(canonical: string): Promise<CoaSignature> {
     const signer = createSign(algorithm === 'ECDSA_SHA_256' ? 'SHA256' : 'RSA-SHA256');
     signer.update(canonical, 'utf8');
     const signature = type.includes('rsa')
-      ? signer.sign({ key, padding: cryptoConstants.RSA_PKCS1_PSS_PADDING, saltLength: 32 })
+      ? signer.sign({
+          key,
+          padding: cryptoConstants.RSA_PKCS1_PSS_PADDING,
+          saltLength: 32,
+        })
       : signer.sign(key);
-    return { signatureB64: signature.toString('base64'), algorithm, keyId: 'local-dev-key', payloadHash };
+    return {
+      signatureB64: signature.toString('base64'),
+      algorithm,
+      keyId: 'local-dev-key',
+      payloadHash,
+    };
   }
 
   const keyId = env.COA_SIGNING_KEY_ID;
@@ -105,7 +116,10 @@ export async function signCoaPayload(canonical: string): Promise<CoaSignature> {
   // default first via a cheap public-key fetch (cached below).
   const pem = await getCoaPublicKeyPem(keyId);
   const pub = createPublicKey(pem);
-  const algorithm = resolveAlgorithm(pub.asymmetricKeyType ?? '', env.COA_SIGNING_ALGORITHM);
+  const algorithm = resolveAlgorithm(
+    pub.asymmetricKeyType ?? '',
+    env.COA_SIGNING_ALGORITHM,
+  );
   const out = await kmsClient().send(
     new SignCommand({
       KeyId: keyId,
@@ -174,7 +188,10 @@ export async function verifyCoaSignature(input: {
     const signatureValid =
       input.algorithm === 'ECDSA_SHA_256' || !type.includes('rsa')
         ? verifier.verify(key, signature)
-        : verifier.verify({ key, padding: cryptoConstants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }, signature);
+        : verifier.verify(
+            { key, padding: cryptoConstants.RSA_PKCS1_PSS_PADDING, saltLength: 32 },
+            signature,
+          );
     return { signatureValid, payloadMatches };
   } catch (error) {
     logger.warn({ err: error }, 'CoA signature verification failed');

@@ -108,10 +108,16 @@ export function MeetingCalendar({
   }, []);
 
   const todayKey = ymd(now);
-  const allEvents = useMemo(() => [...events, ...calendarEvents], [events, calendarEvents]);
+  const allEvents = useMemo(
+    () => [...events, ...calendarEvents],
+    [events, calendarEvents],
+  );
   // Only general calendar events are movable via the events API; committee
   // meetings live in the meetings domain.
-  const movableIds = useMemo(() => new Set(calendarEvents.map((e) => e.id)), [calendarEvents]);
+  const movableIds = useMemo(
+    () => new Set(calendarEvents.map((e) => e.id)),
+    [calendarEvents],
+  );
 
   async function moveEvent(eventId: string, targetDay: Date): Promise<void> {
     const current = allEvents.find((e) => e.id === eventId);
@@ -123,12 +129,17 @@ export function MeetingCalendar({
     const to = new Date(targetDay);
     to.setHours(from.getHours(), from.getMinutes(), 0, 0);
     const shiftMs = to.getTime() - from.getTime();
-    const end = current.end ? new Date(new Date(current.end).getTime() + shiftMs).toISOString() : null;
+    const end = current.end
+      ? new Date(new Date(current.end).getTime() + shiftMs).toISOString()
+      : null;
     try {
       const res = await fetch(`/api/calendar/events/${eventId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startAt: to.toISOString(), ...(end ? { endAt: end } : {}) }),
+        body: JSON.stringify({
+          startAt: to.toISOString(),
+          ...(end ? { endAt: end } : {}),
+        }),
       });
       if (res.status === 409) {
         const data = (await res.json()) as { conflicts?: { title: string }[] };
@@ -179,7 +190,9 @@ export function MeetingCalendar({
 
   const agenda = useMemo(
     () =>
-      [...allEvents].sort((a, b) => +new Date(a.start) - +new Date(b.start)).slice(0, 100),
+      [...allEvents]
+        .sort((a, b) => +new Date(a.start) - +new Date(b.start))
+        .slice(0, 100),
     [allEvents],
   );
 
@@ -217,7 +230,9 @@ export function MeetingCalendar({
           return;
         }
         const data: { created?: number } = await res.json();
-        setImportMessage(`Imported ${data.created ?? 0} meeting(s). Refresh to see them.`);
+        setImportMessage(
+          `Imported ${data.created ?? 0} meeting(s). Refresh to see them.`,
+        );
       } catch {
         setImportMessage('Import failed.');
       } finally {
@@ -278,217 +293,360 @@ export function MeetingCalendar({
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          {mode === 'month' ? (
-            <>
-              <Button type="button" variant="outline" size="sm" onClick={() => shiftMonth(-1)} aria-label="Previous month">
-                ←
-              </Button>
-              <h2 className="min-w-48 text-center text-lg font-semibold tracking-tight">
-                {MONTH_NAMES[view.month]} {view.year}
-              </h2>
-              <Button type="button" variant="outline" size="sm" onClick={() => shiftMonth(1)} aria-label="Next month">
-                →
-              </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setView({ year: now.getFullYear(), month: now.getMonth() })}>
-                Today
-              </Button>
-            </>
-          ) : mode === 'week' ? (
-            <>
-              <Button type="button" variant="outline" size="sm" onClick={() => shiftWeek(-1)} aria-label="Previous week">
-                ←
-              </Button>
-              <h2 className="min-w-48 text-center text-lg font-semibold tracking-tight">
-                Week of {week[0]?.toLocaleDateString()}
-              </h2>
-              <Button type="button" variant="outline" size="sm" onClick={() => shiftWeek(1)} aria-label="Next week">
-                →
-              </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setWeekAnchor(new Date())}>
-                Today
-              </Button>
-            </>
-          ) : (
-            <h2 className="text-lg font-semibold tracking-tight">Agenda — next 100 events</h2>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2" role="group" aria-label="Calendar view">
-          {(['month', 'week', 'agenda'] as const).map((m) => (
-            <Button
-              key={m}
-              type="button"
-              variant={mode === m ? 'primary' : 'outline'}
-              size="sm"
-              onClick={() => setMode(m)}
-              aria-pressed={mode === m}
-            >
-              {m[0]?.toUpperCase() + m.slice(1)}
-            </Button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button asChild variant="outline" size="sm">
-            <a href="/api/calendar/meetings" download>
-              Download calendar file
-            </a>
-          </Button>
-          <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => fileInput.current?.click()}>
-            {pending ? 'Adding…' : 'Add calendar file'}
-          </Button>
-          <input ref={fileInput} type="file" accept=".ics,text/calendar" className="sr-only" aria-label="Upload calendar file" onChange={onImportFile} />
-        </div>
-      </div>
-
-      {importMessage ? (
-        <p role="status" className="text-muted-foreground text-sm">
-          {importMessage}
-        </p>
-      ) : null}
-
-      <form onSubmit={onCreateEvent} className="flex flex-wrap items-end gap-2 rounded-lg border p-3" aria-label="Create calendar event">
-        <div className="flex flex-col gap-1">
-          <label htmlFor="cal-title" className="text-xs font-medium">Event title</label>
-          <input id="cal-title" className="rounded border px-2 py-1 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Intake clinic" />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="cal-start" className="text-xs font-medium">Start</label>
-          <input id="cal-start" type="datetime-local" className="rounded border px-2 py-1 text-sm" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="cal-location" className="text-xs font-medium">Location (optional)</label>
-          <input id="cal-location" className="rounded border px-2 py-1 text-sm" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Council chambers" />
-        </div>
-        <Button type="submit" size="sm" disabled={pending}>
-          {pending ? 'Saving…' : 'Create event'}
-        </Button>
-        {createMessage ? (
-          <p role="status" className="text-muted-foreground w-full text-sm">{createMessage}</p>
-        ) : null}
-      </form>
-
-      {mode === 'agenda' ? (
-        <ul className="divide-y rounded-lg border" aria-label="Agenda">
-          {agenda.length === 0 ? <li className="p-4 text-sm text-muted-foreground">No events yet.</li> : null}
-          {agenda.map((event) => (
-            <li key={event.id} className="flex items-baseline justify-between gap-3 p-3">
-              <div>
-                <p className="text-sm font-medium">{event.title}</p>
-                <p className="text-muted-foreground text-xs">
-                  {new Date(event.start).toLocaleString('en-AU')}
-                  {event.location ? ` · ${event.location}` : ''}
-                </p>
-              </div>
-              <span className="text-xs text-muted-foreground">{event.status}</span>
-            </li>
-          ))}
-        </ul>
-      ) : mode === 'week' ? (
-        <>
-          <div className="grid grid-cols-7 gap-2" aria-label="Week view">
-            {week.map((day) => {
-              const key = ymd(day);
-              const dayEvents = eventsByDay.get(key) ?? [];
-              return (
-                <div
-                  key={key}
-                  className={cn('min-h-32 rounded-lg border p-2', key === todayKey && 'border-primary')}
-                  onDragOver={(e) => {
-                    if (dragId) e.preventDefault();
-                  }}
-                  onDrop={() => {
-                    if (dragId) {
-                      const id = dragId;
-                      setDragId(null);
-                      startTransition(async () => {
-                        await moveEvent(id, day);
-                      });
+            <div className="flex items-center gap-2">
+              {mode === 'month' ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => shiftMonth(-1)}
+                    aria-label="Previous month"
+                  >
+                    ←
+                  </Button>
+                  <h2 className="min-w-48 text-center text-lg font-semibold tracking-tight">
+                    {MONTH_NAMES[view.month]} {view.year}
+                  </h2>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => shiftMonth(1)}
+                    aria-label="Next month"
+                  >
+                    →
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setView({ year: now.getFullYear(), month: now.getMonth() })
                     }
-                  }}
+                  >
+                    Today
+                  </Button>
+                </>
+              ) : mode === 'week' ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => shiftWeek(-1)}
+                    aria-label="Previous week"
+                  >
+                    ←
+                  </Button>
+                  <h2 className="min-w-48 text-center text-lg font-semibold tracking-tight">
+                    Week of {week[0]?.toLocaleDateString()}
+                  </h2>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => shiftWeek(1)}
+                    aria-label="Next week"
+                  >
+                    →
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setWeekAnchor(new Date())}
+                  >
+                    Today
+                  </Button>
+                </>
+              ) : (
+                <h2 className="text-lg font-semibold tracking-tight">
+                  Agenda — next 100 events
+                </h2>
+              )}
+            </div>
+
+            <div
+              className="flex items-center gap-2"
+              role="group"
+              aria-label="Calendar view"
+            >
+              {(['month', 'week', 'agenda'] as const).map((m) => (
+                <Button
+                  key={m}
+                  type="button"
+                  variant={mode === m ? 'primary' : 'outline'}
+                  size="sm"
+                  onClick={() => setMode(m)}
+                  aria-pressed={mode === m}
                 >
-                  <p className="text-xs font-medium">{day.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric' })}</p>
-                  <ul className="mt-1 space-y-1">
-                    {dayEvents.map((event) => (
-                      <li
-                        key={event.id}
-                        className="truncate rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary"
-                        title={movableIds.has(event.id) ? `Drag to move: ${event.title}` : event.title}
-                        draggable={movableIds.has(event.id)}
-                        onDragStart={() => setDragId(event.id)}
-                        onDragEnd={() => setDragId(null)}
-                      >
-                        {formatTime(event.start)} {event.title}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
+                  {m[0]?.toUpperCase() + m.slice(1)}
+                </Button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button asChild variant="outline" size="sm">
+                <a href="/api/calendar/meetings" download>
+                  Download calendar file
+                </a>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={pending}
+                onClick={() => fileInput.current?.click()}
+              >
+                {pending ? 'Adding…' : 'Add calendar file'}
+              </Button>
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".ics,text/calendar"
+                className="sr-only"
+                aria-label="Upload calendar file"
+                onChange={onImportFile}
+              />
+            </div>
           </div>
-          <form onSubmit={onMoveSubmit} className="flex flex-wrap items-end gap-2 rounded-lg border p-3" aria-label="Move calendar event">
+
+          {importMessage ? (
+            <p role="status" className="text-muted-foreground text-sm">
+              {importMessage}
+            </p>
+          ) : null}
+
+          <form
+            onSubmit={onCreateEvent}
+            className="flex flex-wrap items-end gap-2 rounded-lg border p-3"
+            aria-label="Create calendar event"
+          >
             <div className="flex flex-col gap-1">
-              <label htmlFor="cal-move-event" className="text-xs font-medium">Event</label>
-              <select id="cal-move-event" className="rounded border px-2 py-1 text-sm" value={moveId} onChange={(e) => setMoveId(e.target.value)}>
-                <option value="">Choose event…</option>
-                {calendarEvents.map((e) => (
-                  <option key={e.id} value={e.id}>{e.title}</option>
-                ))}
-              </select>
+              <label htmlFor="cal-title" className="text-xs font-medium">
+                Event title
+              </label>
+              <input
+                id="cal-title"
+                className="rounded border px-2 py-1 text-sm"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Intake clinic"
+              />
             </div>
             <div className="flex flex-col gap-1">
-              <label htmlFor="cal-move-date" className="text-xs font-medium">New date</label>
-              <input id="cal-move-date" type="date" className="rounded border px-2 py-1 text-sm" value={moveDate} onChange={(e) => setMoveDate(e.target.value)} />
+              <label htmlFor="cal-start" className="text-xs font-medium">
+                Start
+              </label>
+              <input
+                id="cal-start"
+                type="datetime-local"
+                className="rounded border px-2 py-1 text-sm"
+                value={startAt}
+                onChange={(e) => setStartAt(e.target.value)}
+              />
             </div>
-            <Button type="submit" size="sm" disabled={pending}>Move event</Button>
-            {moveMessage ? (
-              <p role="status" className="text-muted-foreground w-full text-sm">{moveMessage}</p>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="cal-location" className="text-xs font-medium">
+                Location (optional)
+              </label>
+              <input
+                id="cal-location"
+                className="rounded border px-2 py-1 text-sm"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="Council chambers"
+              />
+            </div>
+            <Button type="submit" size="sm" disabled={pending}>
+              {pending ? 'Saving…' : 'Create event'}
+            </Button>
+            {createMessage ? (
+              <p role="status" className="text-muted-foreground w-full text-sm">
+                {createMessage}
+              </p>
             ) : null}
           </form>
-        </>
-      ) : (
-        <div className="border-border overflow-hidden rounded-lg border">
-          <div className="border-border bg-muted/40 grid grid-cols-7 border-b">
-            {WEEKDAYS.map((day) => (
-              <div key={day} className="text-muted-foreground px-2 py-2 text-center text-xs font-medium">
-                {day}
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-7">
-            {grid.map((day) => {
-              const key = ymd(day);
-              const dayEvents = eventsByDay.get(key) ?? [];
-              const inMonth = day.getMonth() === view.month;
-              const isToday = key === todayKey;
-              return (
-                <div key={key} className={cn('border-border min-h-24 border-r border-b p-1.5 last:border-r-0', !inMonth && 'bg-muted/20 text-muted-foreground')}>
-                  <div className="flex items-center justify-between">
-                    <span className={cn('inline-flex h-6 w-6 items-center justify-center rounded-full text-xs', isToday && 'bg-primary text-primary-foreground font-semibold')}>
-                      {day.getDate()}
-                    </span>
+
+          {mode === 'agenda' ? (
+            <ul className="divide-y rounded-lg border" aria-label="Agenda">
+              {agenda.length === 0 ? (
+                <li className="text-muted-foreground p-4 text-sm">No events yet.</li>
+              ) : null}
+              {agenda.map((event) => (
+                <li
+                  key={event.id}
+                  className="flex items-baseline justify-between gap-3 p-3"
+                >
+                  <div>
+                    <p className="text-sm font-medium">{event.title}</p>
+                    <p className="text-muted-foreground text-xs">
+                      {new Date(event.start).toLocaleString('en-AU')}
+                      {event.location ? ` · ${event.location}` : ''}
+                    </p>
                   </div>
-                  <ul className="mt-1 space-y-1">
-                    {dayEvents.map((event) => (
-                      <li
-                        key={event.id}
-                        title={event.title}
-                        className={cn(
-                          'truncate rounded px-1.5 py-0.5 text-xs',
-                          event.status === 'cancelled' ? 'bg-muted text-muted-foreground line-through' : 'bg-primary/10 text-primary',
-                        )}
-                      >
-                        {formatTime(event.start)} {event.title}
-                      </li>
+                  <span className="text-muted-foreground text-xs">{event.status}</span>
+                </li>
+              ))}
+            </ul>
+          ) : mode === 'week' ? (
+            <>
+              <div className="grid grid-cols-7 gap-2" aria-label="Week view">
+                {week.map((day) => {
+                  const key = ymd(day);
+                  const dayEvents = eventsByDay.get(key) ?? [];
+                  return (
+                    <div
+                      key={key}
+                      className={cn(
+                        'min-h-32 rounded-lg border p-2',
+                        key === todayKey && 'border-primary',
+                      )}
+                      onDragOver={(e) => {
+                        if (dragId) e.preventDefault();
+                      }}
+                      onDrop={() => {
+                        if (dragId) {
+                          const id = dragId;
+                          setDragId(null);
+                          startTransition(async () => {
+                            await moveEvent(id, day);
+                          });
+                        }
+                      }}
+                    >
+                      <p className="text-xs font-medium">
+                        {day.toLocaleDateString('en-AU', {
+                          weekday: 'short',
+                          day: 'numeric',
+                        })}
+                      </p>
+                      <ul className="mt-1 space-y-1">
+                        {dayEvents.map((event) => (
+                          <li
+                            key={event.id}
+                            className="bg-primary/10 text-primary truncate rounded px-1.5 py-0.5 text-xs"
+                            title={
+                              movableIds.has(event.id)
+                                ? `Drag to move: ${event.title}`
+                                : event.title
+                            }
+                            draggable={movableIds.has(event.id)}
+                            onDragStart={() => setDragId(event.id)}
+                            onDragEnd={() => setDragId(null)}
+                          >
+                            {formatTime(event.start)} {event.title}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
+              </div>
+              <form
+                onSubmit={onMoveSubmit}
+                className="flex flex-wrap items-end gap-2 rounded-lg border p-3"
+                aria-label="Move calendar event"
+              >
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="cal-move-event" className="text-xs font-medium">
+                    Event
+                  </label>
+                  <select
+                    id="cal-move-event"
+                    className="rounded border px-2 py-1 text-sm"
+                    value={moveId}
+                    onChange={(e) => setMoveId(e.target.value)}
+                  >
+                    <option value="">Choose event…</option>
+                    {calendarEvents.map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.title}
+                      </option>
                     ))}
-                  </ul>
+                  </select>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="cal-move-date" className="text-xs font-medium">
+                    New date
+                  </label>
+                  <input
+                    id="cal-move-date"
+                    type="date"
+                    className="rounded border px-2 py-1 text-sm"
+                    value={moveDate}
+                    onChange={(e) => setMoveDate(e.target.value)}
+                  />
+                </div>
+                <Button type="submit" size="sm" disabled={pending}>
+                  Move event
+                </Button>
+                {moveMessage ? (
+                  <p role="status" className="text-muted-foreground w-full text-sm">
+                    {moveMessage}
+                  </p>
+                ) : null}
+              </form>
+            </>
+          ) : (
+            <div className="border-border overflow-hidden rounded-lg border">
+              <div className="border-border bg-muted/40 grid grid-cols-7 border-b">
+                {WEEKDAYS.map((day) => (
+                  <div
+                    key={day}
+                    className="text-muted-foreground px-2 py-2 text-center text-xs font-medium"
+                  >
+                    {day}
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7">
+                {grid.map((day) => {
+                  const key = ymd(day);
+                  const dayEvents = eventsByDay.get(key) ?? [];
+                  const inMonth = day.getMonth() === view.month;
+                  const isToday = key === todayKey;
+                  return (
+                    <div
+                      key={key}
+                      className={cn(
+                        'border-border min-h-24 border-r border-b p-1.5 last:border-r-0',
+                        !inMonth && 'bg-muted/20 text-muted-foreground',
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span
+                          className={cn(
+                            'inline-flex h-6 w-6 items-center justify-center rounded-full text-xs',
+                            isToday && 'bg-primary text-primary-foreground font-semibold',
+                          )}
+                        >
+                          {day.getDate()}
+                        </span>
+                      </div>
+                      <ul className="mt-1 space-y-1">
+                        {dayEvents.map((event) => (
+                          <li
+                            key={event.id}
+                            title={event.title}
+                            className={cn(
+                              'truncate rounded px-1.5 py-0.5 text-xs',
+                              event.status === 'cancelled'
+                                ? 'bg-muted text-muted-foreground line-through'
+                                : 'bg-primary/10 text-primary',
+                            )}
+                          >
+                            {formatTime(event.start)} {event.title}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </>
       )}
     </section>
