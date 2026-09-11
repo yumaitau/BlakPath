@@ -227,6 +227,14 @@ jobs:
             mc mb --ignore-existing local/blakpath-quarantine local/blakpath-evidence
           '
       - run: pnpm db:migrate && pnpm db:seed
+      - name: Generate CoA development signing key
+        run: |
+          KEY="$(node -e "console.log(require('node:crypto').generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'}))")"
+          {
+            echo 'COA_SIGNING_LOCAL_KEY_PEM<<EOF'
+            printf '%s\n' "$KEY"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
       - run: pnpm test:e2e
       - name: Upload Playwright report
         if: failure()
