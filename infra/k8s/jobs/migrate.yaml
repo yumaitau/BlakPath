@@ -1,0 +1,31 @@
+# One-shot operational jobs. NOT in kustomization.yaml — apply manually:
+#   kubectl apply -f infra/k8s/jobs/migrate.yaml
+#   kubectl apply -f infra/k8s/jobs/seed.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blakpath-migrate
+  namespace: blakpath
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      serviceAccountName: blakpath
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:403f082
+          imagePullPolicy: IfNotPresent
+          command: [pnpm, exec, tsx, src/db/migrate.ts]
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi

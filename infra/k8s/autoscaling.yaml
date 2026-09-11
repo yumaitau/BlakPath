@@ -1,35 +1,15 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: blakpath-web
+  name: blakpath-app
   namespace: blakpath
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: blakpath-web
+    name: blakpath-app
   minReplicas: 2
-  maxReplicas: 10
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 65
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: blakpath-worker
-  namespace: blakpath
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: blakpath-worker
-  minReplicas: 2
-  maxReplicas: 6
+  maxReplicas: 4
   metrics:
     - type: Resource
       resource:
@@ -41,21 +21,10 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: blakpath-web
+  name: blakpath-app
   namespace: blakpath
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: blakpath-web
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: blakpath-worker
-  namespace: blakpath
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: blakpath-worker
+      app.kubernetes.io/name: blakpath-app

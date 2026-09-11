@@ -1,8 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: blakpath-web
+  name: blakpath-app
   namespace: blakpath
+  labels:
+    app.kubernetes.io/name: blakpath-app
 spec:
   replicas: 2
   strategy:
@@ -12,21 +14,26 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: blakpath-web
+      app.kubernetes.io/name: blakpath-app
   template:
     metadata:
       labels:
-        app: blakpath-web
+        app.kubernetes.io/name: blakpath-app
     spec:
-      serviceAccountName: blakpath-web
+      serviceAccountName: blakpath
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
       containers:
         - name: web
-          image: ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath-web:TAG
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app:f00ae65
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -34,42 +41,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: blakpath-config
-          env:
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: blakpath-runtime-secret
-                  key: DATABASE_URL
-            - name: REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: blakpath-runtime-secret
-                  key: REDIS_URL
-            - name: BETTER_AUTH_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: blakpath-runtime-secret
-                  key: BETTER_AUTH_SECRET
-            - name: ENCRYPTION_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: blakpath-runtime-secret
-                  key: ENCRYPTION_MASTER_KEY
-            - name: SMTP_USER
-              valueFrom:
-                secretKeyRef:
-                  name: blakpath-runtime-secret
-                  key: SMTP_USER
-            - name: SMTP_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: blakpath-runtime-secret
-                  key: SMTP_PASSWORD
-            - name: EMAIL_WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: blakpath-runtime-secret
-                  key: EMAIL_WEBHOOK_SECRET
+            - secretRef:
+                name: blakpath-runtime
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: /app/.next/cache
+              name: next-cache
           livenessProbe:
             httpGet:
               path: /api/health
@@ -91,6 +69,5 @@ spec:
               memory: 2Gi
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]

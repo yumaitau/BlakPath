@@ -68,6 +68,8 @@ const serverSchema = z
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),
     // Bearer credential for SCIM directory provisioning. Unset = SCIM off.
     SCIM_BEARER_TOKEN: z.string().min(32).optional(),
+    // One-time live-bootstrap token. Unset = bootstrap route disabled.
+    PILOT_BOOTSTRAP_TOKEN: z.string().min(32).optional(),
     // Entra ID OIDC client for federated sign-in. Unset = SSO unavailable.
     SSO_ENTRA_ISSUER: z.string().url().optional(),
     SSO_ENTRA_CLIENT_ID: z.string().min(1).optional(),

@@ -4,18 +4,24 @@ metadata:
   name: blakpath-config
   namespace: blakpath
 data:
-  APP_URL: https://blakpath.example.gov.au
+  APP_URL: https://blakpath.yumait.au
   APP_REGION: ap-southeast-2
+  BETTER_AUTH_URL: https://blakpath.yumait.au
+  HOSTNAME: 0.0.0.0
+  PORT: "3000"
+  NODE_ENV: production
+  NEXT_TELEMETRY_DISABLED: "1"
+  LOG_LEVEL: info
   S3_REGION: ap-southeast-2
-  S3_BUCKET_EVIDENCE: blakpath-evidence
-  S3_BUCKET_QUARANTINE: blakpath-quarantine
+  S3_BUCKET_EVIDENCE: blakpath-prod-evidence-959038055523-ap-southeast-2
+  S3_BUCKET_QUARANTINE: blakpath-prod-quarantine-959038055523-ap-southeast-2
+  S3_KMS_KEY_ID: arn:aws:kms:ap-southeast-2:959038055523:key/737b7098-2c77-4a4e-b4c6-666597743651
   S3_FORCE_PATH_STYLE: "false"
-  # SES via SMTP interface in ap-southeast-2. Credentials come from Secrets
-  # Manager via External Secrets Operator, never baked into images.
+  # SES SMTP interface in ap-southeast-2; credentials from Secrets Manager.
   SMTP_HOST: email-smtp.ap-southeast-2.amazonaws.com
   SMTP_PORT: "587"
-  SMTP_FROM: BlakPath <no-reply@blakpath.example.gov.au>
-  CLAMAV_HOST: clamav
+  SMTP_FROM: BlakPath <no-reply@blakpath.yumait.au>
+  CLAMAV_HOST: blakpath-clamav
   CLAMAV_PORT: "3310"
   AI_FEATURES_ENABLED: "false"
   OTEL_SERVICE_NAME: blakpath

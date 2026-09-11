@@ -1,21 +1,22 @@
-# TEMPORARY live-verification bootstrap. Prints pilot creds ONCE to Job logs.
-# Delete the Job (and the pilot org + account) after verification.
+# Production seed: permission catalogue + system role templates only.
+# Developer bootstrap is refused when NODE_ENV=production (see src/db/seeds).
+#   kubectl apply -f infra/k8s/jobs/seed.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: blakpath-pilot
+  name: blakpath-seed
   namespace: blakpath
 spec:
-  backoffLimit: 1
+  backoffLimit: 2
   template:
     spec:
       serviceAccountName: blakpath
       restartPolicy: Never
       containers:
-        - name: pilot
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:9da6382
+        - name: seed
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:403f082
           imagePullPolicy: IfNotPresent
-          command: [pnpm, exec, tsx, scripts/e2e-pilot-bootstrap.ts]
+          command: [pnpm, exec, tsx, src/db/seeds/index.ts]
           envFrom:
             - configMapRef:
                 name: blakpath-config
