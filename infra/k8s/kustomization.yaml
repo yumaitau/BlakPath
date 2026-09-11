@@ -12,6 +12,6 @@ resources:
   - autoscaling.yaml
 images:
   - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
-    newTag: f00ae65
+    newTag: 7350f7c
   - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
-    newTag: f00ae65
+    newTag: 7350f7c
