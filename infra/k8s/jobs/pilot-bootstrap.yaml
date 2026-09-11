@@ -1,0 +1,30 @@
+# TEMPORARY live-verification bootstrap. Prints pilot creds ONCE to Job logs.
+# Delete the Job (and the pilot org + account) after verification.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blakpath-pilot
+  namespace: blakpath
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      serviceAccountName: blakpath
+      restartPolicy: Never
+      containers:
+        - name: pilot
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:9da6382
+          imagePullPolicy: IfNotPresent
+          command: [pnpm, exec, tsx, scripts/e2e-pilot-bootstrap.ts]
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi

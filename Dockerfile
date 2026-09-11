@@ -127,10 +127,10 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 ENV NODE_ENV=production
 
 # Only the sources the worker needs: the worker entrypoint, the shared library
-# contracts it imports, the DB layer, and tsconfig for path resolution.
-COPY --chown=worker:nodejs tsconfig.json ./tsconfig.json
+# contracts it imports, the DB layer, operational scripts, and tsconfig.
 COPY --from=build --chown=worker:nodejs /app/worker ./worker
 COPY --from=build --chown=worker:nodejs /app/src ./src
+COPY --from=build --chown=worker:nodejs /app/scripts ./scripts
 
 USER worker
 
