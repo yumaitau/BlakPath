@@ -49,6 +49,7 @@
     "worker:dev": "tsx watch worker/index.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.1130.0",
     "@aws-sdk/client-s3": "^3.658.0",
     "@aws-sdk/client-sesv2": "^3.1130.0",
     "@aws-sdk/s3-request-presigner": "^3.658.0",

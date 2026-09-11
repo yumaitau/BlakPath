@@ -23,9 +23,37 @@ export function MembershipInvitationAcceptance({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
 
-  async function accept() {
+  async function createAccount() {
+    if (!name.trim() || password.length < 12) {
+      setError('Enter your name and a password of at least 12 characters.');
+      return;
+    }
     setBusy(true);
+    setError(null);
+    try {
+      const created = await fetch('/api/membership-invitations/create-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, name: name.trim(), password }),
+      });
+      if (!created.ok) {
+        setError(
+          'This account could not be created. You may already have one — try signing in instead, or ask the organisation for a new invitation.',
+        );
+        return;
+      }
+      window.location.assign(`/sign-in?returnTo=${encodeURIComponent(`/join/${token}`)}`);
+    } catch {
+      setError('We could not reach the service. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function accept() {    setBusy(true);
     setError(null);
     try {
       const response = await fetch('/api/membership-invitations/accept', {
@@ -80,22 +108,61 @@ export function MembershipInvitationAcceptance({
         ) : null}
 
         {!signedIn ? (
-          <Alert tone="info" title="Sign in to continue">
-            <p>
-              Sign in or create an account using the email address that received this
-              invitation, then reopen this link.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button asChild size="sm">
-                <Link href={`/sign-in?returnTo=${encodeURIComponent(`/join/${token}`)}`}>
-                  Sign in
-                </Link>
+          <div className="grid gap-4">
+            <Alert tone="info" title="Sign in to continue">
+              <p>
+                Sign in with the email address that received this invitation, then
+                reopen this link. New here? Create your account below — the
+                invitation itself verifies your email, so no separate signup is
+                needed.
+              </p>
+              <div className="mt-4">
+                <Button asChild size="sm">
+                  <Link href={`/sign-in?returnTo=${encodeURIComponent(`/join/${token}`)}`}>
+                    Sign in
+                  </Link>
+                </Button>
+              </div>
+            </Alert>
+            <form
+              aria-label="Create account for this invitation"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void createAccount();
+              }}
+              className="grid gap-3 rounded-lg border p-4"
+            >
+              <h3 className="font-semibold">Create your account</h3>
+              <div className="grid gap-1">
+                <label htmlFor="invite-name" className="text-xs font-medium">
+                  Your name
+                </label>
+                <input
+                  id="invite-name"
+                  className="rounded border px-2 py-1.5 text-sm"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoComplete="name"
+                />
+              </div>
+              <div className="grid gap-1">
+                <label htmlFor="invite-password" className="text-xs font-medium">
+                  Password (at least 12 characters)
+                </label>
+                <input
+                  id="invite-password"
+                  type="password"
+                  className="rounded border px-2 py-1.5 text-sm"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </div>
+              <Button type="submit" size="sm" disabled={busy}>
+                {busy ? 'Creating…' : 'Create account and continue'}
               </Button>
-              <Button asChild size="sm" variant="outline">
-                <Link href="/sign-up">Create account</Link>
-              </Button>
-            </div>
-          </Alert>
+            </form>
+          </div>
         ) : !emailVerified ? (
           <Alert tone="warning" title="Verify your email first">
             This invitation cannot grant access until {signedInEmail} has been verified.

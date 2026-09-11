@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, ne } from 'drizzle-orm';
+import { hash as argon2Hash } from '@node-rs/argon2';
 import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
+import { z } from 'zod';
 
 import { db } from '@/db/client';
 import {
+  accounts,
   membershipInvitations,
   memberships,
   membershipRoles,
@@ -26,6 +29,78 @@ import { requireTenantContext } from '@/lib/tenancy/context';
 
 const INVITATION_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
 const ORGANISATION_ADMIN_SLUG = 'organisation-admin';
+
+const ARGON2_OPTIONS = {
+  algorithm: 2,
+  memoryCost: 19_456,
+  timeCost: 2,
+  parallelism: 1,
+  outputLen: 32,
+} as const;
+
+/**
+ * Invite-bound account creation — the ONLY self-service account path.
+ *
+ * Open registration is disabled (`disableSignUp`), so a person without an
+ * account creates one from inside a pending organisation invitation. The
+ * invitation token proves control of the invited email address, which is why
+ * the account is marked verified at creation. The password never touches the
+ * database in plaintext (Argon2id, OWASP-aligned parameters).
+ */
+const createInvitedAccountSchema = z.object({
+  token: z.string().min(1).max(200),
+  name: z.string().trim().min(1).max(200),
+  password: z.string().min(12).max(256),
+});
+
+export async function createInvitedAccount(raw: unknown): Promise<{ userId: string }> {
+  const input = createInvitedAccountSchema.parse(raw);
+  const invitation = await resolvePendingInvitation(input.token);
+
+  const email = invitation.email.toLowerCase();
+  const [existing] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  if (existing) {
+    await recordAudit({
+      action: 'auth.signed_up',
+      resourceType: 'user',
+      resourceId: existing.id,
+      result: 'denied',
+      reason: 'account already exists — sign in instead',
+      organisationId: invitation.organisationId,
+    });
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+
+  const userId = uuidv7();
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId,
+      name: input.name,
+      email,
+      emailVerified: true,
+    });
+    await tx.insert(accounts).values({
+      id: uuidv7(),
+      userId,
+      providerId: 'credential',
+      accountId: userId,
+      password: await argon2Hash(input.password, ARGON2_OPTIONS),
+    });
+  });
+  await recordAudit({
+    action: 'auth.signed_up',
+    resourceType: 'user',
+    resourceId: userId,
+    result: 'success',
+    reason: 'invite-bound signup',
+    organisationId: invitation.organisationId,
+  });
+  return { userId };
+}
 
 export interface ManagedMember {
   id: string;
@@ -600,8 +675,7 @@ async function resolvePendingInvitation(token: string) {
 
 export async function getMembershipInvitationPreview(
   token: string,
-): Promise<MembershipInvitationPreview> {
-  const invitation = await resolvePendingInvitation(token);
+): Promise<MembershipInvitationPreview> {  const invitation = await resolvePendingInvitation(token);
   return {
     organisationName: invitation.organisationName,
     roleName: invitation.roleName,

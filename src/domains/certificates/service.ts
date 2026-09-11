@@ -212,9 +212,48 @@ export async function generateCertificate(
 }
 
 /**
+ * Canonical CoA payload (v1).
+ *
+ * The exact bytes the organisation's signing key attests. Field order is
+ * fixed and values are reprojections of the stored row — verification rebuilds
+ * these same bytes from the database and checks the signature, so any
+ * tampering with the recorded outcome, reference, or parties breaks the seal.
+ * No personal data beyond what the certificate itself already discloses.
+ */
+export interface CoaCanonicalPayload {
+  v: 1;
+  certificateId: string;
+  organisationId: string;
+  reference: string;
+  applicationId: string;
+  decisionId: string;
+  outcome: string;
+  verificationCode: string;
+  signedAt: string;
+}
+
+export function canonicalCoaPayload(input: CoaCanonicalPayload): string {
+  return JSON.stringify({
+    v: 1,
+    certificateId: input.certificateId,
+    organisationId: input.organisationId,
+    reference: input.reference,
+    applicationId: input.applicationId,
+    decisionId: input.decisionId,
+    outcome: input.outcome,
+    verificationCode: input.verificationCode,
+    signedAt: input.signedAt,
+  });
+}
+
+/**
  * Sign a draft certificate. Requires `certificate:sign`. NOTE: the calling route
  * or action MUST additionally enforce step-up (`requireRecentAuth`) — signing is
  * an authority-bearing act and a long-lived session must never suffice alone.
+ *
+ * Signing cryptographically seals the recorded outcome with the organisation's
+ * KMS key. The signature covers the canonical payload only; it never creates
+ * or alters the determination, which authorised humans already finalised.
  */
 export async function signCertificate(id: string): Promise<CertificateRow> {
   const ctx = requireTenantContext();
@@ -227,9 +266,36 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   }
 
   const scope = currentScope();
+  const signedAt = new Date();
+  const [decision] = await scope.db
+    .select({ outcome: decisions.finalOutcome })
+    .from(decisions)
+    .where(scope.where(decisions.organisationId, eq(decisions.id, existing.decisionId)))
+    .limit(1);
+  const canonical = canonicalCoaPayload({
+    v: 1,
+    certificateId: id,
+    organisationId: ctx.organisationId,
+    reference: existing.reference,
+    applicationId: existing.applicationId,
+    decisionId: existing.decisionId,
+    outcome: decision?.outcome ?? 'unknown',
+    verificationCode: existing.verificationCode,
+    signedAt: signedAt.toISOString(),
+  });
+  const { signCoaPayload } = await import('@/lib/kms/sign');
+  const seal = await signCoaPayload(canonical);
   const updated = await scope.db
     .update(certificates)
-    .set({ status: 'signed', signedByUserId: ctx.userId, signedAt: new Date() })
+    .set({
+      status: 'signed',
+      signedByUserId: ctx.userId,
+      signedAt,
+      payloadHash: seal.payloadHash,
+      signature: seal.signatureB64,
+      signingAlgorithm: seal.algorithm,
+      signingKeyId: seal.keyId,
+    })
     .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
     .returning();
   const row = must(updated[0], 'certificate');
@@ -239,6 +305,7 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
     resourceType: 'certificate',
     resourceId: id,
     result: 'success',
+    reason: `sealed with ${seal.algorithm}`,
     before: { data: { status: 'draft' }, allow: ['status'] },
     after: { data: { status: 'signed' }, allow: ['status'] },
   });
@@ -347,6 +414,10 @@ export interface CertificateVerification {
   organisationName: string;
   status: CertificateStatus;
   signedOn: string | null;
+  /** Cryptographic seal check: signature matches the recorded payload. */
+  signatureValid: boolean;
+  /** Stored payload hash still matches the rebuilt canonical bytes. */
+  payloadIntact: boolean;
 }
 
 export async function verifyCertificate(
@@ -354,9 +425,17 @@ export async function verifyCertificate(
 ): Promise<CertificateVerification | null> {
   const rows = await db
     .select({
+      id: certificates.id,
       reference: certificates.reference,
       status: certificates.status,
       signedAt: certificates.signedAt,
+      applicationId: certificates.applicationId,
+      decisionId: certificates.decisionId,
+      verificationCode: certificates.verificationCode,
+      payloadHash: certificates.payloadHash,
+      signature: certificates.signature,
+      signingAlgorithm: certificates.signingAlgorithm,
+      signingKeyId: certificates.signingKeyId,
       organisationId: certificates.organisationId,
     })
     .from(certificates)
@@ -375,11 +454,53 @@ export async function verifyCertificate(
     .limit(1);
   const org = orgRows[0];
 
+  let payloadIntact = false;
+  let signatureValid = false;
+  if (
+    cert.signedAt &&
+    cert.payloadHash &&
+    cert.signature &&
+    cert.signingAlgorithm &&
+    cert.signingKeyId
+  ) {
+    const decisionRows = await db
+      .select({ outcome: decisions.finalOutcome })
+      .from(decisions)
+      .where(eq(decisions.id, cert.decisionId))
+      .limit(1);
+    const canonical = canonicalCoaPayload({
+      v: 1,
+      certificateId: cert.id,
+      organisationId: cert.organisationId,
+      reference: cert.reference,
+      applicationId: cert.applicationId,
+      decisionId: cert.decisionId,
+      outcome: decisionRows[0]?.outcome ?? 'unknown',
+      verificationCode: cert.verificationCode,
+      signedAt: cert.signedAt.toISOString(),
+    });
+    const { coaPayloadHash, verifyCoaSignature } = await import('@/lib/kms/sign');
+    payloadIntact = coaPayloadHash(canonical) === cert.payloadHash;
+    if (payloadIntact) {
+      const result = await verifyCoaSignature({
+        canonical,
+        signatureB64: cert.signature,
+        algorithm: cert.signingAlgorithm,
+        keyId: cert.signingKeyId,
+      });
+      signatureValid = result.signatureValid;
+    }
+  }
+
+  const statusValid = isValid(cert.status as CertificateStatus);
   return {
-    valid: isValid(cert.status as CertificateStatus),
+    // A revoked certificate keeps a valid seal but is NOT a valid credential.
+    valid: statusValid && payloadIntact && signatureValid,
     reference: cert.reference,
     organisationName: org?.tradingName ?? org?.legalName ?? 'Unknown organisation',
     status: cert.status as CertificateStatus,
     signedOn: cert.signedAt ? cert.signedAt.toISOString().slice(0, 10) : null,
+    signatureValid,
+    payloadIntact,
   };
 }

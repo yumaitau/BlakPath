@@ -70,6 +70,12 @@ const serverSchema = z
     SCIM_BEARER_TOKEN: z.string().min(32).optional(),
     // One-time live-bootstrap token. Unset = bootstrap route disabled.
     PILOT_BOOTSTRAP_TOKEN: z.string().min(32).optional(),
+    // CoA cryptographic signing. Production uses a KMS asymmetric key
+    // (SIGN_VERIFY) under the workload role. Local development and CI may use
+    // a PEM private key instead — refused in production.
+    COA_SIGNING_KEY_ID: z.string().min(1).optional(),
+    COA_SIGNING_ALGORITHM: z.string().max(50).optional(),
+    COA_SIGNING_LOCAL_KEY_PEM: z.string().min(1).optional(),
     // Entra ID OIDC client for federated sign-in. Unset = SSO unavailable.
     SSO_ENTRA_ISSUER: z.string().url().optional(),
     SSO_ENTRA_CLIENT_ID: z.string().min(1).optional(),
@@ -128,5 +134,13 @@ export const env: ServerEnv = new Proxy({} as ServerEnv, {
     return cached[prop as keyof ServerEnv];
   },
 });
+
+/**
+ * Test-only hook: drop the cached env so stubbed process.env values take
+ * effect. Never call outside tests — production reads config once at boot.
+ */
+export function __resetEnvCache(): void {
+  cached = null;
+}
 
 export const isProduction = () => env.NODE_ENV === 'production';

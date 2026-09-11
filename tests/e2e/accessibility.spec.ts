@@ -26,7 +26,7 @@ test('public and authentication journeys meet automated WCAG checks', async ({
     ['/organisations', 'Find an organisation'],
     ['/verify', 'Check a certificate'],
     ['/sign-in', 'Sign in'],
-    ['/sign-up', 'Create your account'],
+    ['/sign-up', 'BlakPath is invite-only'],
     ['/forgot-password', 'Reset your password'],
   ] as const;
 

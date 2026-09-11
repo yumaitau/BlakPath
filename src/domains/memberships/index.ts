@@ -3,6 +3,7 @@ export {
   addMember,
   changeMemberRole,
   changeMemberStatus,
+  createInvitedAccount,
   createMembershipInvitation,
   getMembershipInvitationPreview,
   listAssignableRoles,

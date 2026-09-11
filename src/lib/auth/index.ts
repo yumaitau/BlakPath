@@ -75,9 +75,15 @@ export const auth = betterAuth({
    * Email + password with mandatory verification and self-service reset.
    * Argon2id is wired via the `password` hook so Better Auth never uses its
    * default hasher for BlakPath credentials.
+   *
+   * INVITE-ONLY: `disableSignUp` closes open self-registration. Accounts are
+   * created only through an organisation invitation
+   * (`createInvitedAccount` in the memberships domain), which binds creation
+   * to a pending invitation token for a specific email. Sign-in stays open.
    */
   emailAndPassword: {
     enabled: true,
+    disableSignUp: true,
     requireEmailVerification: true,
     minPasswordLength: 12,
     maxPasswordLength: 256,

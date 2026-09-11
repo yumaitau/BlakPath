@@ -167,13 +167,8 @@ export default function SignInPage() {
       </Button>
 
       <p className="text-muted-foreground text-center text-sm">
-        Don’t have an account?{' '}
-        <Link
-          href="/sign-up"
-          className="text-primary font-medium underline underline-offset-4"
-        >
-          Create one
-        </Link>
+        BlakPath is invite-only. Ask your organisation for an invitation if you
+        need access.
       </p>
     </AuthCard>
   );

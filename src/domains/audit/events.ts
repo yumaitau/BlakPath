@@ -25,6 +25,7 @@ export type AuditResult = 'success' | 'failure' | 'denied';
 export type AuditAction =
   // Authentication.
   | 'auth.sign_in'
+  | 'auth.signed_up'
   | 'auth.sign_out'
   | 'auth.sign_in_failed'
   | 'auth.password_changed'

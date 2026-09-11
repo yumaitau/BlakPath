@@ -6,8 +6,9 @@ import { verifyCertificate } from '@/domains/certificates';
  *
  * The verification code in the URL is the capability. We return only
  * non-personal confirmation of authenticity — whether a certificate with that
- * code exists and is currently valid, its reference, the issuing organisation
- * and the sign date. No applicant detail is exposed.
+ * code exists and is currently valid, its reference, the issuing organisation,
+ * the sign date, and whether its cryptographic seal checks out. No applicant
+ * detail is exposed.
  */
 export const dynamic = 'force-dynamic';
 
@@ -56,6 +57,12 @@ export default async function VerifyCertificatePage({
                   <dd className="font-medium">{result.signedOn}</dd>
                 </>
               ) : null}
+              <dt className="text-muted-foreground">Digital seal</dt>
+              <dd className="font-medium">
+                {result.signatureValid && result.payloadIntact
+                  ? 'Verified — sealed by the issuing organisation'
+                  : 'Not verified — treat with caution'}
+              </dd>
             </dl>
           ) : (
             <p className="text-muted-foreground text-sm">

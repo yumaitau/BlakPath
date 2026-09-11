@@ -30,8 +30,21 @@ test('auth: sign-in, org picker, security, sign-out journey', async ({ page }) =
   expect(pageErrors.map((error) => error.message)).toEqual([]);
 });
 
-test('auth: sign-up validation and verify-email gate', async ({ page }) => {
+test('auth: open sign-up stays closed and explains invite-only', async ({
+  page,
+  request,
+}) => {
   await page.goto('/sign-up');
-  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'BlakPath is invite-only' })).toBeVisible();
   await expectNoWcagViolations(page);
+
+  // Framework registration endpoint refuses direct signups.
+  const direct = await request.post('/api/auth/sign-up/email', {
+    data: {
+      email: `nobody-${Date.now()}@example.test`,
+      password: 'long-enough-password-123',
+      name: 'Nobody',
+    },
+  });
+  expect(direct.status()).toBe(400);
 });

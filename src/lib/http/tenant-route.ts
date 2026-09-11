@@ -8,6 +8,8 @@ import {
 } from '@/lib/auth/session';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
+import { logger } from '@/lib/observability/logger';
+import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -74,9 +76,13 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof ZodError) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
+  if (error instanceof ApplicationWorkflowError) {
+    return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
+  }
   if (error instanceof AuthorizationError || error instanceof TenantContextError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  // Unknown error: do not leak internals.
+  // Unknown error: log server-side for diagnosis, return nothing sensitive.
+  logger.error({ err: error }, 'unhandled route error');
   return NextResponse.json({ error: 'Internal error' }, { status: 500 });
 }

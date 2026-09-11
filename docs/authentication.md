@@ -35,6 +35,12 @@ data on its own — that comes from a DB-verified membership plus permissions
 
 ## Supported methods
 
+- **Invite-only accounts.** Open self-registration is disabled
+  (`disableSignUp`). A person without an account creates one from inside a
+  pending organisation invitation (`createInvitedAccount`), which binds
+  creation to the invited email and marks it verified — the invitation token
+  proves inbox control. Afterwards the invitation is accepted normally
+  (verified-email match, single active membership, audited).
 - **Email + password**, with mandatory **email verification** before an account
   is usable, and secure **password reset** — both via single-use expiring
   `verifications` values delivered over SMTP (Mailpit locally).

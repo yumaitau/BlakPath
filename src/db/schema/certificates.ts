@@ -47,6 +47,16 @@ export const certificates = pgTable(
     pdfObjectKey: text('pdf_object_key'),
     /** SHA-256 of the rendered PDF bytes, for tamper-evidence. */
     sha256: text('sha256'),
+    /** Canonical signed payload version (v1 schema below). */
+    payloadVersion: text('payload_version').notNull().default('1'),
+    /** SHA-256 hex of the canonical signed payload. */
+    payloadHash: text('payload_hash'),
+    /** Base64 digital signature over the canonical payload (KMS in prod). */
+    signature: text('signature'),
+    /** KMS signing algorithm, e.g. RSASSA_PSS_SHA_256. */
+    signingAlgorithm: text('signing_algorithm'),
+    /** KMS key id/alias that signed, or 'local-dev-key' outside prod. */
+    signingKeyId: text('signing_key_id'),
     /** Public, unguessable code used to verify authenticity without sign-in. */
     verificationCode: text('verification_code').notNull(),
     signedByUserId: refId('signed_by_user_id').references(() => users.id, {

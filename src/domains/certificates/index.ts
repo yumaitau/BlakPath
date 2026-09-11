@@ -27,6 +27,7 @@ export {
 } from './schemas';
 
 export {
+  canonicalCoaPayload,
   generateCertificate,
   getDownloadUrl,
   listCertificates,
@@ -35,4 +36,5 @@ export {
   verifyCertificate,
   type CertificateRow,
   type CertificateVerification,
+  type CoaCanonicalPayload,
 } from './service';
