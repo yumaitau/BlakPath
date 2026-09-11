@@ -17,13 +17,27 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
 ## Data services
-
 - RDS Postgres with point-in-time recovery. Proxy in front for failover.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
   versioning on, AWS Backup coverage. MinIO exists for local dev only.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
+
+## CoA signing key (KMS)
+
+Certificates are sealed with an asymmetric KMS key and verified publicly
+against its public key — private key material never leaves KMS.
+
+1. Create the key: RSA_2048 (or ECC_NIST_P256), usage SIGN_VERIFY, alias
+   `alias/blakpath-coa-signing`, ap-southeast-2.
+2. Grant the workload role `kms:Sign`, `kms:Verify`, `kms:GetPublicKey`,
+   `kms:DescribeKey` on the key ARN (Pod Identity association).
+3. Set `COA_SIGNING_KEY_ID` to the key ARN in `blakpath-eks-runtime`.
+4. Rotate by creating a new key version/alias target; existing seals verify
+   against their stored `signingKeyId`, so rotation never invalidates issued
+   certificates. Local development and CI use `COA_SIGNING_LOCAL_KEY_PEM`,
+   which the app refuses in production.
 
 ## Restore drill (EKS variant)
 
