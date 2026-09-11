@@ -112,17 +112,19 @@ CMD ["node", "server.js"]
 # the tsconfig path aliases (@/*), so the worker can import shared contracts such
 # as `@/lib/env` without a separate bundling step.
 FROM base AS worker
-ENV NODE_ENV=production
 WORKDIR /app
 
 RUN addgroup -S -g 1001 nodejs \
   && adduser -S -u 1001 -G nodejs worker
 
 # Full dependency set (tsx lives in devDependencies and is required at runtime
-# to execute the TypeScript worker). Reuses the cached pnpm store.
+# to execute the TypeScript worker). Install BEFORE setting NODE_ENV, otherwise
+# pnpm prunes devDependencies and tsx is missing at runtime.
 COPY package.json pnpm-lock.yaml ./
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
   pnpm install --frozen-lockfile
+
+ENV NODE_ENV=production
 
 # Only the sources the worker needs: the worker entrypoint, the shared library
 # contracts it imports, the DB layer, and tsconfig for path resolution.
