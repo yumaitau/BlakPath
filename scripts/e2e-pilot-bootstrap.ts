@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { hash as argon2Hash } from '@node-rs/argon2';
 import { uuidv7 } from 'uuidv7';
-import { db, sqlClient } from '@/db/client';
+import { db, sqlClient } from '../src/db/client';
 import {
   accounts,
   membershipRoles,
@@ -12,7 +12,7 @@ import {
   rolePermissions,
   roles,
   users,
-} from '@/db/schema';
+} from '../src/db/schema';
 
 /**
  * TEMPORARY pilot bootstrap for live EKS verification only.
