@@ -63,6 +63,13 @@ const serverSchema = z
     SMTP_USER: z.string().optional(),
     SMTP_PASSWORD: z.string().optional(),
     SMTP_FROM: z.string().default('BlakPath <no-reply@blakpath.local>'),
+    // PaperBoy transactional email (https://paperboy.yumait.au).
+    // Placeholder wiring: the sender posts JSON to
+    // `{PAPERBOY_URL}/api/v1/emails` with `Authorization: Bearer
+    // <PAPERBOY_API_KEY>`. Unset locally; required in production where
+    // PaperBoy replaces direct SES SMTP.
+    PAPERBOY_URL: z.string().url().optional(),
+    PAPERBOY_API_KEY: z.string().min(1).optional(),
     // Shared secret gating the SES SNS event webhook (bounce/complaint).
     // Unset locally; required in production where SES events are wired.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),

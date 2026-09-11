@@ -24,6 +24,13 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   versioning on, AWS Backup coverage. MinIO exists for local dev only.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
+- PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:
+  create an API key there, store it as `PAPERBOY_API_KEY` in
+  `blakpath-eks-runtime`, and keep `PAPERBOY_URL` in the ConfigMap. Sender
+  contract: `POST {PAPERBOY_URL}/api/v1/emails` with
+  `Authorization: Bearer <key>` and a JSON body of
+  `{from, to, subject, text}`. Wiring the sender to PaperBoy is tracked work;
+  until then mail flows through the SES API under the workload role.
 
 ## CoA signing key (KMS)
 

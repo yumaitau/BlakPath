@@ -21,6 +21,9 @@ data:
   SMTP_HOST: email-smtp.ap-southeast-2.amazonaws.com
   SMTP_PORT: '587'
   SMTP_FROM: BlakPath <no-reply@blakpath.yumait.au>
+  # PaperBoy replaces direct SES SMTP in production; key lives in Secrets
+  # Manager. Sender contract: POST {PAPERBOY_URL}/api/v1/emails, Bearer auth.
+  PAPERBOY_URL: https://paperboy.yumait.au
   CLAMAV_HOST: blakpath-clamav
   CLAMAV_PORT: '3310'
   AI_FEATURES_ENABLED: 'false'
