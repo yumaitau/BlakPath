@@ -16,6 +16,18 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
+## Secrets and keys
+- Dedicated folder: every BlakPath secret lives under
+  `/blakpath/production/` in Secrets Manager. The app reads a single synced
+  `blakpath-runtime` Secret via External Secrets Operator; the platform ESO
+  role stays shared and is never narrowed per app.
+- Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
+  Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
+  `alias/blakpath-prod-evidence` covers both S3 buckets. RDS uses its
+  provisioned key. No AWS-managed default keys in the secret path.
+- ElastiCache runs with transit and at-rest encryption. Redis holds
+  ephemeral state only — never tenant records.
+
 ## Data services
 
 - RDS Postgres with point-in-time recovery. Proxy in front for failover.
