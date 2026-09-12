@@ -17,6 +17,7 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
 ## Secrets and keys
+
 - Dedicated folder: every BlakPath secret lives under
   `/blakpath/production/` in Secrets Manager. The app reads a single synced
   `blakpath-runtime` Secret via External Secrets Operator; the platform ESO
