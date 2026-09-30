@@ -17,7 +17,8 @@
       "postcss@<8.5.18": ">=8.5.18",
       "nanoid@<3.3.18": ">=3.3.18",
       "browserslist@<=4.28.6": ">=4.28.7",
-      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0"
+      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0",
+      "@grpc/grpc-js@>=1.14.0 <1.14.5": "1.14.5"
     },
     "auditConfig": {
       "ignoreGhsas": [
@@ -84,7 +85,7 @@
     "lucide-react": "^0.454.0",
     "nanoid": "^5.1.16",
     "next": "16.3.8",
-    "nodemailer": "^9.1.0",
+    "nodemailer": "^10.0.6",
     "pdf-lib": "^1.17.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.4",
