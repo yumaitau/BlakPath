@@ -17,7 +17,8 @@
       "postcss@<8.5.18": ">=8.5.18",
       "nanoid@<3.3.18": ">=3.3.18",
       "browserslist@<=4.28.6": ">=4.28.7",
-      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0"
+      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0",
+      "@grpc/grpc-js@>=1.14.0 <1.14.5": "1.14.5"
     },
     "auditConfig": {
       "ignoreGhsas": [
@@ -83,8 +84,8 @@
     "ioredis": "^5.4.1",
     "lucide-react": "^0.454.0",
     "nanoid": "^5.1.16",
-    "next": "16.3.6",
-    "nodemailer": "^9.1.0",
+    "next": "16.3.8",
+    "nodemailer": "^10.0.6",
     "pdf-lib": "^1.17.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.4",
@@ -108,7 +109,7 @@
     "dotenv": "^16.4.5",
     "drizzle-kit": "^0.31.0",
     "eslint": "^9.13.0",
-    "eslint-config-next": "16.3.6",
+    "eslint-config-next": "16.3.8",
     "eslint-config-prettier": "^9.1.0",
     "jsdom": "^25.0.1",
     "pino-pretty": "^13.0.0",
