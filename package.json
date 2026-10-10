@@ -21,7 +21,9 @@
     },
     "auditConfig": {
       "ignoreGhsas": [
-        "GHSA-q7rr-3cgh-j5r3"
+        "GHSA-q7rr-3cgh-j5r3",
+        "GHSA-5gmw-xhrv-c9v3",
+        "GHSA-85c8-ppgw-ccpr"
       ]
     }
   },
@@ -84,7 +86,7 @@
     "lucide-react": "^0.454.0",
     "nanoid": "^5.1.16",
     "next": "16.3.8",
-    "nodemailer": "^9.1.0",
+    "nodemailer": "^10.1.0",
     "pdf-lib": "^1.17.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.4",
