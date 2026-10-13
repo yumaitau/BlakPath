@@ -50,6 +50,8 @@ export interface SendEmailInput {
   subject: string;
   text: string;
   html?: string;
+  /** Operator invites must not silently skip a suppressed address. */
+  failIfSuppressed?: boolean;
 }
 
 /**
@@ -63,10 +65,14 @@ export async function sendEmail({
   subject,
   text,
   html,
+  failIfSuppressed = false,
 }: SendEmailInput): Promise<void> {
   const { isSuppressed } = await import('@/domains/email/service');
   if (await isSuppressed(to)) {
     logger.info({ to: redact(to) }, 'email suppressed (bounce/complaint) — skipping');
+    if (failIfSuppressed) {
+      throw new Error('Email recipient is suppressed');
+    }
     return;
   }
   if (!env.SMTP_USER) {

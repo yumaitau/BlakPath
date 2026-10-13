@@ -1,11 +1,15 @@
+import { eq } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
+import { db } from '@/db/client';
+import { organisations } from '@/db/schema';
 import {
   requireSession,
   StepUpRequiredError,
   UnauthenticatedError,
 } from '@/lib/auth/session';
+import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
@@ -43,6 +47,17 @@ export async function withRequestTenant<T>(
     throw new NoActiveOrganisationError();
   }
 
+  const [organisation] = await db
+    .select({ staffMfaRequired: organisations.staffMfaRequired })
+    .from(organisations)
+    .where(eq(organisations.id, activeOrganisationId))
+    .limit(1);
+  // Provisioned organisations cannot be used until the person enrols a second
+  // factor. Enrolment itself goes through Better Auth, not this helper.
+  if (organisation?.staffMfaRequired) {
+    await requireStaffMfa(session.user.id);
+  }
+
   const h = await headers();
   return withTenant(
     {
@@ -72,6 +87,15 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof NoActiveOrganisationError) {
     return NextResponse.json({ error: 'No active organisation' }, { status: 409 });
+  }
+  if (error instanceof StaffMfaRequiredError) {
+    return NextResponse.json(
+      {
+        error: 'Staff multi-factor authentication is required',
+        code: 'STAFF_MFA_REQUIRED',
+      },
+      { status: 403 },
+    );
   }
   if (error instanceof ZodError) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });

@@ -1,5 +1,12 @@
 import { relations } from 'drizzle-orm';
-import { boolean, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import { primaryId, refId, rowVersion, timestamps } from './_helpers';
 import { organisationStatus } from './enums';
 
@@ -32,6 +39,12 @@ export const organisations = pgTable(
     region: text('region').notNull().default('ap-southeast-2'),
     /** Whether the public may start an application with this organisation. */
     publicApplicationsOpen: boolean('public_applications_open').notNull().default(false),
+    /**
+     * When true, staff of this organisation must enrol a passkey or authenticator
+     * before any tenant route or staff screen (other than enrolment) will run.
+     * Operator provisioning sets this. Existing tenants stay false until opted in.
+     */
+    staffMfaRequired: boolean('staff_mfa_required').notNull().default(false),
     ...timestamps,
     ...rowVersion,
   },
@@ -72,6 +85,13 @@ export const organisationSettings = pgTable(
     escalationContacts: jsonb('escalation_contacts'),
     /** Onboarding readiness checklist state. */
     readinessChecklist: jsonb('readiness_checklist'),
+    /**
+     * Identifier of the signed services agreement. Together with
+     * `agreementSignedAt` this is a human attestation that counsel's agreement
+     * is signed. The document itself is not stored here.
+     */
+    agreementReference: text('agreement_reference'),
+    agreementSignedAt: timestamp('agreement_signed_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [uniqueIndex('organisation_settings_org_unique').on(table.organisationId)],

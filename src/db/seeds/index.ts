@@ -26,7 +26,9 @@ import { SYSTEM_ROLES, SYSTEM_ROLE_SEED } from '@/lib/permissions/roles';
  * developer can sign in and exercise the app end to end.
  *
  * SAFETY: the developer bootstrap is refused when NODE_ENV=production. Seeding
- * is idempotent — re-running never duplicates rows.
+ * is idempotent — re-running never duplicates rows. Production organisations
+ * are created with `pnpm org:provision`, which does not grant the operator a
+ * tenant membership.
  */
 
 const ARGON2_OPTIONS = {

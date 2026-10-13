@@ -1,0 +1,60 @@
+# Provision one organisation. Humans apply this. Do not commit real names or
+# email addresses: replace every REPLACE_* value and give the Job a unique
+# name per slug (blakpath-provision-<slug>) before apply.
+#
+# Requires the migrate and seed Jobs to have completed (permission catalogue
+# and system role templates). The command is idempotent on slug. It emails the
+# first administrator and does not print a password or invitation token.
+# The operator is not granted a tenant membership.
+#
+# Later, as separate one-off Jobs with the same image and env, record checklist
+# items, the signed agreement reference, and activation:
+#   pnpm exec tsx scripts/provision-organisation.ts readiness --slug ... --item consent_wording --complete true --operator-email ...
+#   pnpm exec tsx scripts/provision-organisation.ts agreement --slug ... --reference MSA-... --signed-at YYYY-MM-DD --operator-email ...
+#   pnpm exec tsx scripts/provision-organisation.ts activate --slug ... --operator-email ...
+# Activation is refused until every checklist item and the agreement are recorded.
+#
+#   kubectl apply -f infra/k8s/jobs/provision-organisation.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blakpath-provision-REPLACE_SLUG
+  namespace: blakpath
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      serviceAccountName: blakpath
+      restartPolicy: Never
+      containers:
+        - name: provision-organisation
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          imagePullPolicy: IfNotPresent
+          command:
+            - pnpm
+            - exec
+            - tsx
+            - scripts/provision-organisation.ts
+            - provision
+            - --legal-name
+            - REPLACE_LEGAL_NAME
+            - --slug
+            - REPLACE_SLUG
+            - --type
+            - council
+            - --admin-email
+            - REPLACE_ADMIN_EMAIL
+            - --operator-email
+            - REPLACE_OPERATOR_EMAIL
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi

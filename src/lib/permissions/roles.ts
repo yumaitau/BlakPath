@@ -260,3 +260,20 @@ export function permissionsForRole(slug: SystemRoleSlug): readonly Permission[] 
 export function isSystemRoleSlug(value: string): value is SystemRoleSlug {
   return Object.prototype.hasOwnProperty.call(SYSTEM_ROLES, value);
 }
+
+/**
+ * May this role be attached to a membership in `organisationId`?
+ *
+ * Platform operator is never assignable: it holds no tenant data permissions
+ * and must not be cloned into a tenant. A role owned by another organisation
+ * is not assignable. System templates (null organisation) remain assignable so
+ * tenants that have not cloned roles can still use the catalogue.
+ */
+export function isRoleAssignableToOrganisation(
+  role: { organisationId: string | null; isSystem: boolean; slug: string },
+  organisationId: string,
+): boolean {
+  if (role.slug === 'platform-operator') return false;
+  if (role.organisationId === organisationId) return true;
+  return role.organisationId === null && role.isSystem;
+}

@@ -232,6 +232,11 @@ export type AuditAction =
   | 'integration.call_failed'
   // Admin / configuration.
   | 'admin.organisation_updated'
+  | 'admin.organisation_provisioned'
+  | 'admin.organisation_invite_resent'
+  | 'admin.readiness_recorded'
+  | 'admin.agreement_recorded'
+  | 'admin.organisation_activated'
   | 'admin.settings_updated'
   | 'admin.feature_flag_changed'
   | 'admin.domain_added'

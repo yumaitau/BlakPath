@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne } from 'drizzle-orm';
 import { hash as argon2Hash } from '@node-rs/argon2';
 import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
@@ -24,6 +24,7 @@ import { queueTenantEmail } from '@/lib/email/queue';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
+import { isRoleAssignableToOrganisation } from '@/lib/permissions/roles';
 import { AuthorizationError, isAuthorizationError } from '@/lib/permissions/errors';
 import { requireTenantContext } from '@/lib/tenancy/context';
 
@@ -196,23 +197,22 @@ async function activeAdministratorCount(organisationId: string): Promise<number>
 async function loadAssignableRole(
   roleId: string,
 ): Promise<AssignableRole & { slug: string }> {
+  const scope = currentScope();
   const [role] = await db
     .select({
       id: roles.id,
       name: roles.name,
       description: roles.description,
       slug: roles.slug,
+      organisationId: roles.organisationId,
+      isSystem: roles.isSystem,
     })
     .from(roles)
-    .where(
-      and(
-        eq(roles.id, roleId),
-        eq(roles.isSystem, true),
-        ne(roles.slug, 'platform-operator'),
-      ),
-    )
+    .where(eq(roles.id, roleId))
     .limit(1);
-  if (!role) throw new AuthorizationError('POLICY_DENIED');
+  if (!role || !isRoleAssignableToOrganisation(role, scope.organisationId)) {
+    throw new AuthorizationError('POLICY_DENIED');
+  }
   return role;
 }
 
@@ -293,11 +293,35 @@ export async function listManagedMembers(): Promise<ManagedMember[]> {
 
 export async function listAssignableRoles(): Promise<AssignableRole[]> {
   assertManage();
-  return db
-    .select({ id: roles.id, name: roles.name, description: roles.description })
+  const scope = currentScope();
+  const columns = {
+    id: roles.id,
+    name: roles.name,
+    description: roles.description,
+    slug: roles.slug,
+  };
+  const tenantRoles = await db
+    .select(columns)
     .from(roles)
-    .where(and(eq(roles.isSystem, true), ne(roles.slug, 'platform-operator')))
+    .where(eq(roles.organisationId, scope.organisationId))
     .orderBy(roles.name);
+  const source =
+    tenantRoles.length > 0
+      ? tenantRoles
+      : await db
+          .select(columns)
+          .from(roles)
+          .where(
+            and(
+              isNull(roles.organisationId),
+              eq(roles.isSystem, true),
+              ne(roles.slug, 'platform-operator'),
+            ),
+          )
+          .orderBy(roles.name);
+  return source
+    .filter((role) => role.slug !== 'platform-operator')
+    .map(({ id, name, description }) => ({ id, name, description }));
 }
 
 export async function listMembershipInvitations(): Promise<

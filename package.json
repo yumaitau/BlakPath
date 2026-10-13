@@ -50,6 +50,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/db/seeds/index.ts",
+    "org:provision": "tsx scripts/provision-organisation.ts",
     "worker": "tsx worker/index.ts",
     "worker:dev": "tsx watch worker/index.ts"
   },
