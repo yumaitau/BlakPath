@@ -308,6 +308,17 @@ const reminderProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Key health. Describes the tenant CMK and decrypts the stored canary.
+ * A state change notifies tenant admins and on-call. This does not read
+ * records and does not decide anything about a person.
+ */
+const keyHealthProcessor: ProcessorFn = async (job) => {
+  const { organisationId, correlationId } = job.data;
+  const { checkTenantKeyHealth } = await import('@/domains/organisation-keys/health');
+  await checkTenantKeyHealth({ organisationId, correlationId });
+};
+
+/**
  * Parse the payload and require an active organisation before the processor
  * opens a tenant scope. A rejected job returns normally so BullMQ does not
  * retry it.
@@ -336,6 +347,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Webhook]: withActiveTenant(webhookProcessor),
   [QueueName.Reminder]: withActiveTenant(reminderProcessor),
   [QueueName.EncryptionBackfill]: withActiveTenant(encryptionBackfillProcessor),
+  [QueueName.KeyHealth]: withActiveTenant(keyHealthProcessor),
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

@@ -27,6 +27,7 @@ export enum QueueName {
   Webhook = 'webhook',
   Reminder = 'reminder',
   EncryptionBackfill = 'encryption-backfill',
+  KeyHealth = 'key-health',
 }
 
 /** Base shape every job payload must satisfy: it is bound to one tenant. */

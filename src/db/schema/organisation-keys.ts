@@ -8,7 +8,11 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { organisationId as organisationIdCol, primaryId, timestamps } from './_helpers';
-import { keyCustodyMode, organisationKeyStatus } from './enums';
+import {
+  keyCustodyMode,
+  organisationKeyStatus,
+  organisationKeyValidationStatus,
+} from './enums';
 import { organisations } from './tenancy';
 
 /**
@@ -21,7 +25,10 @@ import { organisations } from './tenancy';
  * not stored here).
  *
  * Status changes are appended to the platform audit chain. A status other than
- * `active` means the application must fail closed for that tenant.
+ * `active` means the application must fail closed for that tenant. A row stays
+ * `pending_validation` until the handshake passes. `canaryCiphertext` is the
+ * wrapped data key from that handshake (never the plaintext) and is what the
+ * health job decrypts.
  */
 export const organisationKeys = pgTable(
   'organisation_keys',
@@ -35,6 +42,17 @@ export const organisationKeys = pgTable(
     kmsKeyArn: text('kms_key_arn').notNull(),
     keyVersion: integer('key_version').notNull().default(1),
     status: organisationKeyStatus('status').notNull().default('active'),
+    validationStatus: organisationKeyValidationStatus('validation_status')
+      .notNull()
+      .default('pending'),
+    validatedAt: timestamp('validated_at', { withTimezone: true }),
+    /** Short failure code from the handshake. Not a KMS message and not key material. */
+    validationFailure: text('validation_failure'),
+    /** Base64 KMS ciphertext blob from the passing handshake. Not a plaintext DEK. */
+    canaryCiphertext: text('canary_ciphertext'),
+    lastHealthAt: timestamp('last_health_at', { withTimezone: true }),
+    /** Last DescribeKey state, or a decrypt failure name. Not key material. */
+    lastHealthState: text('last_health_state'),
     /** True when an escrow copy of the key material is held under dual control. */
     escrow: boolean('escrow').notNull().default(false),
     /**

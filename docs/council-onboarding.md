@@ -34,11 +34,21 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
   must match role slugs. `organisation-admin` stays unavailable unless the
   credential is created with `allowOrganisationAdmin: true`.
 
+## 2b. Encryption key
+
+1. Client deploys `infra/client-kms` in their account, or an operator applies
+   `infra/aws/tenant-cmk` for a BlakPath-managed key. See
+   `docs/client-key-onboarding.md`.
+2. An organisation admin steps up and `POST /api/organisation-keys` with the
+   key ARN. The handshake must pass, including the wrong-context refusal.
+3. Do not mark the organisation active until that validation has passed.
+
 ## 3. Go live
 
 1. Complete `docs/production-readiness.md` release gate in exact EKS images.
 2. Run EKS restore drill (`docs/eks-runbook.md`), attach record.
-3. Flip status to `active`, open `publicApplicationsOpen` when ready.
+3. `POST /api/organisation/activation` (step-up). It refuses unless the key
+   is validated. Then open `publicApplicationsOpen` when ready.
 4. Confirm audit chain clean, alarms firing to on-call, SES suppression flow
    wired (`POST /api/email/events` checks the pinned SNS topic).
 
