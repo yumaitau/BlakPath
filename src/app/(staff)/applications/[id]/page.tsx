@@ -13,6 +13,10 @@ import {
   type PanelDecision,
 } from '@/components/certificates/certificate-panel';
 import {
+  FamilyLinksPanel,
+  type FamilyLinksPanelProps,
+} from '@/components/applications/family-links-panel';
+import {
   availableActions,
   getApplicationCaseRecord,
   permissionsForAction,
@@ -21,6 +25,7 @@ import {
 import { listCertificates } from '@/domains/certificates';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
+import { listFamilyLinks, loadDeceasedNameWarning } from '@/domains/family-links';
 import { listReviewsForApplication } from '@/domains/reviews';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/check';
@@ -28,6 +33,7 @@ import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/che
 interface LoadedData {
   reference: string;
   workspace: ApplicationCaseWorkspaceProps;
+  familyLinks: FamilyLinksPanelProps;
   governance: CaseGovernanceWorkspaceProps;
   decisions: PanelDecision[];
   certificates: PanelCertificate[];
@@ -57,15 +63,25 @@ export default async function ApplicationDetailPage({
 
   try {
     data = await withRequestTenant(async (ctx) => {
-      const [record, evidence, evidenceRequests, reviews, decisions, certificates] =
-        await Promise.all([
-          getApplicationCaseRecord(id),
-          listForApplication(id),
-          listRequestsForApplication(id),
-          listReviewsForApplication(id),
-          listDecisions(id),
-          listCertificates(id),
-        ]);
+      const [
+        record,
+        evidence,
+        evidenceRequests,
+        reviews,
+        decisions,
+        certificates,
+        familyLinks,
+        deceasedWarning,
+      ] = await Promise.all([
+        getApplicationCaseRecord(id),
+        listForApplication(id),
+        listRequestsForApplication(id),
+        listReviewsForApplication(id),
+        listDecisions(id),
+        listCertificates(id),
+        listFamilyLinks(id),
+        loadDeceasedNameWarning(),
+      ]);
       const subject = subjectFromContext(ctx);
       const application = record.application;
       const decisionDetails = await Promise.all(
@@ -125,6 +141,28 @@ export default async function ApplicationDetailPage({
             uploadEvidence:
               application.applicantUserId === ctx.userId &&
               hasPermission(subject, 'evidence:upload-own'),
+          },
+        },
+        familyLinks: {
+          applicationId: id,
+          currentUserId: ctx.userId,
+          deceasedWarning,
+          links: familyLinks.map((link) => ({
+            id: link.id,
+            relationship: link.relationship,
+            relativeName: link.relativeName,
+            community: link.community,
+            notes: link.notes,
+            relativeDeceased: link.relativeDeceased,
+            status: link.status,
+            requestedByUserId: link.requestedByUserId,
+            decisionNote: link.decisionNote,
+            sensitiveFieldsUnreadable: link.sensitiveFieldsUnreadable,
+            createdAt: link.createdAt.toISOString(),
+          })),
+          permissions: {
+            request: hasPermission(subject, 'family-link:request'),
+            approve: hasPermission(subject, 'family-link:approve'),
           },
         },
         governance: {
@@ -208,6 +246,8 @@ export default async function ApplicationDetailPage({
         key={`case:${data.workspace.status}`}
         {...data.workspace}
       />
+
+      <FamilyLinksPanel {...data.familyLinks} />
 
       <CaseGovernanceWorkspace
         key={`governance:${data.workspace.status}`}

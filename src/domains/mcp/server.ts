@@ -6,6 +6,7 @@ import {
   type ListApplicationsInput,
 } from '@/domains/applications';
 import { listDecisions } from '@/domains/decisions';
+import { listFamilyLinks } from '@/domains/family-links';
 import { listMeetings } from '@/domains/meetings';
 import { getOrganisationStats } from '@/domains/dashboard';
 import { findTool, MCP_TOOLS } from './tools';
@@ -98,6 +99,24 @@ async function callTool(
           status: application.status,
           priority: application.priority,
         });
+      }
+      case 'list_family_links': {
+        const applicationId = asString(args.applicationId);
+        if (!applicationId) return text('Missing required argument: applicationId', true);
+        const links = await listFamilyLinks(applicationId);
+        return text(
+          links.map((link) => ({
+            id: link.id,
+            relationship: link.relationship,
+            relativeName: link.relativeName,
+            community: link.community,
+            notes: link.notes,
+            relativeDeceased: link.relativeDeceased,
+            status: link.status,
+            decisionNote: link.decisionNote,
+            sensitiveFieldsUnreadable: link.sensitiveFieldsUnreadable,
+          })),
+        );
       }
       case 'list_decisions': {
         const applicationId = asString(args.applicationId);
