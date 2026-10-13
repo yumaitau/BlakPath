@@ -15,6 +15,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 5. Run `pnpm release:check` inside the exact web and worker images before
    promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+   Liveness and startup use `/api/live`. A public request to `/api/health` is
+   refused; read that report from inside the VPC.
 
 ## Secrets and keys
 

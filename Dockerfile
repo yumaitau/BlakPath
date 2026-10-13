@@ -99,9 +99,10 @@ COPY --from=build --chown=nextjs:nodejs /app/public ./public
 USER nextjs
 EXPOSE 3000
 
-# Liveness/readiness probe hitting the app health endpoint.
+# Process liveness only. Dependency failure is readiness (/api/ready), not a
+# container restart — otherwise a short RDS or Redis blip restarts the web tier.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" || exit 1
+  CMD curl -fsS "http://127.0.0.1:${PORT}/api/live" || exit 1
 
 # tini as PID 1 → forwards SIGTERM to node → Next flushes and exits cleanly.
 ENTRYPOINT ["/sbin/tini", "--"]
