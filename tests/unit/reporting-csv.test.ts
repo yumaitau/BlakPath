@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toCsv } from '@/domains/reporting/csv';
+import { toCsv, toCsvLine } from '@/domains/reporting/csv';
 import { REPORT_COLUMNS, REPORT_TYPES, isReportType } from '@/domains/reporting/reports';
 import { requestExportSchema } from '@/domains/reporting/schemas';
 
@@ -40,5 +40,12 @@ describe('report registry + schema', () => {
     expect(isReportType('everything')).toBe(false);
     expect(requestExportSchema.safeParse({ type: 'decisions' }).success).toBe(true);
     expect(requestExportSchema.safeParse({ type: 'nope' }).success).toBe(false);
+  });
+});
+
+describe('streamed csv lines', () => {
+  it('serialises a single line with its terminator, matching the document form', () => {
+    expect(toCsvLine(['a', 'b,c', null])).toBe('a,"b,c",\r\n');
+    expect(toCsv(['h'], [['x']])).toBe(toCsvLine(['h']) + toCsvLine(['x']));
   });
 });

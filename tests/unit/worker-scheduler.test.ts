@@ -7,6 +7,7 @@ vi.mock('@/lib/queues', () => ({
     AuditVerify: 'audit-verify',
     Retention: 'retention',
     Reminder: 'reminder',
+    Export: 'export',
   },
   getQueue: vi.fn(),
 }));
@@ -91,6 +92,7 @@ describe('tenant maintenance scheduler', () => {
       auditSchedulers: 2,
       retentionSchedulers: 2,
       reminderSchedulers: 0,
+      exportSchedulers: 0,
       removedSchedulers: 2,
     });
   });
@@ -116,5 +118,32 @@ describe('tenant maintenance scheduler', () => {
     ]);
     expect(report.reminderSchedulers).toBe(1);
     expect(report.removedSchedulers).toBe(0);
+  });
+
+  it('schedules export maintenance sweeps when an export queue is supplied', async () => {
+    const staleExport = tenantSchedulerId(QueueName.Export, 'closed-org');
+    const exportQueue = fakeQueue([staleExport]);
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue: fakeQueue(),
+      retentionQueue: fakeQueue(),
+      exportQueue,
+      intervals: {
+        auditVerifyMs: 60_000,
+        retentionSweepMs: 120_000,
+        exportSweepMs: 300_000,
+      },
+    });
+    expect(exportQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.Export, 'org-a'),
+        every: 300_000,
+        name: 'sweep',
+        organisationId: 'org-a',
+      },
+    ]);
+    expect(exportQueue.removed).toEqual([staleExport]);
+    expect(report.exportSchedulers).toBe(1);
+    expect(report.removedSchedulers).toBe(1);
   });
 });

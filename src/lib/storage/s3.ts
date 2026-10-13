@@ -5,11 +5,15 @@ import {
   HeadBucketCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
+  ListObjectVersionsCommand,
   type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'node:stream';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
+import { lifecycleTagging, type LifecycleClass } from './lifecycle';
 
 /**
  * S3-compatible object storage.
@@ -229,6 +233,85 @@ export async function putObjectBytes(params: {
       ...(env.S3_ENDPOINT ? {} : encryptionOptions()),
     }),
   );
+}
+
+/** S3's minimum multipart part size; also bounds streamed-upload memory. */
+const STREAM_PART_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Stream a body of unknown length to a bucket (e.g. a generated export). Small
+ * bodies go up as one PUT; larger ones as a multipart upload holding at most a
+ * couple of parts in memory. A failed multipart upload is aborted so no
+ * orphaned parts remain. A `lifecycle` class tags the object so the bucket's
+ * lifecycle rules expire it (see `./lifecycle`). The key must be
+ * tenant-namespaced by the caller.
+ */
+export async function uploadObjectStream(params: {
+  bucket: string;
+  key: string;
+  body: Readable;
+  contentType: string;
+  lifecycle?: LifecycleClass;
+}): Promise<void> {
+  const upload = new Upload({
+    client: s3,
+    params: {
+      Bucket: params.bucket,
+      Key: params.key,
+      Body: params.body,
+      ContentType: params.contentType,
+      // Tag at creation (PUT / CreateMultipartUpload) so the object is never
+      // briefly untagged and outside its lifecycle rule.
+      ...(params.lifecycle ? { Tagging: lifecycleTagging(params.lifecycle) } : {}),
+      ...(env.S3_ENDPOINT ? {} : encryptionOptions()),
+    },
+    partSize: STREAM_PART_BYTES,
+    queueSize: 2,
+    leavePartsOnError: false,
+  });
+  await upload.done();
+}
+
+/**
+ * Permanently delete EVERY version (and delete marker) of one object key. In a
+ * versioned bucket a plain delete only hides the object behind a marker, so
+ * short-lived data such as exports would otherwise linger as noncurrent
+ * versions. Returns the number of versions removed.
+ */
+export async function purgeObjectVersions(params: {
+  bucket: string;
+  key: string;
+}): Promise<number> {
+  let removed = 0;
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+  for (;;) {
+    const page = await s3.send(
+      new ListObjectVersionsCommand({
+        Bucket: params.bucket,
+        Prefix: params.key,
+        KeyMarker: keyMarker,
+        VersionIdMarker: versionIdMarker,
+      }),
+    );
+    const versions = [...(page.Versions ?? []), ...(page.DeleteMarkers ?? [])].filter(
+      // Prefix also matches longer keys (`a.csv` vs `a.csv.bak`); exact only.
+      (v) => v.Key === params.key && v.VersionId,
+    );
+    for (const v of versions) {
+      await s3.send(
+        new DeleteObjectCommand({
+          Bucket: params.bucket,
+          Key: params.key,
+          VersionId: v.VersionId,
+        }),
+      );
+      removed += 1;
+    }
+    if (!page.IsTruncated) return removed;
+    keyMarker = page.NextKeyMarker;
+    versionIdMarker = page.NextVersionIdMarker;
+  }
 }
 
 /** Delete a single object (e.g. removing an infected or rejected upload). */

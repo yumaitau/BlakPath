@@ -207,6 +207,7 @@ export type AuditAction =
   | 'export.generated'
   | 'export.downloaded'
   | 'export.failed'
+  | 'export.expired'
   // Legacy data import.
   | 'import.completed'
   // Retention / lifecycle of data.

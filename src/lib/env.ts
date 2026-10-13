@@ -101,6 +101,7 @@ const serverSchema = z
     AUDIT_VERIFY_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     REMINDER_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
+    EXPORT_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
 
     // Feature toggles

@@ -190,12 +190,16 @@ export const certificateStatus = pgEnum('certificate_status', [
 /** What a retention policy does to a record once it is past its retention period. */
 export const retentionAction = pgEnum('retention_action', ['purge', 'anonymise']);
 
-/** Lifecycle of an export request. */
+/**
+ * Lifecycle of an export request. `expired` means the download window closed
+ * and the stored file (every object version) has been removed.
+ */
 export const exportStatus = pgEnum('export_status', [
   'pending',
   'processing',
   'ready',
   'failed',
+  'expired',
 ]);
 
 /** Delivery state of a single webhook dispatch. */
