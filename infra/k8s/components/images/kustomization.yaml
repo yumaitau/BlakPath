@@ -1,0 +1,16 @@
+# Sole image pin for infra/k8s. Deployments and Jobs name the repository only;
+# this component supplies the digest. The two zero digests are not ECR
+# imageDigests — replace them before apply or the pods will not pull.
+#
+# Prefer the digest of tag 4676c43 for both repositories (that commit contains
+# invite-only accounts and KMS-sealed certificates). If blakpath/app has no
+# 4676c43 tag, use 538319c for the app only. Do not pin 7350f7c.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+images:
+  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: clamav/clamav-debian
+    digest: sha256:1d4083fccfcd485cdaeee593db7655c923afdb8ed528e828d03e1c8b1e351bec

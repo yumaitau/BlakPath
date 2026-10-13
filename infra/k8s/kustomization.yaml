@@ -8,10 +8,9 @@ resources:
   - externalsecret.yaml
   - web-deployment.yaml
   - worker-deployment.yaml
+  - jobs/migrate.yaml
+  - jobs/seed.yaml
   - service-ingress.yaml
   - autoscaling.yaml
-images:
-  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
-    newTag: 7350f7c
-  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
-    newTag: 7350f7c
+components:
+  - components/images

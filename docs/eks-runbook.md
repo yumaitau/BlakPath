@@ -5,13 +5,26 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 ## Deploy
 
-1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
+1. Build web + worker images and push them to ECR in ap-southeast-2.
+   `infra/aws/ecr-repositories.example.yaml` sets `ImageTagMutability` to
+   `IMMUTABLE` on `blakpath/app` and `blakpath/worker`. Repositories that
+   already exist are not created again; set tag mutability to `IMMUTABLE` on
+   those repositories (or import them into the stack) before relying on it.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
    `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`.
 3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
-   after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
+4. Set the app and worker digests in
+   `infra/k8s/components/images/kustomization.yaml` (the only image pin).
+   Copy each `imageDigest` from ECR. Prefer tag `4676c43` for both
+   repositories; if the app repository has no such tag, use `538319c` for the
+   app only. Do not pin `7350f7c`. Do not apply while either BlakPath digest
+   is still 64 zeros. Then apply
+   `kubectl kustomize infra/k8s | kubectl apply -f -`
+   after replacing the host, role ARNs and WAF ACL ARN.
+   Migrate and seed Jobs are in that build and use the worker digest.
+   Delete a finished Job before applying a new digest; its pod template is
+   immutable.
 5. Run `pnpm release:check` inside the exact web and worker images before
    promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
