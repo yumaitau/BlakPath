@@ -9,6 +9,7 @@ resources:
   - web-deployment.yaml
   - worker-deployment.yaml
   - service-ingress.yaml
+  - network-policy.yaml
   - autoscaling.yaml
 images:
   - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app

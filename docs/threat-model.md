@@ -148,6 +148,8 @@ When something goes wrong, BlakPath **denies rather than exposes**:
 
 - Cultural governance and the correctness of human determinations sit with the
   organisation; BlakPath assures process integrity, not the merits of a decision.
-- Infrastructure hardening (network policy, secret management via KMS, backups,
-  patching) is assumed to be enforced in the `ap-southeast-2` deployment
-  environment and is out of scope for this application-level model.
+- Namespace network policy is defined in `infra/k8s/network-policy.yaml`
+  (default deny). It takes effect only after the EKS Auto Mode controller is
+  enabled and the manifests are applied (`docs/eks-runbook.md`). Secret
+  management via KMS, backups and patching are still operator responsibilities
+  in the `ap-southeast-2` deployment.

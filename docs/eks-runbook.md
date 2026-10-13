@@ -14,7 +14,64 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
 5. Run `pnpm release:check` inside the exact web and worker images before
    promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
-6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+6. Enable network policy, then apply the manifests. See below.
+7. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+   From a pod in another namespace, confirm it cannot open BlakPath ports.
+
+## Network policy
+
+The namespace is default-deny (`infra/k8s/network-policy.yaml`). Nothing is
+enforced until the controller is on. This cluster is shared, so do not set
+the NodeClass `networkPolicy` field to `DefaultDeny` — that drops every pod
+on the node pool. Leave it `DefaultAllow`. BlakPath deny comes from the
+namespace policies. `networkPolicyEventLogs: Enabled` on that NodeClass is
+optional.
+
+1. Merge the controller flag. Do not replace the ConfigMap if it already
+   holds other keys:
+
+   ```bash
+   kubectl -n kube-system patch configmap amazon-vpc-cni --type merge \
+     -p '{"data":{"enable-network-policy-controller":"true"}}'
+   ```
+
+   The desired key is also in `infra/k8s/cluster/enable-network-policy.yaml`.
+
+2. Confirm the cluster service CIDR. CoreDNS on Auto Mode is the `.10`
+   address of that CIDR (`172.20.0.10` or `10.100.0.10` in the policy). If
+   this cluster uses another CIDR, change `blakpath-dns` before apply.
+3. Narrow the worker and job RFC1918 blocks to the RDS, ElastiCache and VPC
+   endpoint subnet CIDRs. The checked-in ranges are wide enough for a first
+   apply in `ap-southeast-2` and are not the final boundary.
+4. Apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
+   and `kubectl kustomize infra/k8s/cluster` only as a merge, per step 1.
+
+Allows, and nothing else:
+
+- ALB to web TCP 3000 (service port is 3000, same as the container).
+- Web and worker to ClamAV TCP 3310. No other pod.
+- DNS to the Auto Mode CoreDNS address, and to `kube-system` on port 53.
+- Web and worker to the Pod Identity agent `169.254.170.23:80`. IMDS stays
+  closed.
+- Web, by DNS name, to RDS, ElastiCache, S3, KMS, Secrets Manager, STS, SES,
+  the SNS subscription confirm host, PaperBoy and Entra. No open internet.
+- Worker to those same private ports, plus public TCP 443 and 587 outside
+  the VPC. Tenant webhooks are HTTPS and are not a fixed host list, so this
+  is the only general egress, and only the worker has it. Private webhook
+  targets are denied.
+- ClamAV to `database.clamav.net` and `current.cvd.clamav.net` on TCP 443.
+- Migrate and seed jobs to DNS, Pod Identity and Postgres only.
+
+Check after apply:
+
+- A debug pod outside `blakpath` cannot connect to web:3000 or ClamAV:3310.
+- Web `/api/ready` behind the ALB is 200 when Postgres, Redis and S3 are up.
+- A worker job (scan or email) completes.
+- A worker webhook to a public HTTPS host succeeds. The same URL from web
+  or ClamAV does not. A webhook aimed at a VPC address does not.
+
+Add the OTLP collector hostname to `blakpath-web-egress` before tracing is
+required. Export failure does not fail readiness.
 
 ## Secrets and keys
 

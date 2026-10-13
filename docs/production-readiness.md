@@ -23,6 +23,9 @@ region.
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Enable the EKS Auto Mode network policy controller and apply
+      `infra/k8s/network-policy.yaml`. A pod outside `blakpath` must not reach
+      BlakPath ports. Steps and the allow list are in `docs/eks-runbook.md`.
 
 ## Signals and response
 
