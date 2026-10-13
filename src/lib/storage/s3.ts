@@ -5,9 +5,11 @@ import {
   HeadBucketCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
   type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'node:stream';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
 
@@ -103,9 +105,21 @@ export interface PresignedUpload {
 }
 
 /**
+ * Headers bound into the upload signature. The presigner treats `content-type`
+ * as unsignable by default, so it is opted back in explicitly; `content-length`
+ * is listed for clarity (the SDK already signs it). S3 then refuses a PUT whose
+ * type or length differs from what was declared.
+ */
+const SIGNED_UPLOAD_HEADERS: ReadonlySet<string> = new Set([
+  'content-type',
+  'content-length',
+]);
+
+/**
  * Presign a short-lived PUT into the QUARANTINE bucket under the tenant's
- * namespace. Content type and length are pinned so the client cannot upload a
- * different object than declared.
+ * namespace. Content type and length are signed so the client cannot upload a
+ * different object than declared. The returned `headers` must be sent verbatim
+ * with the PUT.
  */
 export async function presignUpload(params: {
   organisationId: string;
@@ -122,17 +136,23 @@ export async function presignUpload(params: {
     ContentLength: params.contentLength,
     ...encryption,
   });
-  const url = await getSignedUrl(s3, command, { expiresIn: PRESIGN_TTL_SECONDS });
+  const url = await getSignedUrl(s3, command, {
+    expiresIn: PRESIGN_TTL_SECONDS,
+    signableHeaders: new Set(SIGNED_UPLOAD_HEADERS),
+  });
   return {
     url,
-    headers: encryption
-      ? {
-          'x-amz-server-side-encryption': encryption.ServerSideEncryption,
-          ...(encryption.SSEKMSKeyId
-            ? { 'x-amz-server-side-encryption-aws-kms-key-id': encryption.SSEKMSKeyId }
-            : {}),
-        }
-      : {},
+    headers: {
+      'Content-Type': params.contentType,
+      ...(encryption
+        ? {
+            'x-amz-server-side-encryption': encryption.ServerSideEncryption,
+            ...(encryption.SSEKMSKeyId
+              ? { 'x-amz-server-side-encryption-aws-kms-key-id': encryption.SSEKMSKeyId }
+              : {}),
+          }
+        : {}),
+    },
     bucket: QUARANTINE_BUCKET,
     key: params.key,
     expiresIn: PRESIGN_TTL_SECONDS,
@@ -164,10 +184,16 @@ export async function presignDownload(params: {
 /**
  * Promote a scanned-clean object from QUARANTINE to EVIDENCE. Copies within the
  * same tenant namespace, re-applies SSE, then deletes the quarantine copy.
+ *
+ * The stored Content-Type is replaced with the type verified from magic bytes,
+ * never the client-declared one. `ifMatch` pins the copy to the exact object
+ * version that was verified and scanned; a re-uploaded object fails the copy.
  */
 export async function moveQuarantineToEvidence(params: {
   organisationId: string;
   key: string;
+  contentType: string;
+  ifMatch: string;
 }): Promise<{ bucket: string; key: string }> {
   assertOwnedKey(params.organisationId, params.key);
   const encryption = env.S3_ENDPOINT ? undefined : encryptionOptions();
@@ -176,8 +202,10 @@ export async function moveQuarantineToEvidence(params: {
       Bucket: EVIDENCE_BUCKET,
       Key: params.key,
       CopySource: `/${QUARANTINE_BUCKET}/${params.key}`,
+      CopySourceIfMatch: params.ifMatch,
+      ContentType: params.contentType,
       ...encryption,
-      MetadataDirective: 'COPY',
+      MetadataDirective: 'REPLACE',
     }),
   );
   await s3.send(new DeleteObjectCommand({ Bucket: QUARANTINE_BUCKET, Key: params.key }));
@@ -188,10 +216,48 @@ export async function moveQuarantineToEvidence(params: {
   return { bucket: EVIDENCE_BUCKET, key: params.key };
 }
 
+/** Size, stored type and ETag of an object, without reading its body. */
+export async function headObject(params: { bucket: string; key: string }): Promise<{
+  contentLength: number | undefined;
+  contentType: string | undefined;
+  etag: string | undefined;
+}> {
+  const result = await s3.send(
+    new HeadObjectCommand({ Bucket: params.bucket, Key: params.key }),
+  );
+  return {
+    contentLength: result.ContentLength,
+    contentType: result.ContentType,
+    etag: result.ETag,
+  };
+}
+
 /**
- * Read a whole object into memory. Used by the malware scanner to stream bytes
- * to ClamAV. Callers must bound object size upstream (see the evidence size
- * limit) so this never loads an unbounded payload.
+ * Open an object's body as a Node stream, so large objects are never held in
+ * memory. `ifMatch` pins the read to a specific ETag (S3 answers 412 if the
+ * object has since been replaced). The caller must consume or destroy the
+ * stream.
+ */
+export async function getObjectStream(params: {
+  bucket: string;
+  key: string;
+  ifMatch?: string;
+}): Promise<Readable> {
+  const result = await s3.send(
+    new GetObjectCommand({
+      Bucket: params.bucket,
+      Key: params.key,
+      ...(params.ifMatch ? { IfMatch: params.ifMatch } : {}),
+    }),
+  );
+  if (!result.Body) throw new Error('Object has no body');
+  // In Node the SDK body is an http IncomingMessage (a Readable).
+  return result.Body as Readable;
+}
+
+/**
+ * Read a whole object into memory. Only for small objects (e.g. restore-drill
+ * verification); evidence scanning streams via getObjectStream instead.
  */
 export async function getObjectBytes(params: {
   bucket: string;
