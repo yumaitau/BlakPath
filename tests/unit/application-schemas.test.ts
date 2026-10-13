@@ -38,6 +38,15 @@ describe('updateIntakeSchema', () => {
     expect(updateIntakeSchema.safeParse({}).success).toBe(false);
     expect(updateIntakeSchema.safeParse({ priority: 'high' }).success).toBe(true);
   });
+
+  it('accepts a client link on its own', () => {
+    expect(
+      updateIntakeSchema.safeParse({
+        clientId: '018f5b3a-0000-7000-8000-000000000000',
+      }).success,
+    ).toBe(true);
+    expect(updateIntakeSchema.safeParse({ clientId: 'nope' }).success).toBe(false);
+  });
 });
 
 describe('assignApplicationSchema', () => {

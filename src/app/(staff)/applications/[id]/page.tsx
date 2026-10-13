@@ -22,6 +22,7 @@ import { listCertificates } from '@/domains/certificates';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
 import { listReviewsForApplication } from '@/domains/reviews';
+import { listActiveStaff, listClients } from '@/domains/teams';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/check';
 
@@ -57,15 +58,30 @@ export default async function ApplicationDetailPage({
 
   try {
     data = await withRequestTenant(async (ctx) => {
-      const [record, evidence, evidenceRequests, reviews, decisions, certificates] =
-        await Promise.all([
-          getApplicationCaseRecord(id),
-          listForApplication(id),
-          listRequestsForApplication(id),
-          listReviewsForApplication(id),
-          listDecisions(id),
-          listCertificates(id),
-        ]);
+      const mayAssign = ctx.permissions.has('application:assign');
+      const mayLinkClient =
+        ctx.permissions.has('application:update-intake') &&
+        (ctx.permissions.has('client:read-any') ||
+          ctx.permissions.has('client:read-assigned'));
+      const [
+        record,
+        evidence,
+        evidenceRequests,
+        reviews,
+        decisions,
+        certificates,
+        staff,
+        clients,
+      ] = await Promise.all([
+        getApplicationCaseRecord(id),
+        listForApplication(id),
+        listRequestsForApplication(id),
+        listReviewsForApplication(id),
+        listDecisions(id),
+        listCertificates(id),
+        mayAssign ? listActiveStaff() : Promise.resolve([]),
+        mayLinkClient ? listClients() : Promise.resolve([]),
+      ]);
       const subject = subjectFromContext(ctx);
       const application = record.application;
       const decisionDetails = await Promise.all(
@@ -83,6 +99,12 @@ export default async function ApplicationDetailPage({
           priority: application.priority,
           status: application.status,
           assignedToCurrentUser: application.currentAssigneeUserId === ctx.userId,
+          clientId: application.clientId,
+          clients: clients.map((client) => ({
+            id: client.id,
+            displayName: client.displayName,
+          })),
+          staff,
           availableActions: actions,
           evidence: evidence.map((item) => ({
             id: item.id,

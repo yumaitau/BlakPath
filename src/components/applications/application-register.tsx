@@ -24,6 +24,11 @@ export interface RegisterParticipant {
   email: string;
 }
 
+export interface RegisterClient {
+  id: string;
+  displayName: string;
+}
+
 function label(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -32,10 +37,12 @@ function label(value: string): string {
 export function ApplicationRegister({
   applications,
   participants,
+  clients,
   canCreate,
 }: {
   applications: RegisterApplication[];
   participants: RegisterParticipant[];
+  clients: RegisterClient[];
   canCreate: boolean;
 }) {
   const router = useRouter();
@@ -43,6 +50,7 @@ export function ApplicationRegister({
   const [name, setName] = useState('');
   const [priority, setPriority] = useState('normal');
   const [applicantUserId, setApplicantUserId] = useState('');
+  const [clientId, setClientId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,6 +77,7 @@ export function ApplicationRegister({
           applicantName: name,
           priority,
           applicantUserId: applicantUserId || undefined,
+          clientId: clientId || undefined,
         }),
       });
       if (!response.ok) {
@@ -137,6 +146,26 @@ export function ApplicationRegister({
                   <p className="text-muted-foreground text-xs">
                     Linking lets the applicant view this case and upload their own
                     evidence.
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="application-client">Client record (optional)</Label>
+                  <select
+                    id="application-client"
+                    value={clientId}
+                    onChange={(event) => setClientId(event.target.value)}
+                    className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+                  >
+                    <option value="">Not linked yet</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.displayName}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-muted-foreground text-xs">
+                    Linking lets the client&apos;s team read this case. It records a human
+                    choice and does not assess identity.
                   </p>
                 </div>
                 <div className="grid gap-2">

@@ -57,12 +57,26 @@ interface WorkspacePermissions {
   uploadEvidence: boolean;
 }
 
+interface CaseClient {
+  id: string;
+  displayName: string;
+}
+
+interface CaseStaff {
+  userId: string;
+  name: string;
+  email: string;
+}
+
 export interface ApplicationCaseWorkspaceProps {
   applicationId: string;
   applicantName: string;
   priority: string;
   status: string;
   assignedToCurrentUser: boolean;
+  clientId: string | null;
+  clients: CaseClient[];
+  staff: CaseStaff[];
   availableActions: Array<{ value: string; label: string }>;
   evidence: CaseEvidence[];
   evidenceRequests: CaseRequest[];
@@ -108,6 +122,8 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const [noteBody, setNoteBody] = useState('');
   const [noteVisibility, setNoteVisibility] = useState('staff');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [clientId, setClientId] = useState(props.clientId ?? '');
+  const [assigneeUserId, setAssigneeUserId] = useState('');
 
   async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -306,6 +322,45 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               </div>
             </dl>
           )}
+          {props.permissions.updateIntake ? (
+            <form
+              className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+              aria-label="Link client"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (!clientId) return;
+                await mutate(
+                  'client',
+                  { operation: 'update_intake', clientId },
+                  'Client linked to this case.',
+                );
+              }}
+            >
+              <div className="grid gap-2">
+                <Label htmlFor="case-client">Client record</Label>
+                <select
+                  id="case-client"
+                  value={clientId}
+                  onChange={(event) => setClientId(event.target.value)}
+                  className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+                >
+                  <option value="">Not linked yet</option>
+                  {props.clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.displayName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={busy !== null || !clientId}
+              >
+                {busy === 'client' ? 'Linking…' : 'Link client'}
+              </Button>
+            </form>
+          ) : null}
         </section>
 
         <section
@@ -538,6 +593,43 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
             >
               {busy === 'assign' ? 'Assigning…' : 'Assign to me'}
             </Button>
+          ) : null}
+          {props.permissions.assign && props.staff.length > 0 ? (
+            <form
+              className="mt-4 grid gap-2"
+              aria-label="Assign case to a colleague"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (!assigneeUserId) return;
+                await mutate(
+                  'assign-other',
+                  { operation: 'assign', assigneeUserId },
+                  'Case assigned.',
+                );
+              }}
+            >
+              <Label htmlFor="case-assignee">Assign to a colleague</Label>
+              <select
+                id="case-assignee"
+                value={assigneeUserId}
+                onChange={(event) => setAssigneeUserId(event.target.value)}
+                className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+              >
+                <option value="">Choose staff</option>
+                {props.staff.map((person) => (
+                  <option key={person.userId} value={person.userId}>
+                    {person.name} ({person.email})
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={busy !== null || !assigneeUserId}
+              >
+                {busy === 'assign-other' ? 'Assigning…' : 'Assign case'}
+              </Button>
+            </form>
           ) : null}
         </section>
 

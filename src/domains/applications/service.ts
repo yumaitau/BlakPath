@@ -138,6 +138,41 @@ async function activeAssigneeIds(applicationId: string): Promise<string[]> {
   return rows.map((r) => r.assigneeUserId);
 }
 
+/** Client must already belong to the active tenant. Returns the owned id. */
+async function resolveClientId(clientId: string): Promise<string> {
+  const scope = currentScope();
+  const [client] = await scope.db
+    .select({ id: clients.id })
+    .from(clients)
+    .where(
+      scope.where(
+        clients.organisationId,
+        eq(clients.id, clientId),
+        isNull(clients.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!client) throw new AuthorizationError('POLICY_DENIED');
+  return client.id;
+}
+
+/** Assignee must be an active member of the active tenant. */
+async function assertActiveAssignee(userId: string): Promise<void> {
+  const scope = currentScope();
+  const [member] = await scope.db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      scope.where(
+        memberships.organisationId,
+        eq(memberships.userId, userId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .limit(1);
+  if (!member) throw new AuthorizationError('POLICY_DENIED');
+}
+
 /** Load user ids in the team owning the application's client, if any. */
 async function clientTeamMemberIds(application: ApplicationRow): Promise<string[]> {
   if (!application.clientId) return [];
@@ -281,22 +316,7 @@ export async function createApplication(
 
   // Optional client link must belong to this tenant, else the matter could
   // silently attach to another tenant's person record.
-  let clientId: string | null = null;
-  if (input.clientId) {
-    const [client] = await scope.db
-      .select({ id: clients.id })
-      .from(clients)
-      .where(
-        scope.where(
-          clients.organisationId,
-          eq(clients.id, input.clientId),
-          isNull(clients.deletedAt),
-        ),
-      )
-      .limit(1);
-    if (!client) throw new AuthorizationError('POLICY_DENIED');
-    clientId = client.id;
-  }
+  const clientId = input.clientId ? await resolveClientId(input.clientId) : null;
 
   const id = uuidv7();
   const reference = makeReference(id);
@@ -335,8 +355,8 @@ export async function createApplication(
     resourceId: id,
     result: 'success',
     after: {
-      data: { reference, status: 'draft', priority: input.priority },
-      allow: ['reference', 'status', 'priority'],
+      data: { reference, status: 'draft', priority: input.priority, clientId },
+      allow: ['reference', 'status', 'priority', 'clientId'],
     },
   });
 
@@ -360,6 +380,8 @@ export async function updateIntake(
   if (input.applicantName !== undefined) patch.applicantName = input.applicantName;
   if (input.priority !== undefined) patch.priority = input.priority;
   if (input.intake !== undefined) patch.intake = input.intake;
+  if (input.clientId !== undefined)
+    patch.clientId = await resolveClientId(input.clientId);
 
   const updated = await scope.db
     .update(applications)
@@ -377,12 +399,17 @@ export async function updateIntake(
       data: {
         applicantName: existing.applicantName,
         priority: existing.priority,
+        clientId: existing.clientId,
       },
-      allow: ['applicantName', 'priority'],
+      allow: ['applicantName', 'priority', 'clientId'],
     },
     after: {
-      data: { applicantName: row.applicantName, priority: row.priority },
-      allow: ['applicantName', 'priority'],
+      data: {
+        applicantName: row.applicantName,
+        priority: row.priority,
+        clientId: row.clientId,
+      },
+      allow: ['applicantName', 'priority', 'clientId'],
     },
   });
 
@@ -400,6 +427,7 @@ export async function assignApplication(
   const input = assignApplicationSchema.parse(rawInput);
   const existing = await loadApplication(id);
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  await assertActiveAssignee(input.assigneeUserId);
 
   const scope = currentScope();
   const priorAssignees = await activeAssigneeIds(id);

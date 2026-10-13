@@ -1,5 +1,13 @@
 import { and, asc, eq, exists, isNull, or } from 'drizzle-orm';
-import { clients, groupMemberships, groups, teamMemberships, teams } from '@/db/schema';
+import {
+  clients,
+  groupMemberships,
+  groups,
+  memberships,
+  teamMemberships,
+  teams,
+  users,
+} from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -17,12 +25,16 @@ import {
   createClientSchema,
   createGroupSchema,
   createTeamSchema,
+  removeGroupMemberSchema,
+  removeTeamMemberSchema,
   type AddGroupMemberInput,
   type AddTeamMemberInput,
   type AssignClientInput,
   type CreateClientInput,
   type CreateGroupInput,
   type CreateTeamInput,
+  type RemoveGroupMemberInput,
+  type RemoveTeamMemberInput,
 } from './schemas';
 
 /**
@@ -35,12 +47,75 @@ export type TeamRow = typeof teams.$inferSelect;
 export type GroupRow = typeof groups.$inferSelect;
 export type ClientRow = typeof clients.$inferSelect;
 
+/** Active staff member an administrator or intake officer may pick. */
+export interface StaffOption {
+  userId: string;
+  name: string;
+  email: string;
+}
+
+export interface TeamMemberView {
+  teamId: string;
+  userId: string;
+  role: string;
+  name: string;
+  email: string;
+}
+
+export interface GroupMemberView {
+  groupId: string;
+  userId: string;
+  name: string;
+  email: string;
+}
+
 const TEAM_READ = ['team:manage', 'membership:manage'] as const;
+const TEAM_PICK = [...TEAM_READ, 'client:assign-team'] as const;
+const STAFF_DIRECTORY = ['team:manage', 'group:manage', 'application:assign'] as const;
 const CLIENT_READ = ['client:read-any', 'client:read-assigned'] as const;
 
 function must<T>(row: T | undefined, what: string): T {
   if (row === undefined) throw new Error(`Expected ${what} from database.`);
   return row;
+}
+
+/** Team must already belong to the active tenant. */
+async function assertTeam(teamId: string): Promise<void> {
+  const scope = currentScope();
+  const [team] = await scope.db
+    .select({ id: teams.id })
+    .from(teams)
+    .where(scope.where(teams.organisationId, eq(teams.id, teamId)))
+    .limit(1);
+  if (!team) throw new AuthorizationError('POLICY_DENIED');
+}
+
+/** Group must already belong to the active tenant. */
+async function assertGroup(groupId: string): Promise<void> {
+  const scope = currentScope();
+  const [group] = await scope.db
+    .select({ id: groups.id })
+    .from(groups)
+    .where(scope.where(groups.organisationId, eq(groups.id, groupId)))
+    .limit(1);
+  if (!group) throw new AuthorizationError('POLICY_DENIED');
+}
+
+/** User must hold an active membership of the active tenant. */
+async function assertActiveMember(userId: string): Promise<void> {
+  const scope = currentScope();
+  const [member] = await scope.db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      scope.where(
+        memberships.organisationId,
+        eq(memberships.userId, userId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .limit(1);
+  if (!member) throw new AuthorizationError('POLICY_DENIED');
 }
 
 export async function createTeam(raw: CreateTeamInput): Promise<TeamRow> {
@@ -85,6 +160,20 @@ export async function addTeamMember(raw: AddTeamMemberInput) {
   requirePermission(subjectFromContext(ctx), 'team:manage');
   const input = addTeamMemberSchema.parse(raw);
   const scope = currentScope();
+  await assertTeam(input.teamId);
+  await assertActiveMember(input.userId);
+  const [existing] = await scope.db
+    .select()
+    .from(teamMemberships)
+    .where(
+      scope.where(
+        teamMemberships.organisationId,
+        eq(teamMemberships.teamId, input.teamId),
+        eq(teamMemberships.userId, input.userId),
+      ),
+    )
+    .limit(1);
+  if (existing) return existing;
   const inserted = await scope.db
     .insert(teamMemberships)
     .values(
@@ -101,8 +190,81 @@ export async function addTeamMember(raw: AddTeamMemberInput) {
     resourceType: 'team',
     resourceId: input.teamId,
     result: 'success',
+    after: {
+      data: { userId: input.userId, role: row.role },
+      allow: ['userId', 'role'],
+    },
   });
   return row;
+}
+
+export async function removeTeamMember(raw: RemoveTeamMemberInput) {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'team:manage');
+  const input = removeTeamMemberSchema.parse(raw);
+  const scope = currentScope();
+  const removed = await scope.db
+    .delete(teamMemberships)
+    .where(
+      scope.where(
+        teamMemberships.organisationId,
+        eq(teamMemberships.teamId, input.teamId),
+        eq(teamMemberships.userId, input.userId),
+      ),
+    )
+    .returning();
+  if (!removed[0]) throw new AuthorizationError('POLICY_DENIED');
+  await recordAudit({
+    action: 'team.member_removed',
+    resourceType: 'team',
+    resourceId: input.teamId,
+    result: 'success',
+    after: { data: { userId: input.userId }, allow: ['userId'] },
+  });
+  return removed[0];
+}
+
+export async function listTeamMembers(): Promise<TeamMemberView[]> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), TEAM_READ);
+  const scope = currentScope();
+  return scope.db
+    .select({
+      teamId: teamMemberships.teamId,
+      userId: teamMemberships.userId,
+      role: teamMemberships.role,
+      name: users.name,
+      email: users.email,
+    })
+    .from(teamMemberships)
+    .innerJoin(users, eq(users.id, teamMemberships.userId))
+    .where(scope.where(teamMemberships.organisationId))
+    .orderBy(asc(users.name));
+}
+
+/** Teams an intake officer may assign a client to, plus administrators. */
+export async function listTeamOptions(): Promise<Array<Pick<TeamRow, 'id' | 'name'>>> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), TEAM_PICK);
+  const scope = currentScope();
+  return scope.db
+    .select({ id: teams.id, name: teams.name })
+    .from(teams)
+    .where(scope.where(teams.organisationId))
+    .orderBy(asc(teams.name));
+}
+
+/** Active organisation members who can be placed on a team or a case. */
+export async function listActiveStaff(): Promise<StaffOption[]> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), STAFF_DIRECTORY);
+  const scope = currentScope();
+  return scope.db
+    .select({ userId: users.id, name: users.name, email: users.email })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(scope.where(memberships.organisationId, eq(memberships.status, 'active')))
+    .orderBy(asc(users.name));
 }
 
 export async function createGroup(raw: CreateGroupInput): Promise<GroupRow> {
@@ -148,6 +310,20 @@ export async function addGroupMember(raw: AddGroupMemberInput) {
   requirePermission(subjectFromContext(ctx), 'group:manage');
   const input = addGroupMemberSchema.parse(raw);
   const scope = currentScope();
+  await assertGroup(input.groupId);
+  await assertActiveMember(input.userId);
+  const [existing] = await scope.db
+    .select()
+    .from(groupMemberships)
+    .where(
+      scope.where(
+        groupMemberships.organisationId,
+        eq(groupMemberships.groupId, input.groupId),
+        eq(groupMemberships.userId, input.userId),
+      ),
+    )
+    .limit(1);
+  if (existing) return existing;
   const inserted = await scope.db
     .insert(groupMemberships)
     .values(scope.insertValues({ groupId: input.groupId, userId: input.userId }))
@@ -158,8 +334,52 @@ export async function addGroupMember(raw: AddGroupMemberInput) {
     resourceType: 'group',
     resourceId: input.groupId,
     result: 'success',
+    after: { data: { userId: input.userId }, allow: ['userId'] },
   });
   return row;
+}
+
+export async function removeGroupMember(raw: RemoveGroupMemberInput) {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'group:manage');
+  const input = removeGroupMemberSchema.parse(raw);
+  const scope = currentScope();
+  const removed = await scope.db
+    .delete(groupMemberships)
+    .where(
+      scope.where(
+        groupMemberships.organisationId,
+        eq(groupMemberships.groupId, input.groupId),
+        eq(groupMemberships.userId, input.userId),
+      ),
+    )
+    .returning();
+  if (!removed[0]) throw new AuthorizationError('POLICY_DENIED');
+  await recordAudit({
+    action: 'group.member_removed',
+    resourceType: 'group',
+    resourceId: input.groupId,
+    result: 'success',
+    after: { data: { userId: input.userId }, allow: ['userId'] },
+  });
+  return removed[0];
+}
+
+export async function listGroupMembers(): Promise<GroupMemberView[]> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), TEAM_READ);
+  const scope = currentScope();
+  return scope.db
+    .select({
+      groupId: groupMemberships.groupId,
+      userId: groupMemberships.userId,
+      name: users.name,
+      email: users.email,
+    })
+    .from(groupMemberships)
+    .innerJoin(users, eq(users.id, groupMemberships.userId))
+    .where(scope.where(groupMemberships.organisationId))
+    .orderBy(asc(users.name));
 }
 
 export async function createClient(raw: CreateClientInput): Promise<ClientRow> {
@@ -167,6 +387,7 @@ export async function createClient(raw: CreateClientInput): Promise<ClientRow> {
   requirePermission(subjectFromContext(ctx), 'client:create');
   const input = createClientSchema.parse(raw);
   const scope = currentScope();
+  if (input.assignedTeamId) await assertTeam(input.assignedTeamId);
   const inserted = await scope.db
     .insert(clients)
     .values(
@@ -236,6 +457,7 @@ export async function assignClient(
   requirePermission(subjectFromContext(ctx), 'client:assign-team');
   const input = assignClientSchema.parse(raw);
   const scope = currentScope();
+  await assertTeam(input.assignedTeamId);
   const updated = await scope.db
     .update(clients)
     .set({ assignedTeamId: input.assignedTeamId })

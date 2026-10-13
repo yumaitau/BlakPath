@@ -36,6 +36,8 @@ export const updateIntakeSchema = z
     applicantName: applicantNameSchema.optional(),
     priority: z.enum(APPLICATION_PRIORITIES).optional(),
     intake: intakeSchema.optional(),
+    /** Link (or replace) the owning client record. Must belong to the tenant. */
+    clientId: z.uuid().optional(),
     /** Optimistic-concurrency guard: the version the caller last read. */
     expectedUpdatedAt: z.coerce.date().optional(),
   })
@@ -43,7 +45,8 @@ export const updateIntakeSchema = z
     (value) =>
       value.applicantName !== undefined ||
       value.priority !== undefined ||
-      value.intake !== undefined,
+      value.intake !== undefined ||
+      value.clientId !== undefined,
     { message: 'Provide at least one field to update.' },
   );
 export type UpdateIntakeInput = z.input<typeof updateIntakeSchema>;

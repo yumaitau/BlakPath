@@ -1,26 +1,37 @@
 import {
   ApplicationRegister,
   type RegisterApplication,
+  type RegisterClient,
   type RegisterParticipant,
 } from '@/components/applications/application-register';
 import { listApplicationParticipants, listApplications } from '@/domains/applications';
+import { listClients } from '@/domains/teams';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 
 export default async function ApplicationsPage() {
   let applications: RegisterApplication[] = [];
   let participants: RegisterParticipant[] = [];
+  let clients: RegisterClient[] = [];
   let canCreate = false;
   let unavailable = false;
   try {
     const loaded = await withRequestTenant(async (ctx) => {
       const mayCreate = ctx.permissions.has('application:create');
-      const [listed, linkedApplicants] = await Promise.all([
+      const mayListClients =
+        ctx.permissions.has('client:read-any') ||
+        ctx.permissions.has('client:read-assigned');
+      const [listed, linkedApplicants, clientRows] = await Promise.all([
         listApplications({ limit: 100 }),
         mayCreate ? listApplicationParticipants() : Promise.resolve([]),
+        mayCreate && mayListClients ? listClients() : Promise.resolve([]),
       ]);
-      return { listed, linkedApplicants, mayCreate };
+      return { listed, linkedApplicants, clientRows, mayCreate };
     });
     participants = loaded.linkedApplicants;
+    clients = loaded.clientRows.map((client) => ({
+      id: client.id,
+      displayName: client.displayName,
+    }));
     canCreate = loaded.mayCreate;
     applications = loaded.listed.items.map((application) => ({
       id: application.id,
@@ -46,6 +57,7 @@ export default async function ApplicationsPage() {
       <ApplicationRegister
         applications={applications}
         participants={participants}
+        clients={clients}
         canCreate={canCreate}
       />
     </div>
