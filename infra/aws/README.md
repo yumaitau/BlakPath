@@ -26,6 +26,13 @@ with resources owned by the production environment.
   the shared Cloudflare origin-pull CA, and must not include a private key.
 - `tenant-cmk/` is the per-tenant CMK an operator applies. It does not run
   itself. Client-account keys live in `infra/client-kms/`.
+- `escrow-vault.example.yaml` is the optional key escrow vault. Deploy it only
+  in a dedicated escrow account, never the workload account. Its RSA-4096 key
+  only decrypts sealed escrow items, under dual control (officer A enables the
+  key and reads packages; officer B decrypts). Packages sit in an Object Lock
+  (compliance) bucket. Key and bucket policies deny the workload account and
+  every principal outside the vault account; an Access Analyzer gives the
+  evidence. See [`docs/key-escrow-runbook.md`](../../docs/key-escrow-runbook.md).
 
 Network boundaries expected by these templates:
 
