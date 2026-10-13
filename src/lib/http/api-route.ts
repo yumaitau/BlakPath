@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { runWithTenantContext, type TenantContext } from '@/lib/tenancy/context';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { ApiKeyError, parseBearer, resolveApiKeyContext } from '@/domains/api-keys';
 
@@ -32,6 +33,9 @@ export async function withApiKey<T>(
 export function apiErrorResponse(error: unknown): NextResponse {
   if (error instanceof ApiKeyError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (error instanceof ConcurrencyConflictError) {
+    return NextResponse.json({ error: error.message }, { status: 409 });
   }
   if (error instanceof AuthorizationError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

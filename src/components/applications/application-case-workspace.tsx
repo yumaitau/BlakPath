@@ -11,6 +11,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -179,10 +180,12 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
+        const conflict = await readConflictMessage(response);
         setError(
-          response.status === 403
-            ? 'You do not have permission to make that change.'
-            : 'That change could not be saved. Refresh the case and try again.',
+          conflict ??
+            (response.status === 403
+              ? 'You do not have permission to make that change.'
+              : 'That change could not be saved. Refresh the case and try again.'),
         );
         return false;
       }

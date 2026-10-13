@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { cn } from '@/lib/utils';
 
 /**
@@ -74,7 +75,10 @@ export function CertificatePanel({
         return;
       }
       if (!res.ok) {
-        setError('That action could not be completed. Check your permissions.');
+        const conflict = await readConflictMessage(res);
+        setError(
+          conflict ?? 'That action could not be completed. Check your permissions.',
+        );
         return;
       }
       router.refresh();

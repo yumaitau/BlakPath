@@ -1,6 +1,14 @@
 import { and, desc, eq, exists, isNull, or, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import {
+  beforeConditionalWrite,
+  nextRowVersion,
+  takeVersionText,
+  versionedSelection,
+  versionMatches,
+} from '@/lib/concurrency/claim';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
+import {
   applications,
   applicationAssignments,
   applicationNotes,
@@ -111,15 +119,31 @@ function liveApplication(where: SQL): SQL {
 
 /** Load a single application within scope, or return null. */
 async function loadApplication(id: string): Promise<ApplicationRow | null> {
+  const loaded = await loadApplicationClaim(id);
+  return loaded?.row ?? null;
+}
+
+/**
+ * Same read as {@link loadApplication}, plus the exact `version` text the
+ * conditional update must match. One statement so status and version cannot
+ * diverge between queries.
+ */
+async function loadApplicationClaim(
+  id: string,
+): Promise<{ row: ApplicationRow; versionText: string } | null> {
   const scope = currentScope();
   const rows = await scope.db
-    .select()
+    .select(versionedSelection(applications))
     .from(applications)
     .where(
       liveApplication(scope.where(applications.organisationId, eq(applications.id, id))),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) return null;
+  const split = takeVersionText(owned);
+  if (!split) return null;
+  return { row: split.record as ApplicationRow, versionText: split.versionText };
 }
 
 /** Load the user ids with an ACTIVE assignment on an application. */
@@ -472,8 +496,9 @@ export async function transitionApplication(
   requireAny(subject, permissionsForAction(action));
 
   const input = transitionApplicationSchema.parse(rawInput);
-  const existing = await loadApplication(id);
-  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadApplicationClaim(id);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const existing = loaded.row;
 
   const from = existing.status as ApplicationStatus;
   // Throws ApplicationWorkflowError if the move is illegal from `from`.
@@ -491,11 +516,27 @@ export async function transitionApplication(
   if (action === 'close') patch.closedAt = now;
 
   const updatedRows = await scope.db.transaction(async (tx) => {
+    // Both racers pass the in-memory check. Only the update whose status and
+    // version still match the read may write; the loser rolls this transaction
+    // back, so status history cannot gain a second row for the same move.
+    await beforeConditionalWrite();
     const updated = await tx
       .update(applications)
-      .set(patch)
-      .where(scope.where(applications.organisationId, eq(applications.id, id)))
+      .set({ ...patch, version: nextRowVersion() })
+      .where(
+        scope.where(
+          applications.organisationId,
+          eq(applications.id, id),
+          eq(applications.status, from),
+          versionMatches(applications.version, loaded.versionText),
+        ),
+      )
       .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This application changed while you were working. Refresh and try again.',
+      );
+    }
 
     await tx.insert(applicationStatusHistory).values(
       scope.insertValues({
