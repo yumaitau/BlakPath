@@ -2,6 +2,7 @@ import { Worker, type ConnectionOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
 import { closeQueues, type TenantJob } from '@/lib/queues';
+import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { startTenantScheduleSync } from './scheduler';
 import { queueFailureSignal } from './operational-signals';
@@ -44,7 +45,18 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
   const worker = new Worker<TenantJob>(
     queueName,
-    async (job) => processor(job, childLogger),
+    async (job) => {
+      // Drop work for a suspended or closed organisation instead of retrying
+      // it. A lookup failure still throws, so an outage is retried.
+      if (!(await isOrganisationAcceptingWork(job.data.organisationId))) {
+        childLogger.info(
+          { jobId: job.id, organisationId: job.data.organisationId },
+          'skipping job for unavailable organisation',
+        );
+        return;
+      }
+      await processor(job, childLogger);
+    },
     {
       connection,
       prefix: 'bp:queue',

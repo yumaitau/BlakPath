@@ -26,7 +26,7 @@ flowchart TD
 
   subgraph trust["Trusted boundary"]
     session["1 Resolve session (Better Auth)"]
-    verify["2 Verify membership of target org in DB<br/>(memberships row, active status)"]
+    verify["2 Verify membership and organisation status<br/>(active membership; org not suspended or closed)"]
     ctx["3 Build verified TenantContext<br/>(runWithTenantContext, AsyncLocalStorage)"]
   end
 
@@ -67,6 +67,13 @@ call tree with `AsyncLocalStorage`:
 
 The context is only ever constructed from DB-verified values. There is no code
 path that builds it from a browser-supplied tenant id.
+
+`resolveTenantContext` also refuses a suspended or closed organisation, even
+when the membership is active. Staff see a generic unavailable message and
+APIs return 403. The same refusal covers public form tokens, API keys and
+background jobs. A platform operator changes that status through
+`POST /api/admin/organisations/{id}/status`; the change is appended to the
+platform audit chain (`organisation.status_changed`), not the tenant chain.
 
 ### 4–5. Tenant-scoped data access
 

@@ -18,7 +18,10 @@ import { BreakGlassError } from '@/domains/break-glass';
  * is re-checked against the DB, never trusted from the session payload. Returns
  * the verified operator's user id.
  */
-export async function requirePlatformOperator(): Promise<{ userId: string }> {
+export async function requirePlatformOperator(): Promise<{
+  userId: string;
+  sessionId: string;
+}> {
   const session = await requireRecentAuth(STEP_UP_WINDOWS.privileged);
   const rows = await db
     .select({ isPlatformOperator: users.isPlatformOperator })
@@ -28,7 +31,7 @@ export async function requirePlatformOperator(): Promise<{ userId: string }> {
   if (!rows[0]?.isPlatformOperator) {
     throw new AuthorizationError('POLICY_DENIED');
   }
-  return { userId: session.user.id };
+  return { userId: session.user.id, sessionId: session.session.id };
 }
 
 /** Map break-glass / step-up / auth errors to non-leaking responses. */

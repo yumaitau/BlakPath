@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { StaffShell } from '@/components/staff/staff-shell';
+import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import { getServerSession } from '@/lib/auth/session';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,
+  organisationAccessForUser,
 } from '@/lib/tenancy/memberships';
 
 /**
@@ -20,6 +22,12 @@ export default async function StaffLayout({ children }: { children: ReactNode })
   if (!activeOrganisationId) redirect('/select-organisation');
 
   const organisations = await listMembershipsForUser(session.user.id);
+  // An active membership of a suspended or closed organisation is refused here,
+  // before any staff page renders. The message does not name the status.
+  const access = await organisationAccessForUser(session.user.id, activeOrganisationId);
+  if (access === 'unavailable') {
+    return <OrganisationUnavailable canSwitch={organisations.length > 0} />;
+  }
   // A stale session can name a membership that was revoked after sign-in. Treat
   // it exactly like no selection, instead of rendering a misleading shell.
   if (!organisations.some((org) => org.organisationId === activeOrganisationId)) {
