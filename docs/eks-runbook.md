@@ -37,6 +37,12 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   versioning on, AWS Backup coverage. MinIO exists for local dev only.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
+  Only permanent bounces and complaints suppress an address; organisation
+  administrators see suppressed members/invitees on Settings → People and can
+  clear one (audited as `email.suppression_cleared`).
+- Set `EMAIL_SEND_RATE_PER_SECOND` (ConfigMap) to the live sender quota. The
+  worker paces the Email and Notification queues beneath it across all
+  replicas and re-queues sender-throttled sends without spending a retry.
 - PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:
   create an API key there, store it as `PAPERBOY_API_KEY` in
   `blakpath-eks-runtime`, and keep `PAPERBOY_URL` in the ConfigMap. Sender

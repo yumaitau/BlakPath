@@ -12,6 +12,11 @@ import { recordSuppression } from '@/domains/email';
  * EMAIL_WEBHOOK_SECRET. SubscriptionConfirmation URLs are only fetched when
  * the hostname is a genuine SNS endpoint (SSRF guard). No auth session needed;
  * the secret is the credential. Never logs addresses or message bodies.
+ *
+ * Only PERMANENT bounces (the address does not exist or rejects mail) and
+ * complaints suppress an address. Transient and undetermined bounces (full
+ * mailbox, greylisting, outage) are left for the sender to retry, so a
+ * temporary fault never silently stops a member's mail.
  */
 
 const snsEnvelope = z.object({
@@ -26,6 +31,7 @@ const sesMessage = z.object({
   mail: z.object({ messageId: z.string().optional() }).optional(),
   bounce: z
     .object({
+      bounceType: z.string().optional(),
       bouncedRecipients: z.array(z.object({ emailAddress: z.string() })).optional(),
     })
     .optional(),
@@ -84,6 +90,9 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const targets: { address: string; kind: 'bounce' | 'complaint' }[] = [];
   if (message.notificationType === 'Bounce') {
+    if (message.bounce?.bounceType !== 'Permanent') {
+      return NextResponse.json({ received: true });
+    }
     for (const r of message.bounce?.bouncedRecipients ?? []) {
       targets.push({ address: r.emailAddress, kind: 'bounce' });
     }
