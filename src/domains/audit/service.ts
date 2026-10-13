@@ -5,6 +5,7 @@ import { db, type Database } from '@/db/client';
 import { auditEvents } from '@/db/schema';
 import { getTenantContext } from '@/lib/tenancy/context';
 import type { AuditAction, AuditResult, ResourceType } from './events';
+import { stampBreakGlassMeta } from './break-glass-flag';
 import {
   computeEventHash,
   redactMeta,
@@ -140,7 +141,12 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
   const beforeMeta = input.before
     ? redactMeta(input.before.data, input.before.allow)
     : null;
-  const afterMeta = input.after ? redactMeta(input.after.data, input.after.allow) : null;
+  // Stamp after redaction so a caller's allowlist cannot drop the flag, and
+  // only when this unit of work is actually running under a live grant.
+  const afterMeta = stampBreakGlassMeta(
+    input.after ? redactMeta(input.after.data, input.after.allow) : null,
+    ctx?.breakGlass,
+  );
 
   const lockKey = chainLockKey(organisationId);
 

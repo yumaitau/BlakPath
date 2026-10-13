@@ -2,6 +2,7 @@ import { and, eq, type SQL } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db, type Database } from './client';
 import { requireTenantContext, TenantIsolationError } from '@/lib/tenancy/context';
+import { readOnlyDatabase } from '@/lib/tenancy/read-only-db';
 
 /**
  * Tenant-aware data access.
@@ -52,7 +53,13 @@ export function scopeFor(organisationId: string): TenantScope {
 
 /** Convenience: derive a scope from the ambient TenantContext. */
 export function currentScope(): TenantScope {
-  return scopeFor(requireTenantContext().organisationId);
+  const ctx = requireTenantContext();
+  const scope = scopeFor(ctx.organisationId);
+  // A live break-glass grant may read this tenant and nothing else. The
+  // permission set is already read-only; this blocks mutations that only
+  // check a read permission (for example adding a note).
+  if (!ctx.breakGlass) return scope;
+  return { ...scope, db: readOnlyDatabase(scope.db) };
 }
 
 /**

@@ -153,7 +153,12 @@ answer "for this specific record, right now":
 - **Break-glass, not standing access.** Platform operators
   (`users.isPlatformOperator`) hold **no** tenant permissions. Cross-tenant
   access is only ever granted through an approved, time-boxed, tenant-notified
-  break-glass request (`break_glass_requests`).
+  break-glass request (`break_glass_requests`). A live grant is read-only
+  (`application:read-any`, evidence metadata, `audit:view`) until `expiresAt`.
+  Reads use `GET /api/break-glass/:id/access/...`. Each read is audited as
+  `break_glass.accessed`, and any audit written under the grant carries
+  `afterMeta.breakGlass`. Activation notifies approvers in the app and by
+  email. The tenant records a review within 5 Australia/Sydney weekdays.
 
 Every check — permitted, **denied**, or errored — is written to the audit trail
 with the acting role recorded (`docs/audit-log-design.md`).

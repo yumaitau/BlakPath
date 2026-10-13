@@ -223,6 +223,7 @@ export type AuditAction =
   | 'break_glass.revoked'
   | 'break_glass.expired'
   | 'break_glass.tenant_notified'
+  | 'break_glass.accessed'
   | 'break_glass.reviewed'
   // Integrations.
   | 'integration.connected'

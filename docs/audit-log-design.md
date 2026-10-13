@@ -118,3 +118,6 @@ every permission **denial**, all membership/role changes, application and
 evidence lifecycle actions, **recording and reviewing determinations**,
 certificate issue/revoke, feature-flag and settings changes, and every
 break-glass state transition. Both allowed and refused attempts are logged.
+Reads under a live break-glass grant are `break_glass.accessed`. The grant id
+is stored on `afterMeta.breakGlassRequestId` with `afterMeta.breakGlass: true`
+so the flag stays inside the existing hash without a new column.

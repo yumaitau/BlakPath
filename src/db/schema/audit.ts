@@ -127,7 +127,17 @@ export const breakGlassRequests = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     /** When the tenant was notified that emergency access occurred. */
     tenantNotifiedAt: timestamp('tenant_notified_at', { withTimezone: true }),
+    /**
+     * When the post-use review is due. Set at activation to five Australia/Sydney
+     * weekdays later. Public holidays are not excluded.
+     */
+    reviewDueAt: timestamp('review_due_at', { withTimezone: true }),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    reviewedByUserId: refId('reviewed_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    /** Human review of whether the access matched the stated support purpose. */
+    reviewNotes: text('review_notes'),
     ...timestamps,
   },
   (table) => [
@@ -167,6 +177,10 @@ export const breakGlassRequestsRelations = relations(breakGlassRequests, ({ one 
   }),
   approvedBy: one(users, {
     fields: [breakGlassRequests.approvedByUserId],
+    references: [users.id],
+  }),
+  reviewedBy: one(users, {
+    fields: [breakGlassRequests.reviewedByUserId],
     references: [users.id],
   }),
 }));

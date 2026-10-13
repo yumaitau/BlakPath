@@ -11,6 +11,7 @@ import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { BreakGlassWriteError } from '@/lib/tenancy/break-glass-write';
 
 /**
  * Route-handler helper: run `fn` inside a DB-verified tenant context.
@@ -79,7 +80,11 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
   }
-  if (error instanceof AuthorizationError || error instanceof TenantContextError) {
+  if (
+    error instanceof AuthorizationError ||
+    error instanceof TenantContextError ||
+    error instanceof BreakGlassWriteError
+  ) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   // Unknown error: log server-side for diagnosis, return nothing sensitive.

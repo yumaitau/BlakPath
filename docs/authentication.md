@@ -93,8 +93,11 @@ factor, or passkey) which refreshes the timestamp.
 
 Actions requiring step-up include: recording a determination (`decision:record`),
 issuing/revoking a certificate (`certificate:issue` / `certificate:revoke`),
-managing security-sensitive settings, changing MFA factors, and **all break-glass
-operations** (`break_glass_requests.stepUpVerified` must be true).
+managing security-sensitive settings, changing MFA factors, and break-glass
+**request, approve, and activate** (`break_glass_requests.stepUpVerified` must
+be true). Reads during a live grant use the operator session plus the grant's
+own expiry. The step-up window is 5 minutes and a grant may last up to 8 hours,
+so those reads do not ask for step-up again.
 
 ## Authentication sequence
 
