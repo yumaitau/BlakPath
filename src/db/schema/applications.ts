@@ -1,5 +1,14 @@
 import { relations } from 'drizzle-orm';
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  foreignKey,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -61,9 +70,7 @@ export const applications = pgTable(
       onDelete: 'set null',
     }),
     /** Owning client person record (council tenant model). */
-    clientId: refId('client_id').references(() => clients.id, {
-      onDelete: 'set null',
-    }),
+    clientId: refId('client_id'),
     /** Who started the application (applicant or an intake officer acting for them). */
     createdByUserId: refId('created_by_user_id').references(() => users.id, {
       onDelete: 'set null',
@@ -97,6 +104,18 @@ export const applications = pgTable(
       table.organisationId,
       table.applicantUserId,
     ),
+    // Migration amends this to ON DELETE SET NULL ("client_id").
+    foreignKey({
+      name: 'applications_client_same_org_fk',
+      columns: [table.organisationId, table.clientId],
+      foreignColumns: [clients.organisationId, clients.id],
+    }).onDelete('set null'),
+    // Target of same-tenant composite FKs from every application child table.
+    unique('applications_org_id_unique').on(table.organisationId, table.id),
+    index('applications_org_client_idx').on(table.organisationId, table.clientId),
+    index('applications_applicant_idx').on(table.applicantUserId),
+    index('applications_current_assignee_idx').on(table.currentAssigneeUserId),
+    index('applications_created_by_idx').on(table.createdByUserId),
   ],
 );
 
@@ -113,9 +132,7 @@ export const applicationAssignments = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     assigneeUserId: refId('assignee_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
@@ -139,6 +156,13 @@ export const applicationAssignments = pgTable(
       table.assigneeUserId,
       table.status,
     ),
+    foreignKey({
+      name: 'application_assignments_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    index('application_assignments_assignee_idx').on(table.assigneeUserId),
+    index('application_assignments_assigned_by_idx').on(table.assignedByUserId),
   ],
 );
 
@@ -155,9 +179,7 @@ export const applicationStatusHistory = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     /** Null for the very first entry (application created). */
     fromStatus: applicationStatus('from_status'),
     toStatus: applicationStatus('to_status').notNull(),
@@ -174,6 +196,12 @@ export const applicationStatusHistory = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    foreignKey({
+      name: 'application_status_history_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    index('application_status_history_actor_idx').on(table.actorUserId),
   ],
 );
 
@@ -189,9 +217,7 @@ export const applicationNotes = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     authorUserId: refId('author_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -206,6 +232,12 @@ export const applicationNotes = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    foreignKey({
+      name: 'application_notes_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    index('application_notes_author_idx').on(table.authorUserId),
   ],
 );
 

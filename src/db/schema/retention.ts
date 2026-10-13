@@ -41,6 +41,7 @@ export const retentionPolicies = pgTable(
   },
   (table) => [
     index('retention_policies_org_idx').on(table.organisationId, table.resourceType),
+    index('retention_policies_created_by_idx').on(table.createdByUserId),
   ],
 );
 
@@ -70,6 +71,8 @@ export const legalHolds = pgTable(
       table.resourceType,
       table.resourceId,
     ),
+    index('legal_holds_placed_by_idx').on(table.placedByUserId),
+    index('legal_holds_released_by_idx').on(table.releasedByUserId),
   ],
 );
 

@@ -385,6 +385,7 @@ integration('database-backed security boundaries', () => {
     });
     await runtime.db.insert(runtime.schema.membershipRoles).values({
       id: randomUUID(),
+      organisationId: organisationA,
       membershipId: lastAdministratorMembershipId,
       roleId: administratorRole.id,
     });

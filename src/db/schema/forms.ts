@@ -1,5 +1,14 @@
 import { relations } from 'drizzle-orm';
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  foreignKey,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -39,9 +48,7 @@ export const forms = pgTable(
     fields: jsonb('fields').notNull().default([]),
     status: formStatus('status').notNull().default('draft'),
     /** Optional link to the application this form gathers information for. */
-    applicationId: refId('application_id').references(() => applications.id, {
-      onDelete: 'set null',
-    }),
+    applicationId: refId('application_id'),
     createdByUserId: refId('created_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -49,7 +56,18 @@ export const forms = pgTable(
     ...rowVersion,
     ...softDelete,
   },
-  (table) => [index('forms_org_status_idx').on(table.organisationId, table.status)],
+  (table) => [
+    // Migration amends this to ON DELETE SET NULL ("application_id").
+    foreignKey({
+      name: 'forms_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('set null'),
+    unique('forms_org_id_unique').on(table.organisationId, table.id),
+    index('forms_org_status_idx').on(table.organisationId, table.status),
+    index('forms_org_application_idx').on(table.organisationId, table.applicationId),
+    index('forms_created_by_idx').on(table.createdByUserId),
+  ],
 );
 
 /** A tokenised, per-recipient invitation to complete a form. */
@@ -60,9 +78,7 @@ export const formInvitations = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    formId: refId('form_id')
-      .notNull()
-      .references(() => forms.id, { onDelete: 'cascade' }),
+    formId: refId('form_id').notNull(),
     /** SHA-256 hex of the secret token. The raw token is never stored. */
     tokenHash: text('token_hash').notNull(),
     recipientName: text('recipient_name'),
@@ -77,8 +93,15 @@ export const formInvitations = pgTable(
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'form_invitations_form_same_org_fk',
+      columns: [table.organisationId, table.formId],
+      foreignColumns: [forms.organisationId, forms.id],
+    }).onDelete('cascade'),
     uniqueIndex('form_invitations_token_hash_unique').on(table.tokenHash),
+    unique('form_invitations_org_id_unique').on(table.organisationId, table.id),
     index('form_invitations_org_form_idx').on(table.organisationId, table.formId),
+    index('form_invitations_sent_by_idx').on(table.sentByUserId),
   ],
 );
 
@@ -90,12 +113,8 @@ export const formResponses = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    formId: refId('form_id')
-      .notNull()
-      .references(() => forms.id, { onDelete: 'cascade' }),
-    invitationId: refId('invitation_id').references(() => formInvitations.id, {
-      onDelete: 'set null',
-    }),
+    formId: refId('form_id').notNull(),
+    invitationId: refId('invitation_id'),
     /** The validated answer set, keyed by field key. */
     answers: jsonb('answers').notNull(),
     respondentName: text('respondent_name'),
@@ -106,7 +125,22 @@ export const formResponses = pgTable(
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'form_responses_form_same_org_fk',
+      columns: [table.organisationId, table.formId],
+      foreignColumns: [forms.organisationId, forms.id],
+    }).onDelete('cascade'),
+    // Migration amends this to ON DELETE SET NULL ("invitation_id").
+    foreignKey({
+      name: 'form_responses_invitation_same_org_fk',
+      columns: [table.organisationId, table.invitationId],
+      foreignColumns: [formInvitations.organisationId, formInvitations.id],
+    }).onDelete('set null'),
     index('form_responses_org_form_idx').on(table.organisationId, table.formId),
+    index('form_responses_org_invitation_idx').on(
+      table.organisationId,
+      table.invitationId,
+    ),
   ],
 );
 

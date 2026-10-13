@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { index, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -25,10 +25,14 @@ export const consentRecords = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    /** Person the consent is about. */
+    /**
+     * Person the consent is about. RESTRICT: a consent record is evidence of
+     * an agreement and must outlive any attempt to hard-delete the account —
+     * deactivate or anonymise the user instead.
+     */
     subjectUserId: refId('subject_user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => users.id, { onDelete: 'restrict' }),
     /** Who recorded it (staff intake or the subject themselves). */
     recordedByUserId: refId('recorded_by_user_id').references(() => users.id, {
       onDelete: 'set null',
@@ -44,8 +48,12 @@ export const consentRecords = pgTable(
     ...timestamps,
   },
   (table) => [
+    // Target of same-tenant composite FKs (representative_authorisations).
+    unique('consent_records_org_id_unique').on(table.organisationId, table.id),
     index('consent_org_subject_idx').on(table.organisationId, table.subjectUserId),
     index('consent_org_purpose_idx').on(table.organisationId, table.purpose),
+    index('consent_subject_idx').on(table.subjectUserId),
+    index('consent_recorded_by_idx').on(table.recordedByUserId),
   ],
 );
 

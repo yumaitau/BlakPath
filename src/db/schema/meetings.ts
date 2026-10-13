@@ -1,10 +1,12 @@
 import { relations } from 'drizzle-orm';
 import {
+  foreignKey,
   integer,
   index,
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import {
@@ -50,8 +52,10 @@ export const meetings = pgTable(
     ...softDelete,
   },
   (table) => [
+    unique('meetings_org_id_unique').on(table.organisationId, table.id),
     index('meetings_org_start_idx').on(table.organisationId, table.scheduledStart),
     index('meetings_org_status_idx').on(table.organisationId, table.status),
+    index('meetings_created_by_idx').on(table.createdByUserId),
   ],
 );
 
@@ -63,20 +67,30 @@ export const meetingAgendaItems = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    meetingId: refId('meeting_id')
-      .notNull()
-      .references(() => meetings.id, { onDelete: 'cascade' }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    meetingId: refId('meeting_id').notNull(),
+    applicationId: refId('application_id').notNull(),
     position: integer('position').notNull().default(0),
     notes: text('notes'),
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'meeting_agenda_items_meeting_same_org_fk',
+      columns: [table.organisationId, table.meetingId],
+      foreignColumns: [meetings.organisationId, meetings.id],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'meeting_agenda_items_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
     index('meeting_agenda_items_org_meeting_idx').on(
       table.organisationId,
       table.meetingId,
+    ),
+    index('meeting_agenda_items_org_application_idx').on(
+      table.organisationId,
+      table.applicationId,
     ),
     uniqueIndex('meeting_agenda_items_meeting_application_unique').on(
       table.meetingId,
@@ -97,15 +111,15 @@ export const conflictDeclarations = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
-    meetingId: refId('meeting_id').references(() => meetings.id, {
-      onDelete: 'set null',
-    }),
+    applicationId: refId('application_id').notNull(),
+    meetingId: refId('meeting_id'),
+    /**
+     * RESTRICT: a conflict declaration is a governance record. Deleting the
+     * declarer's account must not erase it — deactivate or anonymise instead.
+     */
     declaredByUserId: refId('declared_by_user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => users.id, { onDelete: 'restrict' }),
     status: conflictStatus('status').notNull().default('declared'),
     reason: text('reason'),
     clearedByUserId: refId('cleared_by_user_id').references(() => users.id, {
@@ -115,6 +129,17 @@ export const conflictDeclarations = pgTable(
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'conflict_declarations_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    // Migration amends this to ON DELETE SET NULL ("meeting_id").
+    foreignKey({
+      name: 'conflict_declarations_meeting_same_org_fk',
+      columns: [table.organisationId, table.meetingId],
+      foreignColumns: [meetings.organisationId, meetings.id],
+    }).onDelete('set null'),
     index('conflict_declarations_org_application_idx').on(
       table.organisationId,
       table.applicationId,
@@ -123,6 +148,8 @@ export const conflictDeclarations = pgTable(
       table.organisationId,
       table.meetingId,
     ),
+    index('conflict_declarations_declared_by_idx').on(table.declaredByUserId),
+    index('conflict_declarations_cleared_by_idx').on(table.clearedByUserId),
   ],
 );
 

@@ -1,6 +1,7 @@
 import { relations } from 'drizzle-orm';
 import {
   boolean,
+  index,
   integer,
   pgTable,
   text,
@@ -76,6 +77,8 @@ export const accounts = pgTable(
   },
   (table) => [
     uniqueIndex('accounts_provider_account_unique').on(table.providerId, table.accountId),
+    // Better Auth loads a user's accounts at sign-in; also serves the FK.
+    index('accounts_user_idx').on(table.userId),
   ],
 );
 
@@ -106,20 +109,29 @@ export const sessions = pgTable(
     }),
     ...timestamps,
   },
-  (table) => [uniqueIndex('sessions_token_unique').on(table.token)],
+  (table) => [
+    uniqueIndex('sessions_token_unique').on(table.token),
+    // Session listing / revoke-all by user; also serves the FK.
+    index('sessions_user_idx').on(table.userId),
+  ],
 );
 
 /**
  * Short-lived verification values (email verification, password reset, OTP).
  * Maps to Better Auth's `verification`. Values are single-use and expiring.
  */
-export const verifications = pgTable('verifications', {
-  id: primaryId(),
-  identifier: text('identifier').notNull(),
-  value: text('value').notNull(),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-  ...timestamps,
-});
+export const verifications = pgTable(
+  'verifications',
+  {
+    id: primaryId(),
+    identifier: text('identifier').notNull(),
+    value: text('value').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  // Better Auth looks verification values up by identifier.
+  (table) => [index('verifications_identifier_idx').on(table.identifier)],
+);
 
 /**
  * WebAuthn / passkey credential (Better Auth passkey plugin).
@@ -144,7 +156,10 @@ export const passkeys = pgTable(
     transports: text('transports'),
     ...timestamps,
   },
-  (table) => [uniqueIndex('passkeys_credential_id_unique').on(table.credentialID)],
+  (table) => [
+    uniqueIndex('passkeys_credential_id_unique').on(table.credentialID),
+    index('passkeys_user_idx').on(table.userId),
+  ],
 );
 
 /**
@@ -155,17 +170,21 @@ export const passkeys = pgTable(
  * application before being written here — this table stores ciphertext only,
  * never the plaintext TOTP secret or usable backup codes.
  */
-export const twoFactors = pgTable('two_factors', {
-  id: primaryId(),
-  userId: refId('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  /** Envelope-encrypted TOTP secret ciphertext. Never plaintext. */
-  secret: text('secret').notNull(),
-  /** Envelope-encrypted recovery codes ciphertext. Never plaintext. */
-  backupCodes: text('backup_codes').notNull(),
-  ...timestamps,
-});
+export const twoFactors = pgTable(
+  'two_factors',
+  {
+    id: primaryId(),
+    userId: refId('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Envelope-encrypted TOTP secret ciphertext. Never plaintext. */
+    secret: text('secret').notNull(),
+    /** Envelope-encrypted recovery codes ciphertext. Never plaintext. */
+    backupCodes: text('backup_codes').notNull(),
+    ...timestamps,
+  },
+  (table) => [index('two_factors_user_idx').on(table.userId)],
+);
 
 export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),

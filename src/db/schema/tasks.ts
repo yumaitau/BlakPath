@@ -1,5 +1,12 @@
 import { relations } from 'drizzle-orm';
-import { doublePrecision, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  doublePrecision,
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -46,9 +53,7 @@ export const tasks = pgTable(
       onDelete: 'set null',
     }),
     /** Optional link to the application this task relates to. */
-    applicationId: refId('application_id').references(() => applications.id, {
-      onDelete: 'set null',
-    }),
+    applicationId: refId('application_id'),
     dueAt: timestamp('due_at', { withTimezone: true }),
     ...timestamps,
     ...rowVersion,
@@ -61,6 +66,15 @@ export const tasks = pgTable(
       table.position,
     ),
     index('tasks_org_assignee_idx').on(table.organisationId, table.assigneeUserId),
+    // Migration amends this to ON DELETE SET NULL ("application_id").
+    foreignKey({
+      name: 'tasks_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('set null'),
+    index('tasks_org_application_idx').on(table.organisationId, table.applicationId),
+    index('tasks_assignee_idx').on(table.assigneeUserId),
+    index('tasks_created_by_idx').on(table.createdByUserId),
   ],
 );
 

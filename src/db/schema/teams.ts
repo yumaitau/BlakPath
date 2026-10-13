@@ -1,5 +1,12 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  unique,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -35,6 +42,7 @@ export const teams = pgTable(
   },
   (table) => [
     uniqueIndex('teams_org_slug_unique').on(table.organisationId, table.slug),
+    unique('teams_org_id_unique').on(table.organisationId, table.id),
     index('teams_org_name_idx').on(table.organisationId, table.name),
   ],
 );
@@ -47,9 +55,7 @@ export const teamMemberships = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    teamId: refId('team_id')
-      .notNull()
-      .references(() => teams.id, { onDelete: 'cascade' }),
+    teamId: refId('team_id').notNull(),
     userId: refId('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -57,9 +63,15 @@ export const teamMemberships = pgTable(
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'team_memberships_team_same_org_fk',
+      columns: [table.organisationId, table.teamId],
+      foreignColumns: [teams.organisationId, teams.id],
+    }).onDelete('cascade'),
     uniqueIndex('team_memberships_team_user_unique').on(table.teamId, table.userId),
     index('team_memberships_org_team_idx').on(table.organisationId, table.teamId),
     index('team_memberships_org_user_idx').on(table.organisationId, table.userId),
+    index('team_memberships_user_idx').on(table.userId),
   ],
 );
 
@@ -71,14 +83,21 @@ export const groups = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    teamId: refId('team_id').references(() => teams.id, { onDelete: 'set null' }),
+    teamId: refId('team_id'),
     slug: text('slug').notNull(),
     name: text('name').notNull(),
     description: text('description'),
     ...timestamps,
   },
   (table) => [
+    // Migration amends this to ON DELETE SET NULL ("team_id").
+    foreignKey({
+      name: 'groups_team_same_org_fk',
+      columns: [table.organisationId, table.teamId],
+      foreignColumns: [teams.organisationId, teams.id],
+    }).onDelete('set null'),
     uniqueIndex('groups_org_slug_unique').on(table.organisationId, table.slug),
+    unique('groups_org_id_unique').on(table.organisationId, table.id),
     index('groups_org_team_idx').on(table.organisationId, table.teamId),
   ],
 );
@@ -91,18 +110,22 @@ export const groupMemberships = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    groupId: refId('group_id')
-      .notNull()
-      .references(() => groups.id, { onDelete: 'cascade' }),
+    groupId: refId('group_id').notNull(),
     userId: refId('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'group_memberships_group_same_org_fk',
+      columns: [table.organisationId, table.groupId],
+      foreignColumns: [groups.organisationId, groups.id],
+    }).onDelete('cascade'),
     uniqueIndex('group_memberships_group_user_unique').on(table.groupId, table.userId),
     index('group_memberships_org_group_idx').on(table.organisationId, table.groupId),
     index('group_memberships_org_user_idx').on(table.organisationId, table.userId),
+    index('group_memberships_user_idx').on(table.userId),
   ],
 );
 
@@ -125,17 +148,23 @@ export const clients = pgTable(
     linkedUserId: refId('linked_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
-    assignedTeamId: refId('assigned_team_id').references(() => teams.id, {
-      onDelete: 'set null',
-    }),
+    assignedTeamId: refId('assigned_team_id'),
     notes: text('notes'),
     ...timestamps,
     ...softDelete,
   },
   (table) => [
+    // Migration amends this to ON DELETE SET NULL ("assigned_team_id").
+    foreignKey({
+      name: 'clients_assigned_team_same_org_fk',
+      columns: [table.organisationId, table.assignedTeamId],
+      foreignColumns: [teams.organisationId, teams.id],
+    }).onDelete('set null'),
+    unique('clients_org_id_unique').on(table.organisationId, table.id),
     index('clients_org_team_idx').on(table.organisationId, table.assignedTeamId),
     index('clients_org_user_idx').on(table.organisationId, table.linkedUserId),
     index('clients_org_name_idx').on(table.organisationId, table.displayName),
+    index('clients_linked_user_idx').on(table.linkedUserId),
   ],
 );
 

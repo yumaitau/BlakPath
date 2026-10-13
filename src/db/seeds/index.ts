@@ -49,9 +49,9 @@ async function seedPermissions(): Promise<void> {
 }
 
 /**
- * Ensure the system role templates exist (organisation_id NULL). Because NULLs
- * are distinct under the (organisation_id, slug) unique index, we check by slug
- * first rather than relying on ON CONFLICT.
+ * Ensure the system role templates exist (organisation_id NULL). The
+ * (organisation_id, slug) key is NULLS NOT DISTINCT, so a duplicate template
+ * would fail; checking by slug first keeps re-seeding a no-op.
  */
 async function seedRoles(): Promise<Map<string, string>> {
   const existing = await db
@@ -190,7 +190,7 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
     if (roleId) {
       await db
         .insert(membershipRoles)
-        .values({ id: uuidv7(), membershipId, roleId })
+        .values({ id: uuidv7(), organisationId, membershipId, roleId })
         .onConflictDoNothing({
           target: [membershipRoles.membershipId, membershipRoles.roleId],
         });

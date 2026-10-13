@@ -23,6 +23,17 @@ export const refId = (name: string) => uuid(name);
  * the data-access layer (see src/db/tenant-db.ts) and, defence-in-depth, by
  * row-level security policies. A composite index leading with this column is
  * expected on every tenant table.
+ *
+ * Schema integrity rules (asserted by tests/unit/schema-integrity.test.ts):
+ * - A tenant row that references another tenant-owned row does so through a
+ *   composite FK `(organisation_id, <parent>_id) → parent(organisation_id, id)`,
+ *   backed by a `<parent>_org_id_unique` constraint, so the database itself
+ *   rejects a link to another organisation's row.
+ * - A nullable composite FK that clears on parent delete must use
+ *   `ON DELETE SET NULL (<parent>_id)` (PostgreSQL 15+) in its migration —
+ *   plain SET NULL would also null `organisation_id`. Drizzle cannot express
+ *   the column list, so the generated SQL is amended by hand.
+ * - Every FK's columns lead some index, so parent deletes and joins never scan.
  */
 export const organisationId = () => uuid('organisation_id').notNull();
 

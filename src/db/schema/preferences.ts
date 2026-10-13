@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { jsonb, pgTable, uniqueIndex } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgTable, uniqueIndex } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -35,6 +35,7 @@ export const userDashboardLayouts = pgTable(
       table.organisationId,
       table.userId,
     ),
+    index('user_dashboard_layouts_user_idx').on(table.userId),
   ],
 );
 

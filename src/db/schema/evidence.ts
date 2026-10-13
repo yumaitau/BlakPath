@@ -1,5 +1,13 @@
 import { relations } from 'drizzle-orm';
-import { bigint, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -40,9 +48,7 @@ export const evidenceRequests = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     requestedByUserId: refId('requested_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -55,10 +61,17 @@ export const evidenceRequests = pgTable(
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'evidence_requests_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    unique('evidence_requests_org_id_unique').on(table.organisationId, table.id),
     index('evidence_requests_org_application_idx').on(
       table.organisationId,
       table.applicationId,
     ),
+    index('evidence_requests_requested_by_idx').on(table.requestedByUserId),
   ],
 );
 
@@ -74,16 +87,12 @@ export const evidence = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     uploadedByUserId: refId('uploaded_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
     /** The upload that fulfils a specific staff request, when applicable. */
-    fulfilsRequestId: refId('fulfils_request_id').references(() => evidenceRequests.id, {
-      onDelete: 'set null',
-    }),
+    fulfilsRequestId: refId('fulfils_request_id'),
     fileName: text('file_name').notNull(),
     /** Content type the client declared at upload time (untrusted). */
     declaredContentType: text('declared_content_type').notNull(),
@@ -113,8 +122,22 @@ export const evidence = pgTable(
     ...softDelete,
   },
   (table) => [
+    foreignKey({
+      name: 'evidence_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    // Migration amends this to ON DELETE SET NULL ("fulfils_request_id").
+    foreignKey({
+      name: 'evidence_fulfils_request_same_org_fk',
+      columns: [table.organisationId, table.fulfilsRequestId],
+      foreignColumns: [evidenceRequests.organisationId, evidenceRequests.id],
+    }).onDelete('set null'),
     index('evidence_org_application_idx').on(table.organisationId, table.applicationId),
     index('evidence_org_status_idx').on(table.organisationId, table.status),
+    index('evidence_org_request_idx').on(table.organisationId, table.fulfilsRequestId),
+    index('evidence_uploaded_by_idx').on(table.uploadedByUserId),
+    index('evidence_classified_by_idx').on(table.classifiedByUserId),
   ],
 );
 

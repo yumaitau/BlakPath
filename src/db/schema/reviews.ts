@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { foreignKey, index, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -34,9 +34,7 @@ export const reviews = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     reviewerUserId: refId('reviewer_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -53,12 +51,20 @@ export const reviews = pgTable(
     ...softDelete,
   },
   (table) => [
+    foreignKey({
+      name: 'reviews_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    unique('reviews_org_id_unique').on(table.organisationId, table.id),
     index('reviews_org_application_idx').on(table.organisationId, table.applicationId),
     index('reviews_org_reviewer_status_idx').on(
       table.organisationId,
       table.reviewerUserId,
       table.status,
     ),
+    index('reviews_reviewer_idx').on(table.reviewerUserId),
+    index('reviews_finalised_by_idx').on(table.finalisedByUserId),
   ],
 );
 
@@ -70,9 +76,7 @@ export const reviewComments = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    reviewId: refId('review_id')
-      .notNull()
-      .references(() => reviews.id, { onDelete: 'cascade' }),
+    reviewId: refId('review_id').notNull(),
     authorUserId: refId('author_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -81,7 +85,13 @@ export const reviewComments = pgTable(
     ...softDelete,
   },
   (table) => [
+    foreignKey({
+      name: 'review_comments_review_same_org_fk',
+      columns: [table.organisationId, table.reviewId],
+      foreignColumns: [reviews.organisationId, reviews.id],
+    }).onDelete('cascade'),
     index('review_comments_org_review_idx').on(table.organisationId, table.reviewId),
+    index('review_comments_author_idx').on(table.authorUserId),
   ],
 );
 

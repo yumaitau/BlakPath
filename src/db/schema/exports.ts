@@ -44,6 +44,7 @@ export const exportRequests = pgTable(
   },
   (table) => [
     index('export_requests_org_status_idx').on(table.organisationId, table.status),
+    index('export_requests_requested_by_idx').on(table.requestedByUserId),
   ],
 );
 

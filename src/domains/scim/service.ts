@@ -154,7 +154,7 @@ export async function provisionScimUser(
       if (!roleId) continue;
       await db
         .insert(membershipRoles)
-        .values({ id: uuidv7(), membershipId, roleId })
+        .values({ id: uuidv7(), organisationId, membershipId, roleId })
         .onConflictDoNothing({
           target: [membershipRoles.membershipId, membershipRoles.roleId],
         });

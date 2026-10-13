@@ -1,5 +1,13 @@
 import { relations } from 'drizzle-orm';
-import { boolean, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  unique,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import { primaryId, refId, rowVersion, timestamps } from './_helpers';
 import { organisationStatus } from './enums';
 
@@ -91,7 +99,10 @@ export const organisationDomains = pgTable(
     verificationToken: text('verification_token'),
     ...timestamps,
   },
-  (table) => [uniqueIndex('organisation_domains_domain_unique').on(table.domain)],
+  (table) => [
+    uniqueIndex('organisation_domains_domain_unique').on(table.domain),
+    index('organisation_domains_org_idx').on(table.organisationId),
+  ],
 );
 
 /**
@@ -114,10 +125,11 @@ export const featureFlags = pgTable(
     ...timestamps,
   },
   (table) => [
-    // NOTE: null organisation_id rows collide under a single unique index in
-    // Postgres only when non-null; platform defaults (null) are enforced unique
-    // per-key at the application layer. Tenant overrides are unique per (org,key).
-    uniqueIndex('feature_flags_org_key_unique').on(table.organisationId, table.key),
+    // NULLS NOT DISTINCT: one platform default (null org) per key, and one
+    // tenant override per (org, key), both enforced by the database.
+    unique('feature_flags_org_key_unique')
+      .on(table.organisationId, table.key)
+      .nullsNotDistinct(),
   ],
 );
 

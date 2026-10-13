@@ -1,5 +1,14 @@
 import { relations } from 'drizzle-orm';
-import { boolean, index, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  foreignKey,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -42,9 +51,7 @@ export const calendarEvents = pgTable(
     timezone: text('timezone').notNull().default('Australia/Sydney'),
     /** `scheduled` | `cancelled` | `completed` (app-checked). */
     status: text('status').notNull().default('scheduled'),
-    meetingId: refId('meeting_id').references(() => meetings.id, {
-      onDelete: 'set null',
-    }),
+    meetingId: refId('meeting_id'),
     createdByUserId: refId('created_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -56,6 +63,14 @@ export const calendarEvents = pgTable(
     index('calendar_events_org_status_idx').on(table.organisationId, table.status),
     index('calendar_events_org_resource_idx').on(table.organisationId, table.resource),
     index('calendar_events_org_meeting_idx').on(table.organisationId, table.meetingId),
+    // Migration amends this to ON DELETE SET NULL ("meeting_id").
+    foreignKey({
+      name: 'calendar_events_meeting_same_org_fk',
+      columns: [table.organisationId, table.meetingId],
+      foreignColumns: [meetings.organisationId, meetings.id],
+    }).onDelete('set null'),
+    unique('calendar_events_org_id_unique').on(table.organisationId, table.id),
+    index('calendar_events_created_by_idx').on(table.createdByUserId),
   ],
 );
 
@@ -66,9 +81,7 @@ export const calendarEventAttendees = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    eventId: refId('event_id')
-      .notNull()
-      .references(() => calendarEvents.id, { onDelete: 'cascade' }),
+    eventId: refId('event_id').notNull(),
     userId: refId('user_id').references(() => users.id, { onDelete: 'set null' }),
     email: text('email'),
     displayName: text('display_name'),
@@ -80,6 +93,12 @@ export const calendarEventAttendees = pgTable(
     index('calendar_attendees_org_event_idx').on(table.organisationId, table.eventId),
     index('calendar_attendees_org_user_idx').on(table.organisationId, table.userId),
     index('calendar_attendees_org_email_idx').on(table.organisationId, table.email),
+    foreignKey({
+      name: 'calendar_event_attendees_event_same_org_fk',
+      columns: [table.organisationId, table.eventId],
+      foreignColumns: [calendarEvents.organisationId, calendarEvents.id],
+    }).onDelete('cascade'),
+    index('calendar_attendees_user_idx').on(table.userId),
   ],
 );
 
@@ -90,9 +109,7 @@ export const calendarEventReminders = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    eventId: refId('event_id')
-      .notNull()
-      .references(() => calendarEvents.id, { onDelete: 'cascade' }),
+    eventId: refId('event_id').notNull(),
     minutesBefore: integer('minutes_before').notNull().default(30),
     /** in-app | email (app-checked). */
     channel: text('channel').notNull().default('in-app'),
@@ -102,6 +119,11 @@ export const calendarEventReminders = pgTable(
   },
   (table) => [
     index('calendar_reminders_org_event_idx').on(table.organisationId, table.eventId),
+    foreignKey({
+      name: 'calendar_event_reminders_event_same_org_fk',
+      columns: [table.organisationId, table.eventId],
+      foreignColumns: [calendarEvents.organisationId, calendarEvents.id],
+    }).onDelete('cascade'),
   ],
 );
 

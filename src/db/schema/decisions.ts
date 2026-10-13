@@ -1,5 +1,13 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -32,12 +40,8 @@ export const decisions = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
-    meetingId: refId('meeting_id').references(() => meetings.id, {
-      onDelete: 'set null',
-    }),
+    applicationId: refId('application_id').notNull(),
+    meetingId: refId('meeting_id'),
     proposedByUserId: refId('proposed_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -57,8 +61,22 @@ export const decisions = pgTable(
     ...softDelete,
   },
   (table) => [
+    foreignKey({
+      name: 'decisions_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    // Migration amends this to ON DELETE SET NULL ("meeting_id").
+    foreignKey({
+      name: 'decisions_meeting_same_org_fk',
+      columns: [table.organisationId, table.meetingId],
+      foreignColumns: [meetings.organisationId, meetings.id],
+    }).onDelete('set null'),
+    unique('decisions_org_id_unique').on(table.organisationId, table.id),
     index('decisions_org_application_idx').on(table.organisationId, table.applicationId),
     index('decisions_org_meeting_idx').on(table.organisationId, table.meetingId),
+    index('decisions_proposed_by_idx').on(table.proposedByUserId),
+    index('decisions_finalised_by_idx').on(table.finalisedByUserId),
   ],
 );
 
@@ -70,12 +88,14 @@ export const decisionVotes = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    decisionId: refId('decision_id')
-      .notNull()
-      .references(() => decisions.id, { onDelete: 'cascade' }),
+    decisionId: refId('decision_id').notNull(),
+    /**
+     * RESTRICT: a vote is a governance record. Deleting the voter's account
+     * must not silently erase it — deactivate or anonymise the user instead.
+     */
     voterUserId: refId('voter_user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => users.id, { onDelete: 'restrict' }),
     choice: voteChoice('choice').notNull(),
     note: text('note'),
     ...timestamps,
@@ -85,7 +105,13 @@ export const decisionVotes = pgTable(
       table.decisionId,
       table.voterUserId,
     ),
+    foreignKey({
+      name: 'decision_votes_decision_same_org_fk',
+      columns: [table.organisationId, table.decisionId],
+      foreignColumns: [decisions.organisationId, decisions.id],
+    }).onDelete('cascade'),
     index('decision_votes_org_decision_idx').on(table.organisationId, table.decisionId),
+    index('decision_votes_voter_idx').on(table.voterUserId),
   ],
 );
 

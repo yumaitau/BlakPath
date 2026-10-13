@@ -1,13 +1,20 @@
 import { relations } from 'drizzle-orm';
 import {
   boolean,
+  foreignKey,
   index,
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { primaryId, refId, timestamps } from './_helpers';
+import {
+  organisationId as organisationIdCol,
+  primaryId,
+  refId,
+  timestamps,
+} from './_helpers';
 import {
   authorisationStatus,
   membershipInvitationStatus,
@@ -46,7 +53,12 @@ export const roles = pgTable(
     isSystem: boolean('is_system').notNull().default(false),
     ...timestamps,
   },
-  (table) => [uniqueIndex('roles_org_slug_unique').on(table.organisationId, table.slug)],
+  (table) => [
+    // NULLS NOT DISTINCT: system templates (null org) are unique per slug too.
+    unique('roles_org_slug_unique')
+      .on(table.organisationId, table.slug)
+      .nullsNotDistinct(),
+  ],
 );
 
 /**
@@ -79,6 +91,7 @@ export const rolePermissions = pgTable(
       table.roleId,
       table.permissionKey,
     ),
+    index('role_permissions_permission_idx').on(table.permissionKey),
   ],
 );
 
@@ -105,29 +118,50 @@ export const memberships = pgTable(
   },
   (table) => [
     uniqueIndex('memberships_org_user_unique').on(table.organisationId, table.userId),
+    // Target of same-tenant composite FKs (membership_roles).
+    unique('memberships_org_id_unique').on(table.organisationId, table.id),
     // Tenant-leading composite index for scoped listings.
     index('memberships_org_status_idx').on(table.organisationId, table.status),
+    index('memberships_user_idx').on(table.userId),
+    index('memberships_invited_by_idx').on(table.invitedByUserId),
   ],
 );
 
-/** Assignment of a role to a membership. */
+/**
+ * Assignment of a role to a membership. Tenant-owned: `organisation_id` is the
+ * membership's organisation, enforced by the composite FK. The role must be a
+ * system template (null org) or a role of the same organisation — FKs cannot
+ * express that OR, so the `enforce_role_same_tenant` trigger (migration
+ * `schema-integrity`) rejects anything else. Invitations share that trigger.
+ */
 export const membershipRoles = pgTable(
   'membership_roles',
   {
     id: primaryId(),
-    membershipId: refId('membership_id')
-      .notNull()
-      .references(() => memberships.id, { onDelete: 'cascade' }),
+    organisationId: organisationIdCol().references(() => organisations.id, {
+      onDelete: 'cascade',
+    }),
+    membershipId: refId('membership_id').notNull(),
     roleId: refId('role_id')
       .notNull()
       .references(() => roles.id, { onDelete: 'cascade' }),
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'membership_roles_membership_same_org_fk',
+      columns: [table.organisationId, table.membershipId],
+      foreignColumns: [memberships.organisationId, memberships.id],
+    }).onDelete('cascade'),
     uniqueIndex('membership_roles_membership_role_unique').on(
       table.membershipId,
       table.roleId,
     ),
+    index('membership_roles_org_membership_idx').on(
+      table.organisationId,
+      table.membershipId,
+    ),
+    index('membership_roles_role_idx').on(table.roleId),
   ],
 );
 
@@ -151,7 +185,7 @@ export const membershipInvitations = pgTable(
       .notNull()
       .references(() => roles.id, { onDelete: 'restrict' }),
     /** Optional team the invitee joins on acceptance (same organisation). */
-    teamId: refId('team_id').references(() => teams.id, { onDelete: 'set null' }),
+    teamId: refId('team_id'),
     tokenHash: text('token_hash').notNull(),
     status: membershipInvitationStatus('status').notNull().default('pending'),
     invitedByUserId: refId('invited_by_user_id').references(() => users.id, {
@@ -167,9 +201,19 @@ export const membershipInvitations = pgTable(
     ...timestamps,
   },
   (table) => [
+    // Migration amends this to ON DELETE SET NULL ("team_id").
+    foreignKey({
+      name: 'membership_invitations_team_same_org_fk',
+      columns: [table.organisationId, table.teamId],
+      foreignColumns: [teams.organisationId, teams.id],
+    }).onDelete('set null'),
     uniqueIndex('membership_invitations_token_hash_unique').on(table.tokenHash),
     index('membership_invitations_org_status_idx').on(table.organisationId, table.status),
     index('membership_invitations_org_email_idx').on(table.organisationId, table.email),
+    index('membership_invitations_org_team_idx').on(table.organisationId, table.teamId),
+    index('membership_invitations_role_idx').on(table.roleId),
+    index('membership_invitations_invited_by_idx').on(table.invitedByUserId),
+    index('membership_invitations_accepted_by_idx').on(table.acceptedByUserId),
   ],
 );
 
@@ -199,13 +243,17 @@ export const representativeAuthorisations = pgTable(
     grantedAt: timestamp('granted_at', { withTimezone: true }),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
-    /** Link to a consent record; consent domain is fleshed out later. */
-    consentRecordId: refId('consent_record_id').references(() => consentRecords.id, {
-      onDelete: 'set null',
-    }),
+    /** Link to a consent record (same organisation). */
+    consentRecordId: refId('consent_record_id'),
     ...timestamps,
   },
   (table) => [
+    // Migration amends this to ON DELETE SET NULL ("consent_record_id").
+    foreignKey({
+      name: 'representative_authorisations_consent_same_org_fk',
+      columns: [table.organisationId, table.consentRecordId],
+      foreignColumns: [consentRecords.organisationId, consentRecords.id],
+    }).onDelete('set null'),
     // Tenant-leading composite index for scoped lookups.
     index('representative_authorisations_org_subject_idx').on(
       table.organisationId,
@@ -213,6 +261,14 @@ export const representativeAuthorisations = pgTable(
     ),
     index('representative_authorisations_org_representative_idx').on(
       table.organisationId,
+      table.representativeUserId,
+    ),
+    index('representative_authorisations_org_consent_idx').on(
+      table.organisationId,
+      table.consentRecordId,
+    ),
+    index('representative_authorisations_subject_idx').on(table.subjectUserId),
+    index('representative_authorisations_representative_idx').on(
       table.representativeUserId,
     ),
   ],
@@ -259,6 +315,10 @@ export const membershipsRelations = relations(memberships, ({ one, many }) => ({
 }));
 
 export const membershipRolesRelations = relations(membershipRoles, ({ one }) => ({
+  organisation: one(organisations, {
+    fields: [membershipRoles.organisationId],
+    references: [organisations.id],
+  }),
   membership: one(memberships, {
     fields: [membershipRoles.membershipId],
     references: [memberships.id],
