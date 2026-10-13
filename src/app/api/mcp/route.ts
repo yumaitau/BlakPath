@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { apiErrorResponse, withApiKey } from '@/lib/http/api-route';
+import { REQUEST_LIMITS } from '@/lib/http/request-limits';
 import {
   handleMcpMessage,
   type JsonRpcRequest,
@@ -34,6 +35,7 @@ export async function POST(request: Request): Promise<Response> {
         }
         return handleMcpMessage(body);
       },
+      REQUEST_LIMITS.mcp,
     );
 
     // A notification (no id) yields no response body.

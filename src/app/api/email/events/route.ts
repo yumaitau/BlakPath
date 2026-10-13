@@ -2,6 +2,8 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { env } from '@/lib/env';
+import { clientIp } from '@/lib/http/client-ip';
+import { REQUEST_LIMITS, limitIp, limitSubject } from '@/lib/http/request-limits';
 import { logger } from '@/lib/observability/logger';
 import { recordSuppression } from '@/domains/email';
 
@@ -46,11 +48,18 @@ function snsHostOk(url: string): boolean {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const secret = env.EMAIL_WEBHOOK_SECRET;
-  if (!secret) return NextResponse.json({ error: 'Not configured' }, { status: 503 });
+  const ipLimited = await limitIp(REQUEST_LIMITS.emailEvents, clientIp(request.headers));
+  if (ipLimited) return ipLimited;
   const url = new URL(request.url);
   const provided =
     url.searchParams.get('secret') ?? request.headers.get('x-email-webhook-secret');
+  if (provided) {
+    const secretLimited = await limitSubject(REQUEST_LIMITS.emailEvents, provided);
+    if (secretLimited) return secretLimited;
+  }
+
+  const secret = env.EMAIL_WEBHOOK_SECRET;
+  if (!secret) return NextResponse.json({ error: 'Not configured' }, { status: 503 });
   if (provided !== secret) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

@@ -1,10 +1,12 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
+import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
 import { closeQueues, type TenantJob } from '@/lib/queues';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { startTenantScheduleSync } from './scheduler';
 import { queueFailureSignal } from './operational-signals';
+import { startAuthEmailWorker } from './auth-email';
 
 /**
  * BlakPath background worker bootstrap.
@@ -76,6 +78,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
 let shuttingDown = false;
 let stopTenantScheduleSync: (() => void) | null = null;
+const authEmailWorker = startAuthEmailWorker(connection, workerLogger);
 
 /**
  * Graceful shutdown: close every worker (waits for active jobs to settle),
@@ -99,8 +102,9 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
   try {
     stopTenantScheduleSync?.();
-    await Promise.all(workers.map((w) => w.close()));
+    await Promise.all([authEmailWorker.close(), ...workers.map((w) => w.close())]);
     await closeQueues();
+    await closeAuthEmailQueue();
     await redis.quit();
     clearTimeout(deadline);
     workerLogger.info('shutdown complete');
@@ -123,8 +127,11 @@ async function main(): Promise<void> {
   // accepting jobs. A startup failure is intentional: a worker without its
   // integrity/retention schedules is not healthy enough to serve.
   stopTenantScheduleSync = await startTenantScheduleSync(workerLogger);
-  await Promise.all(workers.map((w) => w.run()));
-  workerLogger.info({ queues: REGISTERED_QUEUES }, 'blakpath worker started');
+  await Promise.all([authEmailWorker.run(), ...workers.map((w) => w.run())]);
+  workerLogger.info(
+    { queues: [...REGISTERED_QUEUES, 'auth-email'] },
+    'blakpath worker started',
+  );
 }
 
 main().catch((err) => {

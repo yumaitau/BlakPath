@@ -85,8 +85,9 @@ Platform operators must use MFA unconditionally.
 - `activeOrganisationId` records which tenant a session is currently acting
   within — **advisory only.** Every request re-derives and DB-verifies the tenant
   context regardless (`docs/tenant-isolation.md`).
-- Sessions can be listed and revoked by the user; changing a password or a
-  security factor invalidates other sessions.
+- Sessions can be listed and revoked by the user. Completing a password reset
+  revokes existing sessions for that account (`revokeSessionsOnPasswordReset`).
+  Changing a security factor invalidates other sessions.
 - `lastAuthenticatedAt` records the most recent successful authentication and
   gates step-up (below).
 
@@ -141,11 +142,15 @@ sequenceDiagram
 
 - **Recovery codes** are issued at TOTP enrolment, envelope-encrypted, and each
   is single-use. Using one is an audited event.
-- Repeated failed attempts are rate-limited (Redis-backed, tenant/identity
-  prefixed) to slow credential-stuffing.
+- Repeated failed sign-in attempts are limited per client address and, separately,
+  delayed then locked per account. The counters live in Redis and are shared
+  across replicas. See `docs/rate-limits.md`.
 - Failed TOTP verifications are also counted on the factor row. After 10
   consecutive failures the factor stays locked for 15 minutes. A later success
   clears the count. The deadline is stored in Postgres, not only in memory.
+- Password-reset mail is queued. The HTTP response does not wait on the mail
+  relay, and the handler spends a fixed budget so a known address and an
+  unknown address take the same time when the work finishes inside that budget.
 - Account recovery that would reset a factor is treated as sensitive and audited;
   it never silently disables MFA for staff.
 

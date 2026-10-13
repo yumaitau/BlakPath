@@ -1,13 +1,24 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
 import { uuidv7 } from 'uuidv7';
 import { db, schema } from '@/db/client';
 import { env, isProduction } from '@/lib/env';
+import { AUTH_LIMITS } from '@/lib/http/request-limits';
 import { sendVerificationEmail, sendPasswordResetEmail } from './emails';
-import { auditPasskeyRegistration, staffMfaDatabaseHooks } from './mfa-audit';
+import { recordPasskeyRegistration, staffMfaDatabaseHooks } from './mfa-audit';
 import { createAuthPlugins } from './plugins';
+import { createAuthRateLimitStorage } from './rate-limit-storage';
 import { assertAuthSchemaCoverage } from './schema-coverage';
+import { REVOKE_SESSIONS_ON_PASSWORD_RESET } from './session-policy';
+import {
+  SignInLockedError,
+  emailFromBody,
+  guardSignIn,
+  noteSignInResult,
+  signInOutcome,
+} from './sign-in-guard';
 
 /**
  * Better Auth configuration for BlakPath.
@@ -98,6 +109,7 @@ export const auth = betterAuth({
     minPasswordLength: 12,
     maxPasswordLength: 256,
     autoSignIn: false,
+    revokeSessionsOnPasswordReset: REVOKE_SESSIONS_ON_PASSWORD_RESET,
     password: {
       hash: (password) => hashCredentialPassword(password),
       verify: ({ hash, password }) => argon2Verify(hash, password),
@@ -186,6 +198,16 @@ export const auth = betterAuth({
     database: {
       generateId: () => uuidv7(),
     },
+    /**
+     * Client IP for auth limits and session rows. `cf-connecting-ip` is one
+     * address set by Cloudflare. The load balancer only accepts Cloudflare
+     * ranges, so this header is the client. Do not add `x-forwarded-for`:
+     * a multi-value list cannot be resolved and every client would share
+     * one bucket.
+     */
+    ipAddress: {
+      ipAddressHeaders: ['cf-connecting-ip'],
+    },
   },
 
   /**
@@ -195,26 +217,50 @@ export const auth = betterAuth({
    */
   databaseHooks: staffMfaDatabaseHooks,
   hooks: {
-    after: auditPasskeyRegistration,
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== '/sign-in/email') return;
+      const email = emailFromBody(ctx.body);
+      if (!email) return;
+      try {
+        await guardSignIn(email);
+      } catch (error) {
+        if (error instanceof SignInLockedError) {
+          throw APIError.fromStatus('TOO_MANY_REQUESTS', {
+            message: 'Too many requests',
+          });
+        }
+        throw error;
+      }
+    }),
+    after: createAuthMiddleware(async (ctx) => {
+      await recordPasskeyRegistration(ctx);
+      if (ctx.path !== '/sign-in/email') return;
+      const email = emailFromBody(ctx.body);
+      if (!email) return;
+      const outcome = signInOutcome((ctx.context as { returned?: unknown }).returned);
+      if (outcome) await noteSignInResult(email, outcome);
+    }),
   },
 
   /**
-   * Rate limiting. Enabled globally with tighter custom rules on the
-   * credential-bearing endpoints to blunt credential stuffing and brute force.
-   * Backed by the shared store (memory in dev; wire to secondary storage in
-   * production infra).
+   * Rate limiting. Windows below are per client IP and shared across replicas
+   * via Redis (`customStorage`). Do not set `secondaryStorage` — Better Auth
+   * would then serve sessions and verification tokens from Redis and skip the
+   * Postgres row that holds the active organisation and two-factor state.
    */
   rateLimit: {
     enabled: true,
-    window: 60,
-    max: 100,
+    window: AUTH_LIMITS.window,
+    max: AUTH_LIMITS.max,
+    customStorage: createAuthRateLimitStorage(),
     customRules: {
-      '/sign-in/email': { window: 60, max: 5 },
-      '/sign-up/email': { window: 60, max: 5 },
-      '/forget-password': { window: 60, max: 3 },
-      '/reset-password': { window: 60, max: 5 },
-      '/two-factor/verify-totp': { window: 60, max: 5 },
-      '/two-factor/verify-backup-code': { window: 60, max: 5 },
+      '/sign-in/email': AUTH_LIMITS.signInEmail,
+      '/sign-up/email': AUTH_LIMITS.signUpEmail,
+      '/forget-password': AUTH_LIMITS.forgetPassword,
+      '/request-password-reset': AUTH_LIMITS.requestPasswordReset,
+      '/reset-password': AUTH_LIMITS.resetPassword,
+      '/two-factor/verify-totp': AUTH_LIMITS.verifyTotp,
+      '/two-factor/verify-backup-code': AUTH_LIMITS.verifyBackupCode,
     },
   },
 
