@@ -1,0 +1,15 @@
+# Code owners for security-sensitive and governance paths.
+# A person must have write access to approve. Both current repository
+# administrators are listed. The last matching pattern wins.
+
+/src/lib/auth/         @jusso-dev @joshluongo
+/src/lib/tenancy/      @jusso-dev @joshluongo
+/src/lib/permissions/  @jusso-dev @joshluongo
+/src/db/migrations/    @jusso-dev @joshluongo
+/infra/                @jusso-dev @joshluongo
+/.github/              @jusso-dev @joshluongo
+
+/LICENSE               @jusso-dev @joshluongo
+/SECURITY.md           @jusso-dev @joshluongo
+/CONTRIBUTING.md       @jusso-dev @joshluongo
+/CHANGELOG.md          @jusso-dev @joshluongo

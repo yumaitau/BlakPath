@@ -13,3 +13,6 @@ src/db/migrations/
 # Coverage / build outputs.
 coverage/
 dist/
+
+# Verbatim GNU licence text. Reformatting breaks GitHub licence detection.
+LICENSE

@@ -53,3 +53,9 @@ restore. Confirm the source recovery point is immutable, open an incident, and
 repeat into a new isolated target after correcting the fault. A restore is usable
 only after sign-in, tenant records, evidence authorisation and every audit chain
 have been verified.
+
+## Vulnerability reports
+
+Do not report a suspected vulnerability in a public issue, pull request,
+discussion or this runbook. Do not paste personal information, evidence or
+secrets into an operational ticket. Follow [`SECURITY.md`](../SECURITY.md).
