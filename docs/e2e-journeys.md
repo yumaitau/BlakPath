@@ -28,7 +28,9 @@ minio-init`) or S3 staging buckets. Without it the test skips; the path is
    drag reschedule persist + reload, ICS import/export round-trip,
    resource conflict warning.
 5. `sso-consent.spec.ts` — SSO bindings gating, consent gate on
-   representative access, SCIM-off denial without enumeration.
+   representative access, SCIM-off denial without enumeration, consent
+   ledger (wording version, grant for a client without an account, evidence
+   required, withdrawal appended once, history shows withdrawn).
 6. Existing kept: `core-staff-flow`, `product-workflows`,
    `membership-lifecycle`, `api-boundaries`, `accessibility`.
 
