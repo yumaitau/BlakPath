@@ -226,3 +226,22 @@ export const breakGlassStatus = pgEnum('break_glass_status', [
   'expired',
   'revoked',
 ]);
+
+/**
+ * Who holds the tenant's key-encryption key. These are custody arrangements,
+ * not judgements about a person. `client_owned` is a CMK in the client's
+ * account or an external key store (XKS) key. Escrow is a separate flag.
+ */
+export const keyCustodyMode = pgEnum('key_custody_mode', [
+  'blakpath_managed',
+  'client_owned',
+  'client_owned_escrow',
+]);
+
+/** Whether a tenant key may wrap or unwrap data. */
+export const organisationKeyStatus = pgEnum('organisation_key_status', [
+  'active',
+  'disabled',
+  'pending_deletion',
+  'unavailable',
+]);

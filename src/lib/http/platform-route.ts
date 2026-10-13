@@ -12,6 +12,7 @@ import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy'
 import { stepUpRequiredBody } from '@/lib/auth/step-up-policy';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { BreakGlassError } from '@/domains/break-glass';
+import { tenantKeyErrorResponse } from '@/lib/http/tenant-key-response';
 
 /**
  * Route guard for PLATFORM-operator actions (e.g. requesting/activating
@@ -40,6 +41,8 @@ export async function requirePlatformOperator(): Promise<{ userId: string }> {
 
 /** Map break-glass / step-up / auth errors to non-leaking responses. */
 export function breakGlassErrorResponse(error: unknown): NextResponse {
+  const locked = tenantKeyErrorResponse(error);
+  if (locked) return locked;
   if (error instanceof StepUpRequiredError) {
     return NextResponse.json(stepUpRequiredBody(), { status: 401 });
   }

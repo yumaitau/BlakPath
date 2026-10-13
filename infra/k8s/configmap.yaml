@@ -18,6 +18,9 @@ data:
   S3_BUCKET_AUDIT_ANCHORS: blakpath-prod-audit-anchors-959038055523-ap-southeast-2
   AUDIT_ANCHOR_OBJECT_LOCK: 'true'
   S3_KMS_KEY_ID: arn:aws:kms:ap-southeast-2:959038055523:key/737b7098-2c77-4a4e-b4c6-666597743651
+  # Platform CMK for non-tenant envelope encryption. Not a secret.
+  # Replace before production; release:check rejects a missing or local key.
+  # PLATFORM_KMS_KEY_ARN: arn:aws:kms:ap-southeast-2:ACCOUNT:key/KEY_ID
   S3_FORCE_PATH_STYLE: 'false'
   # Relay host for non-production SMTP. Production mail uses ses:SendEmail
   # on the workload role; do not put SMTP credentials in the runtime secret.

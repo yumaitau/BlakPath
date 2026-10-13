@@ -120,11 +120,8 @@ export function validateProductionReadiness(
         'standing SMTP credentials must be unset; send mail with the workload role',
     });
   }
-  if (
-    !/^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i.test(
-      environment.S3_KMS_KEY_ID ?? '',
-    )
-  ) {
+  const kmsKeyArn = /^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i;
+  if (!kmsKeyArn.test(environment.S3_KMS_KEY_ID ?? '')) {
     issues.push({
       key: 'S3_KMS_KEY_ID',
       message: 'must reference a customer-managed ap-southeast-2 KMS key',
@@ -175,17 +172,22 @@ export function validateProductionReadiness(
       message: 'must be a non-placeholder secret of at least 32 characters',
     });
   }
-  const encryptionKey = environment.ENCRYPTION_MASTER_KEY;
-  let decodedLength = 0;
-  try {
-    decodedLength = encryptionKey ? Buffer.from(encryptionKey, 'base64').length : 0;
-  } catch {
-    decodedLength = 0;
-  }
-  if (!encryptionKey || decodedLength !== 32 || PLACEHOLDER.test(encryptionKey)) {
+  if (environment.ENCRYPTION_LOCAL_KEY) {
     issues.push({
-      key: 'ENCRYPTION_MASTER_KEY',
-      message: 'must be a non-placeholder base64-encoded 32-byte key',
+      key: 'ENCRYPTION_LOCAL_KEY',
+      message: 'local encryption provider is refused in production',
+    });
+  }
+  if (environment.KMS_ENDPOINT) {
+    issues.push({
+      key: 'KMS_ENDPOINT',
+      message: 'local KMS endpoint is refused in production',
+    });
+  }
+  if (!kmsKeyArn.test(environment.PLATFORM_KMS_KEY_ARN ?? '')) {
+    issues.push({
+      key: 'PLATFORM_KMS_KEY_ARN',
+      message: 'must reference a customer-managed ap-southeast-2 KMS key',
     });
   }
 
