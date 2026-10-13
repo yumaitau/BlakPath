@@ -361,6 +361,20 @@ export async function revokeCertificate(
     result: 'success',
     reason: input.reason,
   });
+
+  // Tell integrators the credential is no longer valid. The free-text reason
+  // stays in the audit trail only; the payload carries ids and the timestamp.
+  await emitWebhookEventSafe({
+    organisationId: ctx.organisationId,
+    event: 'certificate.revoked',
+    payload: {
+      certificateId: id,
+      reference: row.reference,
+      applicationId: row.applicationId,
+      revokedAt: row.revokedAt?.toISOString() ?? null,
+    },
+    correlationId: ctx.correlationId,
+  });
   return row;
 }
 

@@ -36,6 +36,7 @@ export interface SchedulerIntervals {
   auditVerifyMs: number;
   retentionSweepMs: number;
   reminderSweepMs?: number;
+  webhookSweepMs?: number;
 }
 
 export interface ReconcileSchedulesInput {
@@ -43,6 +44,7 @@ export interface ReconcileSchedulesInput {
   auditQueue: ScheduledQueue;
   retentionQueue: ScheduledQueue;
   reminderQueue?: ScheduledQueue;
+  webhookSweepQueue?: ScheduledQueue;
   intervals: SchedulerIntervals;
 }
 
@@ -50,6 +52,7 @@ export interface ReconcileSchedulesResult {
   auditSchedulers: number;
   retentionSchedulers: number;
   reminderSchedulers: number;
+  webhookSweepSchedulers: number;
   removedSchedulers: number;
 }
 
@@ -119,38 +122,49 @@ export async function reconcileTenantSchedules(
   input: ReconcileSchedulesInput,
 ): Promise<ReconcileSchedulesResult> {
   const organisationIds = [...new Set(input.organisationIds)].filter(Boolean);
-  const [auditRemoved, retentionRemoved, reminderRemoved] = await Promise.all([
-    reconcileQueue(
-      input.auditQueue,
-      QueueName.AuditVerify,
-      organisationIds,
-      input.intervals.auditVerifyMs,
-    ),
-    reconcileQueue(
-      input.retentionQueue,
-      QueueName.Retention,
-      organisationIds,
-      input.intervals.retentionSweepMs,
-    ),
-    input.reminderQueue
-      ? reconcileQueue(
-          input.reminderQueue,
-          QueueName.Reminder,
-          organisationIds,
-          input.intervals.reminderSweepMs ?? 900_000,
-        )
-      : Promise.resolve(0),
-  ]);
+  const [auditRemoved, retentionRemoved, reminderRemoved, webhookSweepRemoved] =
+    await Promise.all([
+      reconcileQueue(
+        input.auditQueue,
+        QueueName.AuditVerify,
+        organisationIds,
+        input.intervals.auditVerifyMs,
+      ),
+      reconcileQueue(
+        input.retentionQueue,
+        QueueName.Retention,
+        organisationIds,
+        input.intervals.retentionSweepMs,
+      ),
+      input.reminderQueue
+        ? reconcileQueue(
+            input.reminderQueue,
+            QueueName.Reminder,
+            organisationIds,
+            input.intervals.reminderSweepMs ?? 900_000,
+          )
+        : Promise.resolve(0),
+      input.webhookSweepQueue
+        ? reconcileQueue(
+            input.webhookSweepQueue,
+            QueueName.WebhookSweep,
+            organisationIds,
+            input.intervals.webhookSweepMs ?? 900_000,
+          )
+        : Promise.resolve(0),
+    ]);
 
   return {
     auditSchedulers: organisationIds.length,
     retentionSchedulers: organisationIds.length,
     reminderSchedulers: input.reminderQueue ? organisationIds.length : 0,
-    removedSchedulers: auditRemoved + retentionRemoved + reminderRemoved,
+    webhookSweepSchedulers: input.webhookSweepQueue ? organisationIds.length : 0,
+    removedSchedulers:
+      auditRemoved + retentionRemoved + reminderRemoved + webhookSweepRemoved,
   };
 }
 
-/** Query active tenants and reconcile their audit-verification/retention jobs. */
+/** Query active tenants and reconcile their periodic maintenance jobs. */
 export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
   const active = await db
     .select({ id: organisations.id })
@@ -162,10 +176,12 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
     auditQueue: getQueue(QueueName.AuditVerify),
     retentionQueue: getQueue(QueueName.Retention),
     reminderQueue: getQueue(QueueName.Reminder),
+    webhookSweepQueue: getQueue(QueueName.WebhookSweep),
     intervals: {
       auditVerifyMs: env.AUDIT_VERIFY_INTERVAL_MS,
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
       reminderSweepMs: env.REMINDER_SWEEP_INTERVAL_MS,
+      webhookSweepMs: env.WEBHOOK_SWEEP_INTERVAL_MS,
     },
   });
 }

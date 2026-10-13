@@ -7,6 +7,7 @@ vi.mock('@/lib/queues', () => ({
     AuditVerify: 'audit-verify',
     Retention: 'retention',
     Reminder: 'reminder',
+    WebhookSweep: 'webhook-sweep',
   },
   getQueue: vi.fn(),
 }));
@@ -91,6 +92,7 @@ describe('tenant maintenance scheduler', () => {
       auditSchedulers: 2,
       retentionSchedulers: 2,
       reminderSchedulers: 0,
+      webhookSweepSchedulers: 0,
       removedSchedulers: 2,
     });
   });
@@ -116,5 +118,32 @@ describe('tenant maintenance scheduler', () => {
     ]);
     expect(report.reminderSchedulers).toBe(1);
     expect(report.removedSchedulers).toBe(0);
+  });
+
+  it('schedules webhook sweeps and removes stale ones when a sweep queue is supplied', async () => {
+    const stale = tenantSchedulerId(QueueName.WebhookSweep, 'closed-org');
+    const webhookSweepQueue = fakeQueue([stale]);
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue: fakeQueue(),
+      retentionQueue: fakeQueue(),
+      webhookSweepQueue,
+      intervals: {
+        auditVerifyMs: 60_000,
+        retentionSweepMs: 120_000,
+        webhookSweepMs: 300_000,
+      },
+    });
+    expect(webhookSweepQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.WebhookSweep, 'org-a'),
+        every: 300_000,
+        name: 'sweep',
+        organisationId: 'org-a',
+      },
+    ]);
+    expect(webhookSweepQueue.removed).toEqual([stale]);
+    expect(report.webhookSweepSchedulers).toBe(1);
+    expect(report.removedSchedulers).toBe(1);
   });
 });

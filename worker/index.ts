@@ -1,7 +1,8 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
-import { closeQueues, type TenantJob } from '@/lib/queues';
+import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
+import { webhookBackoffStrategy } from '@/domains/webhooks/retry';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { startTenantScheduleSync } from './scheduler';
 import { queueFailureSignal } from './operational-signals';
@@ -52,6 +53,10 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
       concurrency: 4,
       // Do not autorun until all workers are constructed and listeners wired.
       autorun: false,
+      // Webhook deliveries retry over hours (see domains/webhooks/retry.ts).
+      ...(queueName === QueueName.Webhook
+        ? { settings: { backoffStrategy: webhookBackoffStrategy } }
+        : {}),
     },
   );
 

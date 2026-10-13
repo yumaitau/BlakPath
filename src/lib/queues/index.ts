@@ -21,6 +21,7 @@ export enum QueueName {
   Retention = 'retention',
   Export = 'export',
   Webhook = 'webhook',
+  WebhookSweep = 'webhook-sweep',
   Reminder = 'reminder',
 }
 

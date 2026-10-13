@@ -3,7 +3,7 @@ import type { Job } from 'bullmq';
 import type { Logger } from 'pino';
 import { QueueName, type TenantJob } from '@/lib/queues';
 import { processEvidenceScan } from '@/domains/evidence';
-import { processWebhookDelivery } from '@/domains/webhooks';
+import { processWebhookDelivery, sweepStaleWebhookDeliveries } from '@/domains/webhooks';
 import { processExport } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
@@ -200,6 +200,16 @@ const webhookProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
+ * Webhook sweep processor. Re-queues the tenant's `pending` deliveries that have
+ * no live job (e.g. the enqueue after insert failed). Tenant-bound; enqueued by
+ * a scheduler.
+ */
+const webhookSweepProcessor: ProcessorFn = async (job) => {
+  const { organisationId, correlationId } = job.data;
+  await sweepStaleWebhookDeliveries({ organisationId, correlationId });
+};
+
+/**
  * Export processor. Assembles the requested report as CSV, stores it, and marks
  * the request ready (or failed). A malformed payload is dropped, not retried.
  */
@@ -246,6 +256,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Retention]: retentionProcessor,
   [QueueName.Export]: exportProcessor,
   [QueueName.Webhook]: webhookProcessor,
+  [QueueName.WebhookSweep]: webhookSweepProcessor,
   [QueueName.Reminder]: reminderProcessor,
 };
 

@@ -230,6 +230,7 @@ export type AuditAction =
   | 'integration.credentials_rotated'
   | 'integration.call_succeeded'
   | 'integration.call_failed'
+  | 'integration.redelivery_requested'
   // Admin / configuration.
   | 'admin.organisation_updated'
   | 'admin.settings_updated'

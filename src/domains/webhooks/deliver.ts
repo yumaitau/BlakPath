@@ -3,6 +3,7 @@ import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { logger } from '@/lib/observability/logger';
+import { WEBHOOK_MAX_ATTEMPTS } from './retry';
 import {
   signPayload,
   WEBHOOK_DELIVERY_HEADER,
@@ -15,12 +16,13 @@ import {
  *
  * Runs with an explicit organisation id (no ambient tenant context). Signs the
  * body, POSTs it, and records the outcome. FAIL-SECURE about retries: a failed
- * delivery THROWS so BullMQ retries with backoff, until `MAX_ATTEMPTS`, after
- * which the delivery is marked `failed` and left for operator inspection — it is
- * never silently dropped and never "succeeds" without a 2xx.
+ * delivery THROWS so BullMQ retries with the webhook backoff (hours, see
+ * `retry.ts`), until `MAX_ATTEMPTS`, after which the delivery is marked `failed`
+ * and left for operator inspection or manual redelivery — it is never silently
+ * dropped and never "succeeds" without a 2xx.
  */
 
-export const MAX_ATTEMPTS = 5;
+export const MAX_ATTEMPTS = WEBHOOK_MAX_ATTEMPTS;
 const TIMEOUT_MS = 10_000;
 
 export interface DeliverInput {
