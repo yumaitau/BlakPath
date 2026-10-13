@@ -2,8 +2,9 @@
 
 BlakPath is built to hold identity evidence, genealogy and determinations with
 the care that information deserves. Privacy here is not a bolt-on: it is
-data minimisation, Australian data sovereignty, encryption of sensitive fields,
-recorded consent, thoughtful retention, and hard limits on automation.
+data minimisation, Australian data sovereignty, encryption only where the code
+actually applies it, recorded consent, thoughtful retention, and hard limits
+on automation.
 
 > The foundational privacy and safety guarantee: **BlakPath never determines
 > Aboriginality.** It does not score, rank, predict, infer, auto-approve or
@@ -18,9 +19,12 @@ recorded consent, thoughtful retention, and hard limits on automation.
 - **Relational data stays relational.** JSONB is used only for genuinely flexible,
   organisation-authored config (terminology, guidance, branding) — never for data
   other modules must query, and never to smuggle in identity judgements.
-- **Audit stores metadata, not payloads.** `beforeMeta`/`afterMeta` capture
-  minimal change context; evidence content and secrets are never written to the
-  audit trail (`docs/audit-log-design.md`).
+- **Audit stores metadata, not payloads.** `beforeMeta`/`afterMeta` are
+  allowlisted, and a denylist blocks secrets
+  (`src/domains/audit/hash.ts`, `docs/audit-log-design.md`). Evidence content
+  is not written there. The event row **does** store `ipAddress` and
+  `userAgent`, so the trail is not free of personal data. Removing that is
+  #80. It is not done.
 - **Ids don't leak counts.** UUIDv7 identifiers are non-sequential and
   public-safe, so exposing an id never reveals how many records exist
   (`src/db/schema/_helpers.ts`).
@@ -35,24 +39,57 @@ recorded consent, thoughtful retention, and hard limits on automation.
 - Third-party processing that would move data offshore is not used for evidence,
   genealogy or determinations.
 
-## Sensitive-field envelope encryption (AES-256-GCM)
+## Encryption at rest (what is implemented)
 
-Some fields are too sensitive to sit in plaintext even inside a tenant-scoped
-database. These are protected with **envelope encryption**:
+Tenant content is **plaintext in PostgreSQL**. That includes applications,
+evidence metadata, decisions, certificate rows and the other tenant tables.
+File bytes are in object storage, not in those rows. There is no per-tenant
+key, no BYOK, no external key store, no escrow and no client-side encryption.
+The accepted design for those modes is
+[`docs/adr/0001-customer-held-keys.md`](adr/0001-customer-held-keys.md). It is
+not built (#119–#125). Do not describe it as a control the app already has.
 
-- A **data key** encrypts the field with **AES-256-GCM** (authenticated
-  encryption — confidentiality and integrity). The data key is itself wrapped by
-  a **master key** managed by KMS in production
-  (`ENCRYPTION_MASTER_KEY` is a base64-encoded 32-byte key; in production it is
-  sourced from KMS, never the database — `src/lib/env.ts`).
-- **Key versioning** (`ENCRYPTION_KEY_VERSION`) is stored alongside ciphertext so
-  keys can be rotated without a flag-day re-encryption.
-- Applied to authentication secrets today — the TOTP `secret` and `backupCodes`
-  in `two_factors` store **ciphertext only** — and to sensitive evidence/identity
-  fields as those domains land (`src/db/schema/auth.ts`,
-  `docs/authentication.md`).
-- Plaintext exists only transiently in memory during a single operation; it is
-  never logged (pino) and never persisted.
+What the code does today:
+
+- **Field-encryption helper, unused on write paths.** `encryptField` /
+  `decryptField` (`src/lib/encryption/envelope.ts`) mint a 256-bit data key,
+  encrypt with AES-256-GCM, and wrap the data key with
+  `ENCRYPTION_MASTER_KEY`. That value is a base64 32-byte environment variable
+  (`src/lib/env.ts`). The application does not call KMS to create it, wrap it,
+  or unwrap it. There is no encryption context and no additional authenticated
+  data. `ENCRYPTION_KEY_VERSION` is stamped on the blob the helper returns.
+  Unit tests call the helper. No domain writer does, so no tenant column is
+  stored as an `EncryptedField`.
+- **TOTP material is encrypted by Better Auth, not by that helper.** On
+  Better Auth 1.6 the TOTP `secret` and backup codes are passed through
+  `symmetricEncrypt` before insert: XChaCha20-Poly1305 with key
+  SHA-256(`BETTER_AUTH_SECRET`). That is not `ENCRYPTION_MASTER_KEY` and not a
+  KMS data key (`docs/authentication.md`). Plaintext exists in the auth
+  process during enrolment and verification. Passwords are argon2 hashes.
+  Passkeys store a public key only.
+- **Objects use one platform KMS key in production.** `src/lib/storage/s3.ts`
+  sets SSE-KMS to `S3_KMS_KEY_ID` when `NODE_ENV` is `production` and
+  `S3_ENDPOINT` is unset. Every tenant shares that key. With a custom S3
+  endpoint (local MinIO) the presign path does not set SSE.
+- **KMS signing is not data encryption.** `src/lib/kms/sign.ts` signs the
+  canonical certificate payload. It does not encrypt evidence or rows.
+- **Redis payloads are ids.** Queue jobs carry `organisationId`,
+  `correlationId` and opaque entity ids. They are not encrypted. The queue
+  helper's contract is that applicant content is not placed in the payload
+  (`src/lib/queues/index.ts`). That is a code convention, not ciphertext.
+- **Logs must not contain plaintext.** Pino censors a fixed path list
+  (secrets, names, email, ciphertext fields) in
+  `src/lib/observability/logger.ts`. A message or field outside that list is
+  not automatically removed. Operational logs are not the audit trail.
+- **Backups and search.** There is no production backup implementation in
+  this repo, and there is no search index or blind index. A database or
+  bucket dump today would copy plaintext rows and objects under the platform
+  key above.
+
+Plaintext of tenant rows is persisted. It is not "memory only". The Tier 1
+design, once built, will still decrypt into server memory for the life of a
+request. That limit is written in the ADR so it is not mistaken for
+zero-knowledge.
 
 ## Consent ledger (planned)
 

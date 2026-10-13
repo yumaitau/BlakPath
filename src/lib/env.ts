@@ -34,8 +34,9 @@ const serverSchema = z
     BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be >= 32 chars'),
     BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
 
-    // Application-level envelope encryption. Master key is a base64-encoded
-    // 32-byte key. In production this is sourced from KMS, never the DB.
+    // Application-level envelope encryption. The KEK is this base64 32-byte
+    // env value. The application does not call KMS to wrap or unwrap it.
+    // See docs/adr/0001-customer-held-keys.md.
     ENCRYPTION_MASTER_KEY: z
       .string()
       .min(44, 'ENCRYPTION_MASTER_KEY must be a base64-encoded 32-byte key'),

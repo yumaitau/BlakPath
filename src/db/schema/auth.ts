@@ -150,19 +150,20 @@ export const passkeys = pgTable(
 /**
  * TOTP two-factor secret and recovery codes (Better Auth twoFactor plugin).
  *
- * SECURITY: `secret` and `backupCodes` hold authentication secrets. They MUST
- * be envelope-encrypted (AES-GCM under a KMS-managed data key) by the
- * application before being written here — this table stores ciphertext only,
- * never the plaintext TOTP secret or usable backup codes.
+ * Better Auth 1.6 encrypts `secret` and `backupCodes` with
+ * XChaCha20-Poly1305 under SHA-256(BETTER_AUTH_SECRET) before insert
+ * (`symmetricEncrypt`). That is not `encryptField`, not
+ * `ENCRYPTION_MASTER_KEY`, and not a KMS data key. Plaintext exists in the
+ * auth process during enrolment and verification.
  */
 export const twoFactors = pgTable('two_factors', {
   id: primaryId(),
   userId: refId('user_id')
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
-  /** Envelope-encrypted TOTP secret ciphertext. Never plaintext. */
+  /** Better Auth ciphertext of the TOTP secret. Not a KMS envelope. */
   secret: text('secret').notNull(),
-  /** Envelope-encrypted recovery codes ciphertext. Never plaintext. */
+  /** Better Auth ciphertext of the recovery codes. Not a KMS envelope. */
   backupCodes: text('backup_codes').notNull(),
   ...timestamps,
 });
