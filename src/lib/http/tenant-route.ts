@@ -8,7 +8,7 @@ import {
 } from '@/lib/auth/session';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
-import { logger } from '@/lib/observability/logger';
+import { captureException } from '@/lib/observability/errors';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
@@ -82,7 +82,7 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof AuthorizationError || error instanceof TenantContextError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  // Unknown error: log server-side for diagnosis, return nothing sensitive.
-  logger.error({ err: error }, 'unhandled route error');
+  // Unknown error: scrubbed operational record only, return nothing sensitive.
+  captureException(error);
   return NextResponse.json({ error: 'Internal error' }, { status: 500 });
 }

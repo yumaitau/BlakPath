@@ -10,6 +10,15 @@ resources:
   - worker-deployment.yaml
   - service-ingress.yaml
   - autoscaling.yaml
+  - otel-collector.yaml
+  - fluent-bit.yaml
+configMapGenerator:
+  - name: blakpath-otel-collector
+    files:
+      - collector.yaml=../otel/collector-eks.yaml
+  - name: blakpath-fluent-bit
+    files:
+      - fluent-bit.conf=../otel/fluent-bit.conf
 images:
   - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
     newTag: 7350f7c

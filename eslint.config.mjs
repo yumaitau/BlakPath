@@ -49,8 +49,14 @@ const config = [
       'drizzle.config.ts',
       'src/instrumentation.ts',
       'tests/**',
+      'infra/aws/synthetics/**',
     ],
     rules: { 'no-restricted-properties': 'off' },
+  },
+  {
+    // The canary is inlined CommonJS for the CloudWatch Synthetics runtime.
+    files: ['infra/aws/synthetics/**'],
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
 ];
 

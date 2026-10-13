@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireSession, UnauthenticatedError } from '@/lib/auth/session';
+import { captureException } from '@/lib/observability/errors';
 import { listMembershipsForUser } from '@/lib/tenancy/memberships';
 
 /**
@@ -18,6 +19,7 @@ export async function GET(): Promise<Response> {
     if (error instanceof UnauthenticatedError) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    captureException(error);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }

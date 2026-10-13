@@ -160,6 +160,36 @@ export function scanBuffer(
   });
 }
 
+/**
+ * Ask clamd for its VERSION line. Resolves null when the scanner cannot be
+ * reached — signature age is operational, and a miss must not fail the worker.
+ */
+export function readClamdVersion(options: ScanOptions = {}): Promise<string | null> {
+  const host = options.host ?? env.CLAMAV_HOST;
+  const port = options.port ?? env.CLAMAV_PORT;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  return new Promise<string | null>((resolve) => {
+    let settled = false;
+    const chunks: Buffer[] = [];
+    const socket = net.createConnection({ host, port });
+    socket.setTimeout(timeoutMs);
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.on('connect', () => socket.write('zVERSION\0'));
+    socket.on('data', (buf: Buffer) => {
+      chunks.push(buf);
+      if (buf.includes(0)) finish(Buffer.concat(chunks).toString('utf8'));
+    });
+    socket.on('timeout', () => finish(null));
+    socket.on('error', () => finish(null));
+    socket.on('close', () => finish(null));
+  });
+}
+
 /** Reachability probe (PING/PONG) for readiness checks. */
 export function pingClamd(options: ScanOptions = {}): Promise<boolean> {
   const host = options.host ?? env.CLAMAV_HOST;

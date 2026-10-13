@@ -33,3 +33,17 @@ export async function register(): Promise<void> {
     logger.error({ err }, 'failed to register SSO providers');
   }
 }
+
+/**
+ * Next.js calls this for uncaught server errors. The route is the template
+ * (`/form/[token]`), never the raw URL. Headers are not logged.
+ */
+export async function onRequestError(
+  error: unknown,
+  request: { method: string },
+  context: { routePath: string },
+): Promise<void> {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  const { captureException } = await import('@/lib/observability/errors');
+  captureException(error, { method: request.method, route: context.routePath });
+}

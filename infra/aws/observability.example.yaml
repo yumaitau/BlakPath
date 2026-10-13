@@ -1,0 +1,707 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  BlakPath production observability for EKS in ap-southeast-2. Creates the
+  KMS-encrypted log groups, IRSA roles for ADOT and Fluent Bit, the operations
+  dashboard, SLO alarms, and the readiness/sign-in canary. Apply only in
+  ap-southeast-2. Does not create the EKS cluster.
+
+Rules:
+  SydneyOnly:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'ap-southeast-2']
+        AssertDescription: Deploy this stack only in ap-southeast-2.
+
+Parameters:
+  EksOidcProviderArn:
+    Type: String
+    Description: IAM OIDC provider ARN for the production EKS cluster.
+  EksOidcIssuerHost:
+    Type: String
+    Description: >
+      OIDC issuer host and path without https://. Example
+      oidc.eks.ap-southeast-2.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE.
+    AllowedPattern: '^oidc\.eks\.ap-southeast-2\.amazonaws\.com/id/[A-Z0-9]+$'
+  OnCallTopicArn:
+    Type: String
+    Description: Existing ap-southeast-2 SNS topic integrated with the on-call channel.
+  PublicBaseUrl:
+    Type: String
+    Default: https://blakpath.yumait.au
+    Description: Public origin the canary calls. No trailing path.
+    AllowedPattern: '^https://.+'
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [30, 60, 90, 120, 180, 365, 400, 545, 731, 1827, 3653]
+    Description: >
+      Operational log retention. The agreed minimum is 30 days. Audit records
+      are not stored in these log groups.
+  CanaryRuntimeVersion:
+    Type: String
+    Default: syn-nodejs-puppeteer-11.0
+    Description: CloudWatch Synthetics runtime. Confirm the version is still offered before apply.
+
+Resources:
+  OperationalLogsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: BlakPath operational CloudWatch Logs and canary artifacts
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RootAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: CloudWatchLogs
+            Effect: Allow
+            Principal:
+              Service: !Sub logs.${AWS::Region}.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: '*'
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/blakpath/production/*
+
+  OperationalLogsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/blakpath-operational-logs
+      TargetKeyId: !Ref OperationalLogsKey
+
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: /blakpath/production/application
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !GetAtt OperationalLogsKey.Arn
+
+  MetricsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: /blakpath/production/metrics
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !GetAtt OperationalLogsKey.Arn
+
+  CollectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-otel-collector
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Federated": "${OidcArn}" },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "${Issuer}:aud": "sts.amazonaws.com",
+                    "${Issuer}:sub": "system:serviceaccount:blakpath:blakpath-otel-collector"
+                  }
+                }
+              }]
+            }
+          - OidcArn: !Ref EksOidcProviderArn
+            Issuer: !Ref EksOidcIssuerHost
+      Policies:
+        - PolicyName: BlakPathOtelExport
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: XRay
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+              - Sid: EmfLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                Resource:
+                  - !GetAtt MetricsLogGroup.Arn
+                  - !Sub ${MetricsLogGroup.Arn}:*
+              - Sid: Metrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: BlakPath/Operations
+              - Sid: LogKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !GetAtt OperationalLogsKey.Arn
+
+  FluentBitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-fluent-bit
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Federated": "${OidcArn}" },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "${Issuer}:aud": "sts.amazonaws.com",
+                    "${Issuer}:sub": "system:serviceaccount:blakpath:blakpath-fluent-bit"
+                  }
+                }
+              }]
+            }
+          - OidcArn: !Ref EksOidcProviderArn
+            Issuer: !Ref EksOidcIssuerHost
+      Policies:
+        - PolicyName: BlakPathContainerLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ApplicationLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                Resource:
+                  - !GetAtt ApplicationLogGroup.Arn
+                  - !Sub ${ApplicationLogGroup.Arn}:*
+              - Sid: LogKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !GetAtt OperationalLogsKey.Arn
+
+  CanaryArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub blakpath-synthetics-${AWS::AccountId}-ap-southeast-2
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt OperationalLogsKey.Arn
+            BucketKeyEnabled: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireCanaryArtifacts
+            Status: Enabled
+            ExpirationInDays: !Ref LogRetentionDays
+      VersioningConfiguration:
+        Status: Enabled
+
+  CanaryArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CanaryArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt CanaryArtifactBucket.Arn
+              - !Sub ${CanaryArtifactBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  CanaryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-synthetics-canary
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: synthetics.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: BlakPathCanary
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Artifacts
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt CanaryArtifactBucket.Arn
+                  - !Sub ${CanaryArtifactBucket.Arn}/*
+              - Sid: CanaryLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cwsyn-blakpath-ready*
+              - Sid: CanaryMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CloudWatchSynthetics
+              - Sid: ArtifactKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !GetAtt OperationalLogsKey.Arn
+
+  ReadySignInCanary:
+    Type: AWS::Synthetics::Canary
+    Properties:
+      Name: blakpath-ready
+      RuntimeVersion: !Ref CanaryRuntimeVersion
+      ExecutionRoleArn: !GetAtt CanaryRole.Arn
+      ArtifactS3Location: !Sub s3://${CanaryArtifactBucket}/canary
+      StartCanaryAfterCreation: true
+      Schedule:
+        Expression: rate(5 minutes)
+        DurationInSeconds: 60
+      RunConfig:
+        TimeoutInSeconds: 60
+        EnvironmentVariables:
+          BLAKPATH_BASE_URL: !Ref PublicBaseUrl
+      Code:
+        Handler: index.handler
+        Script: |
+          'use strict';
+
+          // CloudWatch Synthetics canary. Checks /api/ready and the sign-in page.
+          // No credentials and no applicant data. Keep this file identical to the
+          // Script block in infra/aws/observability.example.yaml.
+
+          function compact(body) {
+            return String(body).replace(/\s+/g, '');
+          }
+
+          function evaluateReady(status, body) {
+            if (status !== 200) return 'ready status ' + status;
+            if (!compact(body).includes('"status":"ready"')) return 'ready body';
+            return null;
+          }
+
+          function evaluateSignIn(status, body) {
+            if (status !== 200) return 'sign-in status ' + status;
+            if (!String(body).includes('Sign in')) return 'sign-in marker';
+            return null;
+          }
+
+          function get(url) {
+            const lib = url.startsWith('https:') ? require('https') : require('http');
+            return new Promise(function (resolve, reject) {
+              const req = lib.get(url, function (res) {
+                const chunks = [];
+                res.on('data', function (chunk) {
+                  chunks.push(chunk);
+                });
+                res.on('end', function () {
+                  resolve({
+                    status: res.statusCode || 0,
+                    body: Buffer.concat(chunks).toString('utf8'),
+                  });
+                });
+              });
+              req.setTimeout(10000, function () {
+                req.destroy(new Error('timeout'));
+              });
+              req.on('error', reject);
+            });
+          }
+
+          async function handler() {
+            const synthetics = require('Synthetics');
+            const base = String(process.env.BLAKPATH_BASE_URL || '').replace(/\/$/, '');
+            if (!base.startsWith('https://')) {
+              throw new Error('BLAKPATH_BASE_URL must be https');
+            }
+
+            await synthetics.executeStep('ready', async function () {
+              const ready = await get(base + '/api/ready');
+              const failure = evaluateReady(ready.status, ready.body);
+              if (failure) throw new Error(failure);
+            });
+
+            await synthetics.executeStep('sign-in', async function () {
+              const page = await get(base + '/sign-in');
+              const failure = evaluateSignIn(page.status, page.body);
+              if (failure) throw new Error(failure);
+            });
+          }
+
+          exports.evaluateReady = evaluateReady;
+          exports.evaluateSignIn = evaluateSignIn;
+          exports.handler = handler;
+
+  Http5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-http-5xx
+      AlarmDescription: Sustained HTTP 5xx responses. Probes are excluded.
+      Namespace: BlakPath/Operations
+      MetricName: http.server.errors
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  QueueDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-queue-depth
+      AlarmDescription: A BullMQ queue backlog exceeded 100 jobs.
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+      Metrics:
+        - Id: depth
+          Expression: MAX(SEARCH('{BlakPath/Operations,queue} MetricName="queue.depth"', 'Maximum', 60))
+          Label: Max queue depth
+          ReturnData: true
+
+  QuarantineAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-quarantine-age
+      AlarmDescription: Unscanned evidence is older than the one-hour handling target.
+      Namespace: BlakPath/Operations
+      MetricName: quarantine.oldest_age_seconds
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 3600
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  QueueOldestAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-queue-oldest-age
+      AlarmDescription: The oldest queued job is older than 15 minutes.
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 900
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      Metrics:
+        - Id: age
+          Expression: MAX(SEARCH('{BlakPath/Operations,queue} MetricName="queue.oldest_age_seconds"', 'Maximum', 60))
+          Label: Oldest queued job
+          ReturnData: true
+
+  SignatureAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-clamav-signature-age
+      AlarmDescription: ClamAV signatures are older than two days.
+      Namespace: BlakPath/Operations
+      MetricName: clamav.signature_age_seconds
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 172800
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref OnCallTopicArn]
+
+  DbPoolOpenAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-db-pool-open
+      AlarmDescription: Open Postgres connections for one workload exceeded 16.
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 16
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      Metrics:
+        - Id: open
+          Expression: MAX(SEARCH('{BlakPath/Operations,pool} MetricName="db.pool.open"', 'Maximum', 60))
+          Label: Open DB connections
+          ReturnData: true
+
+  AvailabilityFastBurnAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-availability-fast-burn
+      AlarmDescription: >
+        HTTP availability below 99% for three consecutive 5-minute windows.
+        The availability SLO is 99.9% non-5xx, probes excluded.
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 99
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+      Metrics:
+        - Id: errors
+          MetricStat:
+            Metric:
+              Namespace: BlakPath/Operations
+              MetricName: http.server.errors
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: requests
+          MetricStat:
+            Metric:
+              Namespace: BlakPath/Operations
+              MetricName: http.server.requests
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: availability
+          Expression: IF(requests>0,100*(requests-errors)/requests,100)
+          Label: Availability percent
+          ReturnData: true
+
+  HttpP95Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-http-p95
+      AlarmDescription: HTTP p95 latency exceeded 800ms. The latency SLO is 800ms.
+      Namespace: BlakPath/Operations
+      MetricName: http.server.duration_p95_ms
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 800
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+
+  ScanP95Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-scan-p95
+      AlarmDescription: Malware-scan p95 exceeded 60 seconds.
+      Namespace: BlakPath/Operations
+      MetricName: scan.duration_p95_ms
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+
+  CanaryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-canary-ready
+      AlarmDescription: >
+        /api/ready or the sign-in page failed two consecutive canary runs.
+      Namespace: CloudWatchSynthetics
+      MetricName: Failed
+      Dimensions:
+        - Name: CanaryName
+          Value: blakpath-ready
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: blakpath-operations
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "HTTP requests and 5xx",
+                "view": "timeSeries",
+                "period": 60,
+                "metrics": [
+                  [ "BlakPath/Operations", "http.server.requests", { "stat": "Sum" } ],
+                  [ "BlakPath/Operations", "http.server.errors", { "stat": "Sum" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "HTTP p95 (ms)",
+                "view": "timeSeries",
+                "period": 60,
+                "metrics": [
+                  [ "BlakPath/Operations", "http.server.duration_p95_ms", { "stat": "Maximum" } ]
+                ],
+                "annotations": { "horizontal": [{ "value": 800, "label": "SLO" }] }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "Scan p95 (ms)",
+                "view": "timeSeries",
+                "period": 60,
+                "metrics": [
+                  [ "BlakPath/Operations", "scan.duration_p95_ms", { "stat": "Maximum" } ]
+                ],
+                "annotations": { "horizontal": [{ "value": 60000, "label": "SLO" }] }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 6, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "Queue depth",
+                "view": "timeSeries",
+                "period": 60,
+                "metrics": [
+                  [ { "expression": "SEARCH('{BlakPath/Operations,queue} MetricName=\"queue.depth\"', 'Maximum', 60)", "id": "q" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 6, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "Quarantine backlog and age",
+                "view": "timeSeries",
+                "period": 60,
+                "metrics": [
+                  [ "BlakPath/Operations", "quarantine.backlog", { "stat": "Maximum" } ],
+                  [ "BlakPath/Operations", "quarantine.oldest_age_seconds", { "stat": "Maximum", "yAxis": "right" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 6, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "ClamAV signature age (s) and DB pool",
+                "view": "timeSeries",
+                "period": 60,
+                "metrics": [
+                  [ "BlakPath/Operations", "clamav.signature_age_seconds", { "stat": "Maximum" } ],
+                  [ { "expression": "SEARCH('{BlakPath/Operations,pool} MetricName=\"db.pool.open\"', 'Maximum', 60)", "id": "p" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 12, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "Canary failures",
+                "view": "timeSeries",
+                "period": 300,
+                "metrics": [
+                  [ "CloudWatchSynthetics", "Failed", "CanaryName", "blakpath-ready", { "stat": "Sum" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 12, "width": 8, "height": 6,
+              "properties": {
+                "region": "${AWS::Region}",
+                "title": "Captured exceptions",
+                "view": "timeSeries",
+                "period": 60,
+                "metrics": [
+                  [ "BlakPath/Operations", "CapturedExceptions", { "stat": "Sum" } ],
+                  [ "BlakPath/Operations", "app.errors", { "stat": "Sum" } ]
+                ]
+              }
+            }
+          ]
+        }
+
+Outputs:
+  ApplicationLogGroupName:
+    Description: Pass this to operational-alerts.example.yaml ApplicationLogGroupName.
+    Value: !Ref ApplicationLogGroup
+  MetricsLogGroupName:
+    Value: !Ref MetricsLogGroup
+  CollectorRoleArn:
+    Value: !GetAtt CollectorRole.Arn
+  FluentBitRoleArn:
+    Value: !GetAtt FluentBitRole.Arn
+  OperationalLogsKeyArn:
+    Value: !GetAtt OperationalLogsKey.Arn
+  CanaryName:
+    Value: !Ref ReadySignInCanary

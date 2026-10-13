@@ -1,9 +1,9 @@
 # Minimal OpenTelemetry Collector configuration for BlakPath.
 #
 # Receives OTLP (gRPC + HTTP) from the web and worker, batches, and exports.
-# Locally this just logs to stdout via the debug exporter. In production, point
-# the exporter at your managed observability backend (still within
-# ap-southeast-2 for data residency) — replace the `debug` exporter accordingly.
+# Locally this just logs to stdout via the debug exporter. Production EKS uses
+# infra/otel/collector-eks.yaml, which exports traces to X-Ray and metrics to
+# CloudWatch in ap-southeast-2. Do not point this local file at a vendor SaaS.
 #
 # Privacy note: traces/metrics must NOT carry applicant PII or evidence content.
 # Attribute scrubbing is enforced at the SDK level in the app; this collector is

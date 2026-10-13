@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 import { FormTokenError, submitPublicResponse } from '@/domains/forms';
+import { captureException } from '@/lib/observability/errors';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -53,6 +54,7 @@ export async function POST(
     if (isAuthorizationError(error)) {
       return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
     }
+    captureException(error);
     return NextResponse.json({ error: 'Something went wrong.' }, { status: 500 });
   }
 }

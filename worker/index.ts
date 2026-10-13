@@ -1,9 +1,20 @@
+import { SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { Worker, type ConnectionOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
+import { captureException } from '@/lib/observability/errors';
+import { jobSpanAttributes } from '@/lib/observability/job-span';
 import { logger } from '@/lib/observability/logger';
-import { closeQueues, type TenantJob } from '@/lib/queues';
+import { recordScanDuration } from '@/lib/observability/metrics';
+import {
+  shutdown as shutdownOtel,
+  start as startOtel,
+  telemetryActive,
+} from '@/lib/observability/otel';
+import { scrubErrorForLog } from '@/lib/observability/scrub';
+import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { startTenantScheduleSync } from './scheduler';
+import { startOperationalMetrics } from './operational-metrics';
 import { queueFailureSignal } from './operational-signals';
 
 /**
@@ -38,13 +49,44 @@ const connection = redis as unknown as ConnectionOptions;
 /** Maximum time to wait for in-flight jobs on shutdown before forcing exit. */
 const SHUTDOWN_GRACE_MS = 25_000;
 
+const tracer = trace.getTracer('blakpath-worker');
+
 const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const processor = PROCESSORS[queueName];
   const childLogger = workerLogger.child({ queue: queueName });
 
   const worker = new Worker<TenantJob>(
     queueName,
-    async (job) => processor(job, childLogger),
+    async (job) => {
+      const started = performance.now();
+      try {
+        await tracer.startActiveSpan(
+          `process ${queueName}`,
+          {
+            kind: SpanKind.CONSUMER,
+            attributes: jobSpanAttributes(queueName, job),
+          },
+          async (span) => {
+            try {
+              await processor(job, childLogger);
+              span.setStatus({ code: SpanStatusCode.OK });
+            } catch (err) {
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: scrubErrorForLog(err).message,
+              });
+              throw err;
+            } finally {
+              span.end();
+            }
+          },
+        );
+      } finally {
+        if (queueName === QueueName.MalwareScan) {
+          recordScanDuration(performance.now() - started);
+        }
+      }
+    },
     {
       connection,
       prefix: 'bp:queue',
@@ -58,7 +100,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   worker.on('failed', (job, err) => {
     const failure = queueFailureSignal(job);
     childLogger.error(
-      { jobId: job?.id, ...failure, err },
+      { jobId: job?.id, ...failure, err: scrubErrorForLog(err) },
       failure.alert ? 'job retries exhausted' : 'job failed; retry scheduled',
     );
   });
@@ -68,7 +110,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   });
 
   worker.on('error', (err) => {
-    childLogger.error({ err }, 'worker error');
+    captureException(err, { route: queueName });
   });
 
   return worker;
@@ -76,6 +118,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
 let shuttingDown = false;
 let stopTenantScheduleSync: (() => void) | null = null;
+let stopOperationalMetrics: (() => void) | null = null;
 
 /**
  * Graceful shutdown: close every worker (waits for active jobs to settle),
@@ -99,7 +142,9 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
   try {
     stopTenantScheduleSync?.();
+    stopOperationalMetrics?.();
     await Promise.all(workers.map((w) => w.close()));
+    await shutdownOtel();
     await closeQueues();
     await redis.quit();
     clearTimeout(deadline);
@@ -115,10 +160,19 @@ process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason) => {
-  workerLogger.error({ err: reason }, 'unhandled rejection');
+  captureException(reason, { route: 'worker' });
 });
 
 async function main(): Promise<void> {
+  // Tracing and metrics are best-effort. A collector outage must not stop
+  // scans, retention or mail. Gauges register only after the SDK is up.
+  try {
+    await startOtel();
+    if (telemetryActive()) stopOperationalMetrics = startOperationalMetrics();
+  } catch (err) {
+    captureException(err, { route: 'worker' });
+  }
+
   // Create (or update) the durable per-tenant maintenance schedules before
   // accepting jobs. A startup failure is intentional: a worker without its
   // integrity/retention schedules is not healthy enough to serve.

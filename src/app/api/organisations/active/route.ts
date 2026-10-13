@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { requireSession, UnauthenticatedError } from '@/lib/auth/session';
 import { TenantContextError } from '@/lib/tenancy/context';
 import { setActiveOrganisation } from '@/domains/tenancy-selection/service';
+import { captureException } from '@/lib/observability/errors';
 
 const SESSION_DATA_COOKIE_NAMES = [
   'blakpath.session_data',
@@ -66,6 +67,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (error instanceof TenantContextError) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
+    captureException(error);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }

@@ -46,6 +46,32 @@ incident ticket.
 3. Restore the dependency, confirm `/api/live` remained healthy and `/api/ready`
    returns 200, then confirm the alarm returns to OK.
 
+## `captured_exception`
+
+1. Read `errorName`, the scrubbed `message` and `route` from the log event.
+   Do not turn message text back into a lookup of a person.
+2. If the route is a queue name, follow `queue_job_exhausted` when the job
+   also exhausted its retries. Otherwise treat it as an application fault.
+3. The alarm pages after 20 exceptions in five minutes, twice. One line is
+   not a page.
+
+## Queue depth or quarantine age
+
+1. `queue.depth` and `queue.oldest_age_seconds` are per queue. Start with the
+   queue that crossed 100 jobs or 15 minutes.
+2. `quarantine.oldest_age_seconds` above one hour means evidence is still
+   unscanned. Leave it quarantined. Restore ClamAV or the worker, then let
+   the existing job retry. Never mark an object clean by hand.
+3. ClamAV signature age above two days means the daemon is up but its
+   database is stale. Update signatures before trusting new scan results.
+
+## Canary
+
+`blakpath-ready` requests `/api/ready` and `/sign-in` every five minutes. The
+alarm pages after two consecutive failed runs. Confirm the origin, the load
+balancer and WAF before treating it as an application outage. The canary sends
+no credentials.
+
 ## Backup or restore failure
 
 Stop the drill or recovery, preserve its target, and do not promote a partial
