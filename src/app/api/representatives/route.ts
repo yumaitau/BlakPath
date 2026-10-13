@@ -10,7 +10,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       subjectUserId: string;
       representativeUserId: string;
       purpose: string;
-      consentRecordId: string;
+      consentEventId: string;
       expiresAt?: string;
     };
     const row = await withRequestTenant(() =>

@@ -149,6 +149,7 @@ export type AuditAction =
   | 'consent.updated'
   | 'consent.withdrawn'
   | 'consent.expired'
+  | 'consent.wording_published'
   // Representative access (consent-backed).
   | 'representative.requested'
   | 'representative.activated'
@@ -264,6 +265,7 @@ export type ResourceType =
   | 'record'
   | 'family_link'
   | 'consent'
+  | 'consent_wording'
   | 'representative_authorisation'
   | 'representative_authorisation'
   | 'workflow'
