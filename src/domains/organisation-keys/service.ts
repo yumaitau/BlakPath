@@ -3,6 +3,8 @@ import { db, type Database } from '@/db/client';
 import { organisationKeys } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit';
 import { parseKeyArn } from '@/lib/encryption/key-provider';
+import { DEV_TENANT_KEY_ARN } from '@/lib/encryption/provider';
+import { env, isProduction } from '@/lib/env';
 
 export type OrganisationKeyRow = typeof organisationKeys.$inferSelect;
 
@@ -46,6 +48,29 @@ export async function getOrganisationKey(
     .where(eq(organisationKeys.organisationId, organisationId))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Register a key when the organisation has none.
+ *
+ * Development and CI use the local tenant ARN. Production uses
+ * `PLATFORM_KMS_KEY_ARN` only as a bootstrap stand-in for seed and pilot
+ * paths that call this helper. Ordinary production org creation does not.
+ * When that ARN is unset, the organisation stays without a key and writes
+ * fail closed until a per-tenant CMK is registered.
+ */
+export async function ensureOrganisationKey(
+  organisationId: string,
+  database: Database = db,
+): Promise<void> {
+  const existing = await getOrganisationKey(organisationId, database);
+  if (existing) return;
+  const kmsKeyArn = isProduction() ? env.PLATFORM_KMS_KEY_ARN : DEV_TENANT_KEY_ARN;
+  if (!kmsKeyArn) return;
+  await registerOrganisationKey(
+    { organisationId, custodyMode: 'blakpath_managed', kmsKeyArn },
+    database,
+  );
 }
 
 /** Insert the organisation's current key and append a platform-chain event. */

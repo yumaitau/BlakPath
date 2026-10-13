@@ -78,6 +78,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     status: 'active',
     publicApplicationsOpen: false,
   });
+  const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+  await ensureOrganisationKey(organisationId);
 
   const userId = uuidv7();
   await db

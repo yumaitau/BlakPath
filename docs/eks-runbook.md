@@ -27,17 +27,23 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   role stays shared and is never narrowed per app.
 - Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
   Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
-  `alias/blakpath-prod-evidence` covers both S3 buckets. RDS uses its
-  provisioned key. No AWS-managed default keys in the secret path.
+  `alias/blakpath-prod-evidence` is the bucket default for both S3 buckets.
+  Objects written for a tenant use that tenant's CMK, with S3 Bucket Keys
+  off, so HeadObject shows the tenant key ARN. RDS uses its provisioned key.
+  No AWS-managed default keys in the secret path.
 - ElastiCache runs with transit and at-rest encryption. Redis holds
-  ephemeral state only — never tenant records.
+  ephemeral state only. Queue payloads are identifiers, never tenant field
+  contents.
 
 ## Data services
 
 - RDS Postgres with point-in-time recovery. Proxy in front for failover.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
-- S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
-  versioning on, AWS Backup coverage. MinIO exists for local dev only.
+- S3 evidence + quarantine buckets: block public access, enforce TLS,
+  versioning on, AWS Backup coverage. The bucket default CMK is
+  `alias/blakpath-prod-evidence`. Per-object SSE-KMS uses the tenant CMK.
+  Certificates and exports are objects in the evidence bucket. MinIO exists
+  for local dev only and does not send SSE headers.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
 - PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:

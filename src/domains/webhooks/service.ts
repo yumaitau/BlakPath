@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
+import { uuidv7 } from 'uuidv7';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
@@ -8,6 +9,7 @@ import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { addJob, QueueName } from '@/lib/queues';
 import { logger } from '@/lib/observability/logger';
+import { openWebhookRows, sealWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { createEndpointSchema, type CreateEndpointInput } from './schemas';
 import type { WebhookEvent } from './events';
 
@@ -43,41 +45,47 @@ export async function createEndpoint(
 
   const input = createEndpointSchema.parse(rawInput);
   const scope = currentScope();
+  const id = uuidv7();
+  const secret = await sealWebhookSecret(scope.organisationId, id, secretGen());
   const inserted = await scope.db
     .insert(webhookEndpoints)
     .values(
       scope.insertValues({
+        id,
         url: input.url,
-        secret: secretGen(),
+        secret,
         events: input.events,
         active: true,
         createdByUserId: ctx.userId,
       }),
     )
     .returning();
-  const row = must(inserted[0], 'webhook endpoint');
+  const stored = must(inserted[0], 'webhook endpoint');
+  const [row] = await openWebhookRows(scope.organisationId, [stored]);
+  const opened = must(row, 'webhook endpoint');
 
   await recordAudit({
     action: 'integration.connected',
     resourceType: 'integration',
-    resourceId: row.id,
+    resourceId: opened.id,
     result: 'success',
     after: { data: { url: input.url }, allow: ['url'] },
   });
-  return row;
+  return opened;
 }
 
 export async function listEndpoints(): Promise<WebhookEndpointRow[]> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(webhookEndpoints)
     .where(
       scope.where(webhookEndpoints.organisationId, isNull(webhookEndpoints.deletedAt)),
     )
     .orderBy(desc(webhookEndpoints.createdAt));
+  return openWebhookRows(scope.organisationId, rows);
 }
 
 export async function deleteEndpoint(id: string): Promise<void> {

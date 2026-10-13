@@ -320,27 +320,23 @@ export async function inviteAttendees(eventId: string): Promise<{ invited: numbe
       ),
     )
     .limit(100);
-  const { addJob, QueueName } = await import('@/lib/queues');
+  const { queueTenantEmail } = await import('@/lib/email/queue');
   let invited = 0;
   for (const a of attendees) {
     if (!a.email || a.userId) continue;
     const when = event.startAt.toISOString();
-    await addJob(
-      QueueName.Email,
-      'event-invite',
-      {
-        organisationId: scope.organisationId,
-        correlationId: ctx.correlationId,
-        to: a.email,
-        subject: `Invitation: ${event.title}`,
-        text: [
-          `You are invited: ${event.title}.`,
-          `When: ${when}${event.location ? ` at ${event.location}` : ''}.`,
-          'Sign in to BlakPath to respond.',
-        ].join('\n'),
-      },
-      { jobId: `event-invite:${a.id}` },
-    );
+    await queueTenantEmail({
+      organisationId: scope.organisationId,
+      correlationId: ctx.correlationId,
+      to: a.email,
+      subject: `Invitation: ${event.title}`,
+      text: [
+        `You are invited: ${event.title}.`,
+        `When: ${when}${event.location ? ` at ${event.location}` : ''}.`,
+        'Sign in to BlakPath to respond.',
+      ].join('\n'),
+      jobId: `event-invite:${a.id}`,
+    });
     invited += 1;
   }
   await recordAudit({

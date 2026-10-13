@@ -28,9 +28,10 @@ import { organisations } from './tenancy';
  * attempt count so failures are visible and retryable. Tenant-owned.
  *
  * SECURITY: `secret` is the per-endpoint HMAC signing secret shared with the
- * receiver so it can verify authenticity. It is stored as given because the
- * receiver must know it; a follow-up will envelope-encrypt it at rest. Payloads
- * carry only ids and non-sensitive fields — never applicant PII or evidence.
+ * receiver so it can verify authenticity. It is sealed under the tenant key
+ * at rest and opened only in memory when the endpoint is shown or a delivery
+ * is signed. Payloads carry only ids and non-sensitive fields — never
+ * applicant PII or evidence.
  */
 export const webhookEndpoints = pgTable(
   'webhook_endpoints',

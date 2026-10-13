@@ -1,4 +1,5 @@
 import pino, { type Logger } from 'pino';
+import { inventoryRedactPaths } from '@/lib/encryption/inventory';
 import { env, isProduction } from '@/lib/env';
 
 /**
@@ -20,7 +21,7 @@ import { env, isProduction } from '@/lib/env';
  * Paths censored from every log record. Covers auth material, secrets, and
  * personal / sensitive applicant data. Wildcards match at any nesting depth.
  */
-const REDACT_PATHS: string[] = [
+export const OPERATIONAL_REDACT_PATHS: string[] = [
   // Auth & secrets
   'authorization',
   '*.authorization',
@@ -72,6 +73,7 @@ const REDACT_PATHS: string[] = [
   '*.address',
   'ipAddress',
   '*.ipAddress',
+  ...inventoryRedactPaths(),
 ];
 
 const REDACTED = '[redacted]';
@@ -89,7 +91,7 @@ const base = {
 export const logger: Logger = pino({
   level: env.LOG_LEVEL,
   base,
-  redact: { paths: REDACT_PATHS, censor: REDACTED },
+  redact: { paths: OPERATIONAL_REDACT_PATHS, censor: REDACTED },
   // ISO timestamps for cross-system correlation.
   timestamp: pino.stdTimeFunctions.isoTime,
   formatters: {

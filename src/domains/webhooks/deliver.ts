@@ -3,6 +3,7 @@ import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { logger } from '@/lib/observability/logger';
+import { openWebhookSecret } from '@/lib/encryption/tenant-fields';
 import {
   signPayload,
   WEBHOOK_DELIVERY_HEADER,
@@ -96,7 +97,10 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
     payload: delivery.payload,
     timestamp: new Date().toISOString(),
   });
-  const signature = signPayload(endpoint.secret, body);
+  const signature = signPayload(
+    await openWebhookSecret(organisationId, endpoint.id, endpoint.secret),
+    body,
+  );
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

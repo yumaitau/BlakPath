@@ -10,6 +10,11 @@ import { env } from '@/lib/env';
 import { scopeFor } from '@/db/tenant-db';
 import { notifications, users } from '@/db/schema';
 import { sendEmail } from '@/lib/email/mailer';
+import { openCorrespondence } from '@/lib/encryption/tenant-fields';
+import {
+  enqueueEncryptionBackfillCursor,
+  runBackfillBatch,
+} from '@/lib/encryption/backfill';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
 import { verifyChain } from '@/domains/audit';
 
@@ -66,26 +71,23 @@ const malwareScanProcessor: ProcessorFn = async (job, logger) => {
  * is NEVER logged — `sendEmail` logs only a redacted recipient and the subject.
  */
 const emailProcessor: ProcessorFn = async (job, logger) => {
-  const data = job.data as {
-    to?: unknown;
-    subject?: unknown;
-    text?: unknown;
-    html?: unknown;
-  };
-  if (
-    typeof data.to !== 'string' ||
-    typeof data.subject !== 'string' ||
-    typeof data.text !== 'string'
-  ) {
-    // Malformed payload is a bug, not a transient fault — do not retry forever.
-    logger.error({ jobId: job.id }, 'email job payload invalid — dropping');
+  const { organisationId } = job.data;
+  const messageId = (job.data as { messageId?: unknown }).messageId;
+  if (typeof messageId !== 'string' || messageId.length === 0) {
+    // Older jobs carried the body. Those are dropped rather than logged.
+    logger.error({ jobId: job.id }, 'email job missing messageId — dropping');
+    return;
+  }
+  const message = await openCorrespondence(organisationId, messageId);
+  if (!message) {
+    logger.error({ jobId: job.id, organisationId }, 'email message not found — dropping');
     return;
   }
   await sendEmail({
-    to: data.to,
-    subject: data.subject,
-    text: data.text,
-    ...(typeof data.html === 'string' ? { html: data.html } : {}),
+    to: message.to,
+    subject: message.subject,
+    text: message.text,
+    ...(message.html ? { html: message.html } : {}),
   });
 };
 
@@ -227,6 +229,33 @@ const retentionProcessor: ProcessorFn = async (job) => {
  * notifications (email copies queued by the notification system). Idempotent
  * per reminder row: dispatched rows are marked sent.
  */
+const encryptionBackfillProcessor: ProcessorFn = async (job, logger) => {
+  const { organisationId, correlationId } = job.data;
+  const cursor = (job.data as { cursor?: unknown }).cursor;
+  const result = await runBackfillBatch({
+    organisationId,
+    correlationId,
+    ...(typeof cursor === 'string' && cursor.length > 0 ? { cursor } : {}),
+  });
+  logger.info(
+    {
+      jobId: job.id,
+      organisationId,
+      table: result.table,
+      rowsEncrypted: result.rowsEncrypted,
+      done: result.done,
+    },
+    'encryption backfill batch',
+  );
+  if (!result.done && result.cursor) {
+    await enqueueEncryptionBackfillCursor({
+      organisationId,
+      correlationId,
+      cursor: result.cursor,
+    });
+  }
+};
+
 const reminderProcessor: ProcessorFn = async (job) => {
   const { organisationId, correlationId } = job.data;
   const { processReminderSweep } = await import('@/domains/calendar/service');
@@ -247,6 +276,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Export]: exportProcessor,
   [QueueName.Webhook]: webhookProcessor,
   [QueueName.Reminder]: reminderProcessor,
+  [QueueName.EncryptionBackfill]: encryptionBackfillProcessor,
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

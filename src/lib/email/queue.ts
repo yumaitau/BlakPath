@@ -1,3 +1,4 @@
+import { insertSealedCorrespondence } from '@/lib/encryption/tenant-fields';
 import { addJob, QueueName } from '@/lib/queues';
 
 /**
@@ -8,8 +9,8 @@ import { addJob, QueueName } from '@/lib/queues';
  * never blocks a request. Auth emails do NOT come through here — they send
  * synchronously via `authMailer` (see `src/lib/email/mailer.ts`).
  *
- * Every payload carries `organisationId` + `correlationId` so the job satisfies
- * the tenant invariant enforced by `addJob`.
+ * The message body is sealed under the tenant key. Redis receives only
+ * `organisationId`, `correlationId` and `messageId`.
  */
 export interface QueueTenantEmailInput {
   organisationId: string;
@@ -18,15 +19,26 @@ export interface QueueTenantEmailInput {
   subject: string;
   text: string;
   html?: string;
+  /** Stable BullMQ id when the caller needs idempotent delivery. */
+  jobId?: string;
 }
 
 export async function queueTenantEmail(input: QueueTenantEmailInput): Promise<void> {
-  await addJob(QueueName.Email, 'send', {
+  const messageId = await insertSealedCorrespondence({
     organisationId: input.organisationId,
-    correlationId: input.correlationId,
-    to: input.to,
+    recipient: input.to,
     subject: input.subject,
-    text: input.text,
-    ...(input.html !== undefined ? { html: input.html } : {}),
+    textBody: input.text,
+    htmlBody: input.html ?? null,
   });
+  await addJob(
+    QueueName.Email,
+    'send',
+    {
+      organisationId: input.organisationId,
+      correlationId: input.correlationId,
+      messageId,
+    },
+    input.jobId ? { jobId: input.jobId } : {},
+  );
 }

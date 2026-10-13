@@ -13,6 +13,10 @@ export const DEV_LOCAL_KEY = Buffer.from('blakpath-dev-local-envelope-key!');
 export const LOCAL_PLATFORM_ARN =
   'arn:aws:kms:ap-southeast-2:000000000000:key/platform-local';
 
+/** Synthetic tenant ARN for development, CI, and local seed data. */
+export const DEV_TENANT_KEY_ARN =
+  'arn:aws:kms:ap-southeast-2:000000000000:key/tenant-local';
+
 function decodeRoot(value: string): Buffer {
   const key = Buffer.from(value, 'base64');
   if (key.length !== 32) {

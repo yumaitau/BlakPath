@@ -15,6 +15,7 @@ data:
   S3_REGION: ap-southeast-2
   S3_BUCKET_EVIDENCE: blakpath-prod-evidence-959038055523-ap-southeast-2
   S3_BUCKET_QUARANTINE: blakpath-prod-quarantine-959038055523-ap-southeast-2
+  # Bucket default CMK only. Per-object SSE-KMS uses the tenant key.
   S3_KMS_KEY_ID: arn:aws:kms:ap-southeast-2:959038055523:key/737b7098-2c77-4a4e-b4c6-666597743651
   # Platform CMK for non-tenant envelope encryption. Not a secret.
   # Replace before production; release:check rejects a missing or local key.

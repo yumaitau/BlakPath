@@ -37,6 +37,11 @@ export const organisationKeys = pgTable(
     status: organisationKeyStatus('status').notNull().default('active'),
     /** True when an escrow copy of the key material is held under dual control. */
     escrow: boolean('escrow').notNull().default(false),
+    /**
+     * Wrapped HMAC key for reference and name lookup. Purpose `blind-index`.
+     * Null until the first search or sealed write claims it.
+     */
+    blindIndexWrappedDek: text('blind_index_wrapped_dek'),
     rotatedAt: timestamp('rotated_at', { withTimezone: true }),
     ...timestamps,
   },
