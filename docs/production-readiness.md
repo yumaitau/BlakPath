@@ -10,6 +10,9 @@ region.
 - [ ] Run `pnpm release:check` in the exact production web and worker runtime
       environments; attach the successful key-only output to the release record.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
+      The source for Postgres and Redis is `infra/aws/data-tier.example.yaml`
+      with the connection budget in `docs/data-tier-capacity.md`. This box
+      stays open until that stack is applied and `/api/ready` returns 200.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.
 - [ ] Terminate TLS at the edge, forward only trusted proxy headers and keep

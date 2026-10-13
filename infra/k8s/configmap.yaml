@@ -10,6 +10,8 @@ data:
   HOSTNAME: 0.0.0.0
   PORT: '3000'
   NODE_ENV: production
+  # One pool per process. Peak budget: docs/data-tier-capacity.md.
+  DATABASE_POOL_MAX: '10'
   NEXT_TELEMETRY_DISABLED: '1'
   LOG_LEVEL: info
   S3_REGION: ap-southeast-2

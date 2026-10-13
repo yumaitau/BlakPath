@@ -23,16 +23,25 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   `blakpath-runtime` Secret via External Secrets Operator; the platform ESO
   role stays shared and is never narrowed per app.
 - Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
-  Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
-  `alias/blakpath-prod-evidence` covers both S3 buckets. RDS uses its
-  provisioned key. No AWS-managed default keys in the secret path.
-- ElastiCache runs with transit and at-rest encryption. Redis holds
-  ephemeral state only — never tenant records.
+  Secrets Manager folder and is the account default EBS key.
+  `alias/blakpath-prod-evidence` covers both S3 buckets.
+  `alias/blakpath-rds` covers RDS storage and Performance Insights.
+  `alias/blakpath-elasticache` covers Redis at rest. No AWS-managed default
+  keys in the secret or data path.
+- ElastiCache runs with transit encryption, an AUTH token, and at-rest
+  encryption. Redis holds ephemeral state only — never tenant records.
 
 ## Data services
 
-- RDS Postgres with point-in-time recovery. Proxy in front for failover.
-- ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
+- RDS Postgres from `infra/aws/data-tier.example.yaml`: Multi-AZ, deletion
+  protection, `rds.force_ssl=1`, 21-day backups (point-in-time recovery),
+  Performance Insights, private subnets. No RDS Proxy until #82 drops
+  `prepare: true`. Sizing is `docs/data-tier-capacity.md`.
+- ElastiCache Redis from the same template: TLS, AUTH token, two nodes,
+  Multi-AZ failover, `maxmemory-policy noeviction`, snapshot retention 0.
+  Ephemeral only: queues, rate limits, schedulers.
+- Apply the template in `ap-southeast-2`, then deploy the namespace through
+  the CD pipeline (#57). `/api/ready` is the post-deploy check.
 - S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
   versioning on, AWS Backup coverage. MinIO exists for local dev only.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
