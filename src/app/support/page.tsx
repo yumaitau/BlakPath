@@ -1,5 +1,7 @@
 import Link from 'next/link';
+import { ContactValue } from '@/components/legal/legal-page';
 import { Button } from '@/components/ui/button';
+import { PLATFORM_CONTACT } from '@/lib/legal/documents';
 
 export default function SupportPage() {
   return (
@@ -19,6 +21,30 @@ export default function SupportPage() {
           If you are a staff member, sign in to see your organisation’s work and
           notifications. Never send sensitive documents or personal details through an
           unverified channel.
+        </p>
+        <p>
+          For a problem with BlakPath itself, such as a fault, a security concern or an
+          accessibility barrier, contact the BlakPath platform team:{' '}
+          <ContactValue value={PLATFORM_CONTACT.supportEmail} kind="email" />. Do not
+          include personal details about an application in your message.
+        </p>
+        <p>
+          Read the{' '}
+          <Link href="/privacy" className="text-primary underline underline-offset-4">
+            privacy policy
+          </Link>
+          ,{' '}
+          <Link href="/terms" className="text-primary underline underline-offset-4">
+            terms of use
+          </Link>{' '}
+          and{' '}
+          <Link
+            href="/accessibility"
+            className="text-primary underline underline-offset-4"
+          >
+            accessibility statement
+          </Link>
+          .
         </p>
       </div>
       <Button asChild className="mt-7">
