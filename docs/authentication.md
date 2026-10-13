@@ -88,20 +88,40 @@ Platform operators must use MFA unconditionally.
 - Sessions can be listed and revoked by the user. Completing a password reset
   revokes existing sessions for that account (`revokeSessionsOnPasswordReset`).
   Changing a security factor invalidates other sessions.
+- A session with an active organisation expires 12 hours after it is created.
+  It also expires after an idle period of 30–60 minutes (default 45). An
+  organisation administrator with `tenant:configure` sets that period with
+  `PATCH /api/organisations/session-policy` (`idleTimeoutMinutes`). `GET` on
+  the same path returns the resolved timeout in seconds. Sessions with no
+  active organisation keep the 7-day ceiling.
+- Idle is measured from the session row's `updatedAt`. Activity older than 60
+  seconds refreshes `expiresAt` to the sooner of the 12-hour cap and now plus
+  the idle timeout. An idle or over-age staff session is deleted; the person
+  must sign in again.
 - `lastAuthenticatedAt` records the most recent successful authentication and
-  gates step-up (below).
+  gates step-up (below). A null value falls back to `createdAt`.
 
 ## Step-up / re-authentication for sensitive actions
 
 Certain actions require a **recent** authentication, not just a valid session.
-Before performing one, the app checks `sessions.lastAuthenticatedAt` against a
-freshness window; if stale, the user must re-authenticate (password + second
-factor, or passkey) which refreshes the timestamp.
+The route map is `STEP_UP_ROUTES` in `src/lib/auth/step-up-policy.ts`. Windows
+are 5 minutes (privileged), 10 minutes (sensitive actions such as evidence
+download, export, and certificate revocation), and 15 minutes (destructive
+retention changes).
 
-Actions requiring step-up include: recording a determination (`decision:record`),
-issuing/revoking a certificate (`certificate:issue` / `certificate:revoke`),
-managing security-sensitive settings, changing MFA factors, and **all break-glass
-operations** (`break_glass_requests.stepUpVerified` must be true).
+Before the handler reads params or a body, it checks `lastAuthenticatedAt`
+(or `createdAt` when that is null). A stale session gets HTTP 401 with
+`code: "STEP_UP_REQUIRED"`. The staff UI then asks for the password and, when
+an authenticator is enrolled, a TOTP or backup code — or a passkey. That check
+mints a new session and retries the action. It does not sign the person out.
+
+The mapped routes are evidence download, report export create and download,
+certificate revoke, API key create, webhook create, SSO provider create,
+retention hold release, retention policy delete, and break-glass deny and
+revoke. Certificate signing, break-glass approval and activation, and
+membership changes are gated the same way.
+
+Re-authentication stamps `lastAuthenticatedAt` on the new session.
 
 ## Authentication sequence
 

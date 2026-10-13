@@ -19,6 +19,7 @@ import {
   noteSignInResult,
   signInOutcome,
 } from './sign-in-guard';
+import { stepUp } from './step-up-plugin';
 
 /**
  * Better Auth configuration for BlakPath.
@@ -37,8 +38,10 @@ import {
  *   TOTP with recovery codes. Staff MFA is enforced by `staff-policy.ts`.
  *   Enrolment and second-factor lockout are stored on the auth tables; see
  *   `schema-coverage.ts`.
- * - Cookies are httpOnly + SameSite=Lax, and Secure in production. Sessions
- *   are short-lived with sliding renewal and an explicit "remember me" ceiling.
+ * - Cookies are httpOnly + SameSite=Lax, and Secure in production. A session
+ *   with an active organisation expires 12 hours after it is created, and
+ *   sooner when idle (30–60 minutes, per tenant). Other sessions keep a 7-day
+ *   ceiling. Sensitive routes require a fresh authentication via step-up.
  * - Rate limiting is enabled to blunt credential-stuffing and brute force; the
  *   TOTP plugin records repeated failed second-factor attempts on the factor
  *   row and refuses verification until the lock window ends.
@@ -144,14 +147,15 @@ export const auth = betterAuth({
   /**
    * Session policy.
    *
-   * - `expiresIn`: 7 days maximum absolute lifetime for a standard session.
-   * - `updateAge`: sliding renewal — an active session's expiry is extended at
-   *   most once per day, so a genuinely idle session still ages out.
-   * - `freshAge`: a session is only considered "fresh" (usable for sensitive,
-   *   step-up-gated actions) for 15 minutes after authentication. This backs
-   *   `requireRecentAuth` in `session.ts`.
-   * - `cookieCache`: short-lived signed cache to avoid a DB hit on every
-   *   request without extending trust beyond a minute.
+   * - `expiresIn`: 7-day ceiling for a session that has not selected an
+   *   organisation. Staff sessions (an active organisation is set) are capped
+   *   in `getServerSession`: 12 hours from `createdAt`, and an idle timeout of
+   *   30–60 minutes from `updatedAt` (`staff-session-policy.ts`).
+   * - `updateAge`: Better Auth may extend `expiresAt` at most once a day. Staff
+   *   idle is checked on each read, so that daily slide cannot outlive it.
+   * - `freshAge` is Better Auth's own hint. Sensitive routes do not use it;
+   *   they call `requireRecentAuth` with `STEP_UP_ROUTES`.
+   * - `cookieCache` stays off so organisation selection is read from the row.
    */
   session: {
     additionalFields: {
@@ -160,6 +164,13 @@ export const auth = betterAuth({
       // on every request; clients cannot submit or alter it through Better Auth.
       activeOrganisationId: {
         type: 'string',
+        required: false,
+        input: false,
+      },
+      // Stamped when the session is created and again on step-up. Step-up
+      // reads this, falling back to `createdAt` when it is null.
+      lastAuthenticatedAt: {
+        type: 'date',
         required: false,
         input: false,
       },
@@ -204,14 +215,6 @@ export const auth = betterAuth({
     database: {
       generateId: () => uuidv7(),
     },
-    /**
-     * Client IP for auth limits and session rows. The auth route replaces
-     * forwarded address headers with the verified `cf-connecting-ip` before
-     * this runs. Do not add another address header here.
-     */
-    ipAddress: {
-      ipAddressHeaders: ['cf-connecting-ip'],
-    },
   },
 
   /**
@@ -219,7 +222,17 @@ export const auth = betterAuth({
    * marks the factor enabled. Passkey registration is observed from the
    * verification endpoint. Neither hook decides access.
    */
-  databaseHooks: staffMfaDatabaseHooks,
+  databaseHooks: {
+    ...staffMfaDatabaseHooks,
+    session: {
+      create: {
+        before: async (session: { lastAuthenticatedAt?: Date | string | null }) => {
+          if (session.lastAuthenticatedAt) return;
+          return { data: { lastAuthenticatedAt: new Date() } };
+        },
+      },
+    },
+  },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== '/sign-in/email') return;
@@ -265,10 +278,11 @@ export const auth = betterAuth({
       '/reset-password': AUTH_LIMITS.resetPassword,
       '/two-factor/verify-totp': AUTH_LIMITS.verifyTotp,
       '/two-factor/verify-backup-code': AUTH_LIMITS.verifyBackupCode,
+      '/step-up': { window: 60, max: 5 },
     },
   },
 
-  plugins: createAuthPlugins(env.BETTER_AUTH_URL),
+  plugins: [...createAuthPlugins(env.BETTER_AUTH_URL), stepUp()],
 });
 
 export type Auth = typeof auth;
