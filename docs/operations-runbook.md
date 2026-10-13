@@ -1,7 +1,9 @@
 # Operational alert runbook
 
 All production logs are structured JSON and must remain in `ap-southeast-2`.
-Alert routes are configured by `infra/aws/operational-alerts.example.yaml`.
+Alert routes are configured by `infra/terraform/modules/observability` (the
+signal names match `infra/aws/operational-alerts.example.yaml`). Pilot alarm
+names are unchanged. Staging prefixes them with `blakpath-staging`.
 Never paste applicant data, evidence content, bearer links or secrets into an
 incident ticket.
 

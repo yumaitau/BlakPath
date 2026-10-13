@@ -10,7 +10,7 @@ spec:
   backoffLimit: 2
   template:
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-worker
       restartPolicy: Never
       containers:
         - name: seed

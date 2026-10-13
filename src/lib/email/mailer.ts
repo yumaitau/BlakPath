@@ -74,6 +74,9 @@ export async function sendEmail({
     await client.send(
       new SendEmailCommand({
         FromEmailAddress: env.SMTP_FROM,
+        ...(env.SES_CONFIGURATION_SET
+          ? { ConfigurationSetName: env.SES_CONFIGURATION_SET }
+          : {}),
         Destination: { ToAddresses: [to] },
         Content: {
           Simple: {
