@@ -87,6 +87,7 @@ export type AuditAction =
   | 'evidence.scan_clean'
   | 'evidence.scan_infected'
   | 'evidence.scan_failed'
+  | 'evidence.scan_requeued'
   | 'evidence.rejected'
   | 'evidence.deleted'
   | 'evidence.quarantined'

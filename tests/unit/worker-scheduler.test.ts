@@ -7,6 +7,7 @@ vi.mock('@/lib/queues', () => ({
     AuditVerify: 'audit-verify',
     Retention: 'retention',
     Reminder: 'reminder',
+    MalwareScan: 'malware-scan',
   },
   getQueue: vi.fn(),
 }));
@@ -16,7 +17,13 @@ vi.mock('@/db/client', () => ({ db: {} }));
 import { QueueName } from '@/lib/queues';
 import { reconcileTenantSchedules, tenantSchedulerId } from '@worker/scheduler';
 
-type Call = { id: string; every: number; name: string; organisationId: string };
+type Call = {
+  id: string;
+  every: number;
+  name: string;
+  organisationId: string;
+  attempts?: number;
+};
 
 function fakeQueue(existing: string[] = []) {
   const upserts: Call[] = [];
@@ -27,14 +34,20 @@ function fakeQueue(existing: string[] = []) {
     async upsertJobScheduler(
       id: string,
       repeat: { every: number },
-      template: { name: string; data: { organisationId: string } },
+      template: {
+        name: string;
+        data: { organisationId: string };
+        opts?: { attempts?: number };
+      },
     ) {
-      upserts.push({
+      const call: Call = {
         id,
         every: repeat.every,
         name: template.name,
         organisationId: template.data.organisationId,
-      });
+      };
+      if (template.opts?.attempts !== undefined) call.attempts = template.opts.attempts;
+      upserts.push(call);
     },
     async getJobSchedulers() {
       return existing.map((id) => ({ id }));
@@ -91,6 +104,7 @@ describe('tenant maintenance scheduler', () => {
       auditSchedulers: 2,
       retentionSchedulers: 2,
       reminderSchedulers: 0,
+      scanSchedulers: 0,
       removedSchedulers: 2,
     });
   });
@@ -115,6 +129,40 @@ describe('tenant maintenance scheduler', () => {
       },
     ]);
     expect(report.reminderSchedulers).toBe(1);
+    expect(report.scanSchedulers).toBe(0);
     expect(report.removedSchedulers).toBe(0);
+  });
+
+  it('schedules an evidence-scan sweep that does not inherit the long scan retry', async () => {
+    const auditQueue = fakeQueue();
+    const retentionQueue = fakeQueue();
+    const malwareScanQueue = fakeQueue([
+      tenantSchedulerId(QueueName.MalwareScan, 'suspended-org'),
+    ]);
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue,
+      retentionQueue,
+      malwareScanQueue,
+      intervals: {
+        auditVerifyMs: 60_000,
+        retentionSweepMs: 120_000,
+        evidenceScanSweepMs: 300_000,
+      },
+    });
+    expect(malwareScanQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.MalwareScan, 'org-a'),
+        every: 300_000,
+        name: 'sweep',
+        organisationId: 'org-a',
+        attempts: 3,
+      },
+    ]);
+    expect(malwareScanQueue.removed).toEqual([
+      tenantSchedulerId(QueueName.MalwareScan, 'suspended-org'),
+    ]);
+    expect(report.scanSchedulers).toBe(1);
+    expect(report.removedSchedulers).toBe(1);
   });
 });

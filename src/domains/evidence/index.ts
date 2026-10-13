@@ -6,6 +6,7 @@
  *   - `schemas` — zod v4 input validation for uploads/classification/requests.
  *   - `service` — tenant-scoped, permission-checked, audited request path plus
  *     the fail-secure worker scan (`processEvidenceScan`).
+ *   - `sweep`   — redrive quarantined scans and expire abandoned uploads.
  */
 export {
   ALLOWED_CONTENT_TYPES,
@@ -26,6 +27,8 @@ export {
   type RequestEvidenceInput,
   type RequestUploadInput,
 } from './schemas';
+
+export { sweepEvidenceScans } from './sweep';
 
 export {
   classifyEvidence,

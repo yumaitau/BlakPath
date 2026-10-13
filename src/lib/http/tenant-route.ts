@@ -10,6 +10,7 @@ import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { EvidenceUploadIncompleteError } from '@/domains/evidence/errors';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -78,6 +79,10 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
+  }
+  if (error instanceof EvidenceUploadIncompleteError) {
+    // The row is still pending. Say so without echoing object keys or sizes.
+    return NextResponse.json({ error: 'Upload incomplete' }, { status: 409 });
   }
   if (error instanceof AuthorizationError || error instanceof TenantContextError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

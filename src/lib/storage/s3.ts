@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
   type ServerSideEncryption,
@@ -87,6 +88,23 @@ export function objectKey(organisationId: string, ...parts: string[]): string {
   return segments.join('/');
 }
 
+/**
+ * S3 reports a missing object as `NotFound` (HeadObject) or `NoSuchKey`
+ * (GetObject). MinIO uses the same names. Anything else is a real storage fault.
+ */
+export function isMissingObject(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const name = 'name' in err ? err.name : undefined;
+  if (name === 'NotFound' || name === 'NoSuchKey') return true;
+  const meta = '$metadata' in err ? err.$metadata : undefined;
+  return (
+    typeof meta === 'object' &&
+    meta !== null &&
+    'httpStatusCode' in meta &&
+    meta.httpStatusCode === 404
+  );
+}
+
 /** Assert a key belongs to the given tenant before signing/moving it. */
 function assertOwnedKey(organisationId: string, key: string): void {
   if (!key.startsWith(`${organisationId}/`)) {
@@ -162,25 +180,56 @@ export async function presignDownload(params: {
 }
 
 /**
- * Promote a scanned-clean object from QUARANTINE to EVIDENCE. Copies within the
- * same tenant namespace, re-applies SSE, then deletes the quarantine copy.
+ * Stat an object. `null` means it is not there. Any other storage error is
+ * rethrown so the caller can retry rather than treat an outage as "missing".
+ */
+export async function headObject(params: {
+  bucket: string;
+  key: string;
+}): Promise<{ contentLength: number } | null> {
+  try {
+    const result = await s3.send(
+      new HeadObjectCommand({ Bucket: params.bucket, Key: params.key }),
+    );
+    return { contentLength: result.ContentLength ?? 0 };
+  } catch (err) {
+    if (isMissingObject(err)) return null;
+    throw err;
+  }
+}
+
+/**
+ * Promote a scanned-clean object from QUARANTINE to EVIDENCE. Idempotent: if a
+ * previous attempt already copied the object (same byte length) the copy is
+ * skipped. The quarantine delete is also idempotent, so a crash between copy
+ * and delete can be repeated safely.
  */
 export async function moveQuarantineToEvidence(params: {
   organisationId: string;
   key: string;
+  expectedBytes: number;
 }): Promise<{ bucket: string; key: string }> {
   assertOwnedKey(params.organisationId, params.key);
-  const encryption = env.S3_ENDPOINT ? undefined : encryptionOptions();
-  await s3.send(
-    new CopyObjectCommand({
-      Bucket: EVIDENCE_BUCKET,
-      Key: params.key,
-      CopySource: `/${QUARANTINE_BUCKET}/${params.key}`,
-      ...encryption,
-      MetadataDirective: 'COPY',
-    }),
-  );
-  await s3.send(new DeleteObjectCommand({ Bucket: QUARANTINE_BUCKET, Key: params.key }));
+  const existing = await headObject({ bucket: EVIDENCE_BUCKET, key: params.key });
+  if (!existing || existing.contentLength !== params.expectedBytes) {
+    const encryption = env.S3_ENDPOINT ? undefined : encryptionOptions();
+    await s3.send(
+      new CopyObjectCommand({
+        Bucket: EVIDENCE_BUCKET,
+        Key: params.key,
+        CopySource: `/${QUARANTINE_BUCKET}/${params.key}`,
+        ...encryption,
+        MetadataDirective: 'COPY',
+      }),
+    );
+  }
+  try {
+    await s3.send(
+      new DeleteObjectCommand({ Bucket: QUARANTINE_BUCKET, Key: params.key }),
+    );
+  } catch (err) {
+    if (!isMissingObject(err)) throw err;
+  }
   logger.debug(
     { organisationId: params.organisationId, key: params.key },
     'Promoted object from quarantine to evidence',

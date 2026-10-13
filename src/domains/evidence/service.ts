@@ -9,13 +9,15 @@ import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
-import { addJob, QueueName } from '@/lib/queues';
+import { enqueueMalwareScan } from '@/lib/queues/malware-scan';
 import { logger } from '@/lib/observability/logger';
 import { queueNotification } from '@/domains/notifications';
 import {
   deleteObject,
   EVIDENCE_BUCKET,
   getObjectBytes,
+  headObject,
+  isMissingObject,
   moveQuarantineToEvidence,
   objectKey,
   presignDownload,
@@ -32,6 +34,8 @@ import {
   type RequestEvidenceInput,
   type RequestUploadInput,
 } from './schemas';
+import { EvidenceUploadIncompleteError } from './errors';
+import { quarantineUploadProblem } from './recovery';
 import { contentTypeAcceptable, isServable } from './status';
 
 /**
@@ -135,7 +139,12 @@ export async function requestUpload(
 /**
  * Confirm the bytes have been PUT. Moves the record to `quarantined` and
  * enqueues the malware scan. The scan job is keyed by the evidence id so a
- * duplicate notification cannot double-schedule work.
+ * duplicate notification cannot double-schedule work. A sweeper redrive uses a
+ * fresh id because BullMQ will not replace this one after it fails.
+ *
+ * The quarantine object is stated first. A missing object or a size mismatch
+ * throws and leaves the row `pending` — otherwise the scanner retries
+ * `NoSuchKey` until the job dies and the upload is stuck.
  */
 export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
   const ctx = requireTenantContext();
@@ -149,6 +158,16 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     // Already progressed; return as-is (idempotent).
     return existing;
   }
+  if (!existing.quarantineKey) {
+    throw new EvidenceUploadIncompleteError('missing');
+  }
+
+  const head = await headObject({
+    bucket: QUARANTINE_BUCKET,
+    key: existing.quarantineKey,
+  });
+  const problem = quarantineUploadProblem(existing.sizeBytes, head);
+  if (problem) throw new EvidenceUploadIncompleteError(problem);
 
   const scope = currentScope();
   const updated = await scope.db
@@ -158,16 +177,12 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     .returning();
   const row = must(updated[0], 'evidence');
 
-  await addJob(
-    QueueName.MalwareScan,
-    'scan',
-    {
-      organisationId: scope.organisationId,
-      correlationId: ctx.correlationId,
-      evidenceId,
-    },
-    { jobId: evidenceId },
-  );
+  await enqueueMalwareScan({
+    organisationId: scope.organisationId,
+    correlationId: ctx.correlationId,
+    evidenceId,
+    jobId: evidenceId,
+  });
 
   await recordAudit({
     action: 'evidence.uploaded',
@@ -416,13 +431,6 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   const key = row.quarantineKey;
 
-  await systemAudit(organisationId, correlationId, {
-    action: 'evidence.scan_started',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-  });
-
   const settle = async (patch: EvidencePatch) => {
     await scope.db
       .update(evidence)
@@ -432,8 +440,69 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       );
   };
 
-  // Read the bytes; a storage error here should retry, so let it throw.
-  const buffer = await getObjectBytes({ bucket: QUARANTINE_BUCKET, key });
+  // A crash after copy+delete leaves the row quarantined and the quarantine
+  // object gone. The evidence-bucket object is the clean copy — mark it clean
+  // instead of retrying a read that will 404 forever.
+  const promoted = await headObject({ bucket: EVIDENCE_BUCKET, key });
+  if (promoted && promoted.contentLength === row.sizeBytes) {
+    const promotedBytes = await getObjectBytes({ bucket: EVIDENCE_BUCKET, key });
+    const sha256 = createHash('sha256').update(promotedBytes).digest('hex');
+    const detected = (await fileTypeFromBuffer(promotedBytes))?.mime;
+    await moveQuarantineToEvidence({
+      organisationId,
+      key,
+      expectedBytes: row.sizeBytes,
+    });
+    await settle({
+      status: 'clean',
+      evidenceKey: key,
+      detectedContentType: detected ?? null,
+      sha256,
+      scanResult: 'clean',
+      scannedAt: new Date(),
+    });
+    await systemAudit(organisationId, correlationId, {
+      action: 'evidence.scan_clean',
+      resourceType: 'evidence',
+      resourceId: evidenceId,
+      result: 'success',
+      reason: 'promoted object already present',
+    });
+    logger.debug(
+      { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },
+      'evidence already promoted — marked clean',
+    );
+    return;
+  }
+
+  await systemAudit(organisationId, correlationId, {
+    action: 'evidence.scan_started',
+    resourceType: 'evidence',
+    resourceId: evidenceId,
+    result: 'success',
+  });
+
+  // A missing quarantine object with nothing promoted is terminal. Retrying it
+  // only fills the dead-letter queue. Reject, and do not mark the row clean.
+  let buffer: Buffer;
+  try {
+    buffer = await getObjectBytes({ bucket: QUARANTINE_BUCKET, key });
+  } catch (err) {
+    if (!isMissingObject(err)) throw err;
+    await settle({
+      status: 'rejected',
+      scanResult: 'rejected:missing-object',
+      scannedAt: new Date(),
+    });
+    await systemAudit(organisationId, correlationId, {
+      action: 'evidence.rejected',
+      resourceType: 'evidence',
+      resourceId: evidenceId,
+      result: 'failure',
+      reason: 'quarantine object missing',
+    });
+    return;
+  }
 
   // Verify the REAL content type from magic bytes before scanning.
   const detected = (await fileTypeFromBuffer(buffer))?.mime;
@@ -516,7 +585,11 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   // Clean: hash, promote to the evidence bucket, mark servable.
   const sha256 = createHash('sha256').update(buffer).digest('hex');
-  await moveQuarantineToEvidence({ organisationId, key });
+  await moveQuarantineToEvidence({
+    organisationId,
+    key,
+    expectedBytes: row.sizeBytes,
+  });
   await settle({
     status: 'clean',
     evidenceKey: key,

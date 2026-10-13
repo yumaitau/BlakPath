@@ -1,10 +1,10 @@
 # Evidence scanning design
 
-> **Status: design for Phase 3.** The tables and worker jobs described here are
-> planned, not yet implemented. This document records the intended secure upload
-> lifecycle so it is built correctly when the Evidence domain lands. The
-> configuration it relies on already exists (`S3_BUCKET_EVIDENCE`,
-> `S3_BUCKET_QUARANTINE`, `CLAMAV_HOST`, `CLAMAV_PORT` in `src/lib/env.ts`).
+> **Status: implemented.** Uploads, quarantine, scanning and promotion follow
+> this lifecycle (`src/domains/evidence/service.ts`, `worker/processors.ts`).
+> Retry, dead-letter and sweep behaviour is in **Recovery** below. Configuration
+> lives in `src/lib/env.ts` (`S3_BUCKET_EVIDENCE`, `S3_BUCKET_QUARANTINE`,
+> `CLAMAV_HOST`, `CLAMAV_PORT`, and the `EVIDENCE_*` sweep settings).
 
 Supporting evidence is the most sensitive data an applicant shares. Uploads are
 therefore treated as **untrusted and potentially hostile** until proven clean.
@@ -65,8 +65,8 @@ sequenceDiagram
     W-->>App: Notify uploader (safe, non-technical message)
   else scanner unavailable / error
     W->>DB: status stays quarantined (held)
-    W->>DB: audit(evidence.scan_deferred, failure)
-    Note over W,AV: FAIL-SECURE — never promote, retry with backoff
+    W->>DB: audit(evidence.scan_failed, failure)
+    Note over W,AV: FAIL-SECURE — never promote, retry with capped backoff
   end
 
   Note over U,E: Later — download
@@ -97,9 +97,33 @@ Only `clean` objects can be presigned for download, and only to a caller with
   scanning.
 - **Scanning:** stream the object to ClamAV (`INSTREAM`) at
   `CLAMAV_HOST:CLAMAV_PORT`; do not load whole files into app memory.
-- **Retries:** scan jobs use BullMQ retry with backoff. A scanner outage causes
-  retries, not promotion; persistent failures are dead-lettered and alerted while
-  the file remains quarantined.
+- **Retries:** a `malware-scan` job uses 24 attempts and exponential backoff
+  from 2 seconds, capped at 10 minutes (`src/lib/queues/scan-policy.ts`). A
+  scanner outage causes retries, not promotion. The capped schedule still has
+  attempts left after a 10 minute ClamAV gap, so the same job finishes
+  `clean` or `infected` once the scanner is back.
+- **Dead letter and redrive:** a scan that exhausts those attempts is copied to
+  the `malware-scan-dlq` holding queue (no worker consumes it) and the
+  `queue_job_exhausted` signal fires. The per-tenant sweep
+  (`EVIDENCE_SCAN_SWEEP_INTERVAL_MS`, default 5 minutes) redrives each dead
+  letter onto `malware-scan` with a **fresh job id** — the failed id stays
+  reserved for 7 days — and writes `evidence.scan_requeued`. The same sweep
+  re-queues a `quarantined` row older than
+  `EVIDENCE_QUARANTINE_REQUEUE_AFTER_MS` (default 10 minutes) when no scan is
+  active, waiting or delayed. The object stays quarantined until a scan settles
+  it. `pending` uploads older than 24 hours are rejected
+  (`expired:pending`).
+- **Complete checks the object.** `completeUpload` calls `HeadObject` on the
+  quarantine key and returns HTTP 409, leaving the row `pending`, when the
+  object is missing or its size does not match the declaration.
+- **Promote is idempotent.** If the evidence-bucket object already exists at
+  the expected size, the scan marks the row `clean` and deletes any leftover
+  quarantine copy. A crash between copy and the status update does not strand
+  the row.
+- **Backlog metric.** Each sweep logs `signal=evidence_quarantine_backlog` with
+  `quarantinedCount`, `oldestQuarantinedAgeSeconds`, `dlqDepth` and `redriven`.
+  The CloudWatch alarm `blakpath-oldest-quarantined-age` pages when the oldest
+  age reaches 30 minutes. See `infra/aws/operational-alerts.example.yaml`.
 - **Cleanup:** on promotion, the quarantine copy is deleted so unscanned/raw bytes
   don't linger. Infected objects are removed or hard-held for investigation, never
   left addressable.

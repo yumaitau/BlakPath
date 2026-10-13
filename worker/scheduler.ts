@@ -22,7 +22,16 @@ type ScheduledQueue = {
   upsertJobScheduler(
     id: string,
     repeat: { every: number },
-    template: { name: string; data: TenantJob },
+    template: {
+      name: string;
+      data: TenantJob;
+      opts?: {
+        attempts: number;
+        backoff: { type: 'exponential'; delay: number };
+        removeOnComplete: { age: number; count: number };
+        removeOnFail: { age: number };
+      };
+    },
   ): Promise<unknown>;
   getJobSchedulers(
     start?: number,
@@ -36,6 +45,8 @@ export interface SchedulerIntervals {
   auditVerifyMs: number;
   retentionSweepMs: number;
   reminderSweepMs?: number;
+  /** How often to redrive stuck evidence scans. Default 5 minutes. */
+  evidenceScanSweepMs?: number;
 }
 
 export interface ReconcileSchedulesInput {
@@ -43,6 +54,8 @@ export interface ReconcileSchedulesInput {
   auditQueue: ScheduledQueue;
   retentionQueue: ScheduledQueue;
   reminderQueue?: ScheduledQueue;
+  /** Malware-scan queue. Its repeatable job is the evidence recovery sweep. */
+  malwareScanQueue?: ScheduledQueue;
   intervals: SchedulerIntervals;
 }
 
@@ -50,8 +63,17 @@ export interface ReconcileSchedulesResult {
   auditSchedulers: number;
   retentionSchedulers: number;
   reminderSchedulers: number;
+  scanSchedulers: number;
   removedSchedulers: number;
 }
+
+/** Sweep failures retry quickly. They must not inherit the 24-attempt scan policy. */
+const SCAN_SWEEP_JOB_OPTS = {
+  attempts: 3,
+  backoff: { type: 'exponential' as const, delay: 2_000 },
+  removeOnComplete: { age: 24 * 3600, count: 100 },
+  removeOnFail: { age: 7 * 24 * 3600 },
+};
 
 /** Stable, namespaced scheduler id for one queue and one tenant. */
 export function tenantSchedulerId(queueName: QueueName, organisationId: string): string {
@@ -78,6 +100,7 @@ async function reconcileQueue(
   queueName: QueueName,
   organisationIds: readonly string[],
   every: number,
+  jobOpts?: typeof SCAN_SWEEP_JOB_OPTS,
 ): Promise<number> {
   const wanted = new Set(
     organisationIds.map((organisationId) => tenantSchedulerId(queueName, organisationId)),
@@ -94,6 +117,7 @@ async function reconcileQueue(
           // The scheduler id is a stable, non-PII correlation value. Each job
           // remains tenant-bound and can safely be retried by BullMQ.
           data: { organisationId, correlationId: id },
+          ...(jobOpts ? { opts: jobOpts } : {}),
         },
       );
     }),
@@ -119,34 +143,45 @@ export async function reconcileTenantSchedules(
   input: ReconcileSchedulesInput,
 ): Promise<ReconcileSchedulesResult> {
   const organisationIds = [...new Set(input.organisationIds)].filter(Boolean);
-  const [auditRemoved, retentionRemoved, reminderRemoved] = await Promise.all([
-    reconcileQueue(
-      input.auditQueue,
-      QueueName.AuditVerify,
-      organisationIds,
-      input.intervals.auditVerifyMs,
-    ),
-    reconcileQueue(
-      input.retentionQueue,
-      QueueName.Retention,
-      organisationIds,
-      input.intervals.retentionSweepMs,
-    ),
-    input.reminderQueue
-      ? reconcileQueue(
-          input.reminderQueue,
-          QueueName.Reminder,
-          organisationIds,
-          input.intervals.reminderSweepMs ?? 900_000,
-        )
-      : Promise.resolve(0),
-  ]);
+  const [auditRemoved, retentionRemoved, reminderRemoved, scanRemoved] =
+    await Promise.all([
+      reconcileQueue(
+        input.auditQueue,
+        QueueName.AuditVerify,
+        organisationIds,
+        input.intervals.auditVerifyMs,
+      ),
+      reconcileQueue(
+        input.retentionQueue,
+        QueueName.Retention,
+        organisationIds,
+        input.intervals.retentionSweepMs,
+      ),
+      input.reminderQueue
+        ? reconcileQueue(
+            input.reminderQueue,
+            QueueName.Reminder,
+            organisationIds,
+            input.intervals.reminderSweepMs ?? 900_000,
+          )
+        : Promise.resolve(0),
+      input.malwareScanQueue
+        ? reconcileQueue(
+            input.malwareScanQueue,
+            QueueName.MalwareScan,
+            organisationIds,
+            input.intervals.evidenceScanSweepMs ?? 300_000,
+            SCAN_SWEEP_JOB_OPTS,
+          )
+        : Promise.resolve(0),
+    ]);
 
   return {
     auditSchedulers: organisationIds.length,
     retentionSchedulers: organisationIds.length,
     reminderSchedulers: input.reminderQueue ? organisationIds.length : 0,
-    removedSchedulers: auditRemoved + retentionRemoved + reminderRemoved,
+    scanSchedulers: input.malwareScanQueue ? organisationIds.length : 0,
+    removedSchedulers: auditRemoved + retentionRemoved + reminderRemoved + scanRemoved,
   };
 }
 
@@ -162,10 +197,12 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
     auditQueue: getQueue(QueueName.AuditVerify),
     retentionQueue: getQueue(QueueName.Retention),
     reminderQueue: getQueue(QueueName.Reminder),
+    malwareScanQueue: getQueue(QueueName.MalwareScan),
     intervals: {
       auditVerifyMs: env.AUDIT_VERIFY_INTERVAL_MS,
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
       reminderSweepMs: env.REMINDER_SWEEP_INTERVAL_MS,
+      evidenceScanSweepMs: env.EVIDENCE_SCAN_SWEEP_INTERVAL_MS,
     },
   });
 }

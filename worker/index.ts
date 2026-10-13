@@ -1,7 +1,9 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
-import { closeQueues, type TenantJob } from '@/lib/queues';
+import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
+import { closeMalwareScanDlq, deadLetterExhaustedScan } from '@/lib/queues/dlq';
+import { malwareScanBackoffStrategy } from '@/lib/queues/scan-policy';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { startTenantScheduleSync } from './scheduler';
 import { queueFailureSignal } from './operational-signals';
@@ -52,6 +54,10 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
       concurrency: 4,
       // Do not autorun until all workers are constructed and listeners wired.
       autorun: false,
+      // BullMQ reads the custom backoff from the worker that owns the job.
+      ...(queueName === QueueName.MalwareScan
+        ? { settings: { backoffStrategy: malwareScanBackoffStrategy } }
+        : {}),
     },
   );
 
@@ -61,6 +67,14 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
       { jobId: job?.id, ...failure, err },
       failure.alert ? 'job retries exhausted' : 'job failed; retry scheduled',
     );
+    if (queueName === QueueName.MalwareScan && failure.alert && job) {
+      void deadLetterExhaustedScan(job).catch((dlqErr: unknown) => {
+        childLogger.error(
+          { err: dlqErr, jobId: job.id },
+          'failed to dead-letter malware scan',
+        );
+      });
+    }
   });
 
   worker.on('completed', (job) => {
@@ -100,6 +114,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   try {
     stopTenantScheduleSync?.();
     await Promise.all(workers.map((w) => w.close()));
+    await closeMalwareScanDlq();
     await closeQueues();
     await redis.quit();
     clearTimeout(deadline);

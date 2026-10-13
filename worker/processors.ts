@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Job } from 'bullmq';
 import type { Logger } from 'pino';
 import { QueueName, type TenantJob } from '@/lib/queues';
-import { processEvidenceScan } from '@/domains/evidence';
+import { processEvidenceScan, sweepEvidenceScans } from '@/domains/evidence';
 import { processWebhookDelivery } from '@/domains/webhooks';
 import { processExport } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
@@ -47,6 +47,14 @@ export type ProcessorFn = (job: Job<TenantJob>, logger: Logger) => Promise<void>
  */
 const malwareScanProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
+  if (job.name === 'sweep') {
+    const result = await sweepEvidenceScans({ organisationId, correlationId });
+    logger.info(
+      { jobId: job.id, organisationId, ...result },
+      'evidence scan sweep finished',
+    );
+    return;
+  }
   const evidenceId = (job.data as { evidenceId?: unknown }).evidenceId;
   if (typeof evidenceId !== 'string' || evidenceId.length === 0) {
     // A malformed payload is a bug, not a transient fault — do not retry forever.
