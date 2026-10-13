@@ -10,6 +10,7 @@ import {
   FolderOpen,
   LayoutDashboard,
   Settings,
+  ShieldCheck,
   UserCog,
   Users,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ const navigation = [
   { href: '/board', label: 'Board', icon: Columns3 },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays },
   { href: '/forms', label: 'Forms', icon: ClipboardList },
+  { href: '/privacy-requests', label: 'Privacy', icon: ShieldCheck },
   { href: '/settings/teams', label: 'Teams', icon: UserCog },
   { href: '/settings/security', label: 'Settings', icon: Settings },
 ] as const;

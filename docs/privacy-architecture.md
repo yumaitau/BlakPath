@@ -83,6 +83,46 @@ Consent is treated as a first-class, recorded fact, not an implicit assumption:
   would defeat tamper-evidence; audit retention is handled by whole, verified,
   archived periods, never by editing rows (`docs/audit-log-design.md`).
 
+## Individual rights
+
+Requests from a person about their own information are handled in
+`src/domains/privacy/` by staff holding `privacy:manage` (records officers by
+default). Every step is a recorded human act and is audited with metadata only.
+
+- **Register.** Access, correction, complaint, consent-withdrawal and erasure
+  requests are logged in `rights_requests` with a statutory due date (30 days by
+  default: APP 12.4, APP 13.5 and OAIC complaint guidance — see
+  `src/domains/privacy/rules.ts`). A due date only ever moves later, and only
+  with a recorded reason. The staff screen is `/privacy-requests`.
+- **Subject bundle (APP 12).** One action compiles everything held about the
+  person across applications, status history, evidence metadata, evidence
+  requests, family links, form invitations and responses, notes shared with the
+  applicant, consents, representative authorisations, finalised decisions,
+  certificates, associated statements and their earlier requests. Tables left
+  out are listed with reasons in `BUNDLE_EXCLUSIONS`. Staff redact records or
+  fields (for example third-party information) before a PDF is produced; both
+  compiling and exporting need step-up.
+- **Correction (APP 13).** Only registry-marked fields (names, contact details,
+  intake) can be corrected, and only on the person's own records. Where the
+  organisation declines, the person's statement is attached to the record in
+  `associated_statements` (APP 13.4) and travels with it in every bundle.
+- **Erasure.** `src/domains/privacy/registry.ts` classifies every table and
+  every text/JSON column in the schema (a unit test fails on anything
+  unclassified). Erasure, run by the worker, anonymises every personal column of
+  every subject table, deletes every version of the stored evidence files, and
+  saves a report on the request. It never touches official records (decisions,
+  votes, certificates, the audit trail, request handling records); on a decided
+  or certified matter it also keeps the applicant name and the committee's
+  review record. Anything under a legal hold is left untouched.
+- **Complaints.** Every complaint carries regulator escalation wording (OAIC and
+  each state and territory regulator), shown to staff and on `/privacy`.
+- **Tenant offboarding.** An administrator (`tenant:configure`, step-up, typing
+  the organisation slug) requests a JSON export of every tenant row, downloads
+  it, then confirms the purge. The worker deletes every object version under the
+  tenant prefix and the organisation row, which cascades to every tenant table.
+  The audit trail and the `tenant_offboardings` record are kept. Global sign-in
+  identities are not tenant data and are not deleted.
+
 ## No automated determination — the guarantee
 
 - **No scoring, ranking, prediction or inference of Aboriginality anywhere.** No

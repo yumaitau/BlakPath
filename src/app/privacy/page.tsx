@@ -1,3 +1,5 @@
+import { COMPLAINT_ESCALATION_TEXT } from '@/domains/privacy/rules';
+
 export default function PrivacyPage() {
   return (
     <main
@@ -26,6 +28,20 @@ export default function PrivacyPage() {
           record. Technical privacy architecture is described in the project
           documentation.
         </p>
+        <h2 className="text-foreground pt-4 text-xl font-semibold">Your rights</h2>
+        <p>
+          You can ask the organisation for a copy of the information it holds about you,
+          ask for it to be corrected, withdraw a consent you gave, ask for information to
+          be erased, or make a complaint. The organisation records your request and
+          responds within 30 days.
+        </p>
+        <p>
+          If the organisation declines to correct something, you can ask for your own
+          statement to be kept with the record. Official records, such as a recorded
+          decision or an issued certificate, are kept as the law requires even after other
+          information is erased.
+        </p>
+        <p className="whitespace-pre-line">{COMPLAINT_ESCALATION_TEXT}</p>
       </div>
     </main>
   );
