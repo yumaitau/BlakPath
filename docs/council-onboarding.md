@@ -28,7 +28,8 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 2. Run EKS restore drill (`docs/eks-runbook.md`), attach record.
 3. Flip status to `active`, open `publicApplicationsOpen` when ready.
 4. Confirm audit chain clean, alarms firing to on-call, SES suppression flow
-   wired (`POST /api/email/events` reachable from SNS).
+   wired (`POST /api/email/events` reachable from SNS) and the email checks in
+   `docs/eks-runbook.md` passed (`dkim=pass spf=pass dmarc=pass`).
 
 ## 4. Legacy import
 

@@ -23,6 +23,10 @@ region.
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Deploy the SES sender (`infra/aws/ses-sending.example.yaml`, ADR 0090).
+      An invitation and a password reset must reach an external mailbox with
+      `dkim=pass spf=pass dmarc=pass`, and simulator bounce/complaint events
+      must create suppressions in staging (`docs/eks-runbook.md#email`).
 
 ## Signals and response
 

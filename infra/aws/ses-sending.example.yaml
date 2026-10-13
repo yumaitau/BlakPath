@@ -1,0 +1,241 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath production email sender (ADR 0090): SES v2 API in ap-southeast-2
+  under the workload role. Subdomain identity with Easy DKIM, custom MAIL FROM,
+  DMARC, a configuration set publishing bounce/complaint events to SNS, and an
+  HTTPS subscription to POST /api/email/events. No SMTP credentials.
+
+Parameters:
+  SendingDomain:
+    Type: String
+    Default: blakpath.yumait.au
+    Description: Domain of SMTP_FROM. A subdomain keeps BlakPath reputation separate.
+  MailFromSubdomain:
+    Type: String
+    Default: bounce
+    Description: Custom MAIL FROM label, giving SPF alignment (bounce.<SendingDomain>).
+  ConfigurationSetName:
+    Type: String
+    Default: blakpath-production
+    Description: Must equal SES_CONFIGURATION_SET in the ConfigMap.
+  EventsEndpoint:
+    Type: String
+    Default: https://blakpath.yumait.au/api/email/events
+  RuntimeSecretId:
+    Type: String
+    Default: /blakpath/production/runtime
+    Description: >-
+      Secrets Manager JSON holding EMAIL_WEBHOOK_SECRET. Resolved at deploy time;
+      SNS HTTPS subscriptions cannot set headers, so the secret is a query value.
+  EventsTopicKmsKeyArn:
+    Type: String
+    Description: >-
+      Customer-managed key for the events topic (events carry recipient
+      addresses). Its key policy must allow ses.amazonaws.com
+      kms:GenerateDataKey* and kms:Decrypt for this account.
+  WorkloadRoleNames:
+    Type: CommaDelimitedList
+    Description: IAM role names used by web and worker pods (Pod Identity) that send mail.
+  DmarcPolicy:
+    Type: String
+    Default: quarantine
+    AllowedValues: [none, quarantine, reject]
+    Description: Start at quarantine; move to reject once aggregate reports are clean.
+  DmarcReportAddress:
+    Type: String
+    Description: mailto target for DMARC aggregate (rua) reports.
+  HostedZoneId:
+    Type: String
+    Default: ''
+    Description: >-
+      Route 53 zone for SendingDomain. Leave empty to publish the DNS records
+      shown in Outputs by hand at the domain's DNS host.
+
+Conditions:
+  ManageDns: !Not [!Equals [!Ref HostedZoneId, '']]
+
+Resources:
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Ref ConfigurationSetName
+      DeliveryOptions:
+        TlsPolicy: REQUIRE
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+      SuppressionOptions:
+        SuppressedReasons: [BOUNCE, COMPLAINT]
+
+  EmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref SendingDomain
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+      DkimAttributes:
+        SigningEnabled: true
+      MailFromAttributes:
+        MailFromDomain: !Sub '${MailFromSubdomain}.${SendingDomain}'
+        BehaviorOnMxFailure: REJECT_MESSAGE
+      # Belt and braces: events still publish if a sender omits the set.
+      ConfigurationSetAttributes:
+        ConfigurationSetName: !Ref ConfigurationSet
+
+  EventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ConfigurationSetName}-email-events'
+      KmsMasterKeyId: !Ref EventsTopicKmsKeyArn
+
+  EventsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref EventsTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SesConfigurationSetPublish
+            Effect: Allow
+            Principal: { Service: ses.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref EventsTopic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ConfigurationSetName}'
+
+  BounceComplaintDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    DependsOn: EventsTopicPolicy
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Name: bounce-complaint-to-app
+        Enabled: true
+        MatchingEventTypes: [BOUNCE, COMPLAINT]
+        SnsDestination:
+          TopicARN: !Ref EventsTopic
+
+  AppEventsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref EventsTopic
+      Protocol: https
+      # The app expects the SNS envelope (not raw delivery) and confirms the
+      # subscription itself after the shared-secret check.
+      RawMessageDelivery: false
+      Endpoint: !Sub '${EventsEndpoint}?secret={{resolve:secretsmanager:${RuntimeSecretId}:SecretString:EMAIL_WEBHOOK_SECRET}}'
+
+  WorkloadSendPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Send BlakPath mail through SES from the verified identity and configuration set only.
+      Roles: !Ref WorkloadRoleNames
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SendFromBlakPathIdentity
+            Effect: Allow
+            Action: ses:SendEmail
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SendingDomain}'
+              - !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ConfigurationSetName}'
+
+  DkimRecord1:
+    Type: AWS::Route53::RecordSet
+    Condition: ManageDns
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName1
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue1]
+
+  DkimRecord2:
+    Type: AWS::Route53::RecordSet
+    Condition: ManageDns
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName2
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue2]
+
+  DkimRecord3:
+    Type: AWS::Route53::RecordSet
+    Condition: ManageDns
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName3
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue3]
+
+  MailFromMx:
+    Type: AWS::Route53::RecordSet
+    Condition: ManageDns
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${MailFromSubdomain}.${SendingDomain}'
+      Type: MX
+      TTL: '1800'
+      ResourceRecords: [!Sub '10 feedback-smtp.${AWS::Region}.amazonses.com']
+
+  MailFromSpf:
+    Type: AWS::Route53::RecordSet
+    Condition: ManageDns
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${MailFromSubdomain}.${SendingDomain}'
+      Type: TXT
+      TTL: '1800'
+      ResourceRecords: ['"v=spf1 include:amazonses.com -all"']
+
+  Dmarc:
+    Type: AWS::Route53::RecordSet
+    Condition: ManageDns
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '_dmarc.${SendingDomain}'
+      Type: TXT
+      TTL: '1800'
+      ResourceRecords:
+        - !Sub '"v=DMARC1; p=${DmarcPolicy}; adkim=s; aspf=r; pct=100; rua=mailto:${DmarcReportAddress}"'
+
+Outputs:
+  ConfigurationSet:
+    Value: !Ref ConfigurationSet
+  EventsTopicArn:
+    Value: !Ref EventsTopic
+  DkimRecords:
+    Description: Three CNAMEs to publish when HostedZoneId is empty.
+    Value: !Join
+      - ' | '
+      - - !Join [
+            ' CNAME ',
+            [
+              !GetAtt EmailIdentity.DkimDNSTokenName1,
+              !GetAtt EmailIdentity.DkimDNSTokenValue1,
+            ],
+          ]
+        - !Join [
+            ' CNAME ',
+            [
+              !GetAtt EmailIdentity.DkimDNSTokenName2,
+              !GetAtt EmailIdentity.DkimDNSTokenValue2,
+            ],
+          ]
+        - !Join [
+            ' CNAME ',
+            [
+              !GetAtt EmailIdentity.DkimDNSTokenName3,
+              !GetAtt EmailIdentity.DkimDNSTokenValue3,
+            ],
+          ]
+  MailFromRecords:
+    Value: !Sub '${MailFromSubdomain}.${SendingDomain} MX "10 feedback-smtp.${AWS::Region}.amazonses.com" | TXT "v=spf1 include:amazonses.com -all"'
+  DmarcRecord:
+    Value: !Sub '_dmarc.${SendingDomain} TXT "v=DMARC1; p=${DmarcPolicy}; adkim=s; aspf=r; pct=100; rua=mailto:${DmarcReportAddress}"'
