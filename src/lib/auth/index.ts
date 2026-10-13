@@ -7,6 +7,7 @@ import { uuidv7 } from 'uuidv7';
 import { db, schema } from '@/db/client';
 import { env, isProduction } from '@/lib/env';
 import { sendVerificationEmail, sendPasswordResetEmail } from './emails';
+import { ssoPlugin } from './sso-plugin';
 
 /**
  * Better Auth configuration for BlakPath.
@@ -100,6 +101,15 @@ export const auth = betterAuth({
         token,
       });
     },
+  },
+
+  /**
+   * Any OAuth/OIDC token Better Auth stores on an account row is encrypted at
+   * rest. Federated sign-in (`sso-plugin.ts`) deliberately stores no IdP
+   * tokens at all; this is the backstop should any provider ever persist one.
+   */
+  account: {
+    encryptOAuthTokens: true,
   },
 
   /**
@@ -225,6 +235,13 @@ export const auth = betterAuth({
       rpName: 'BlakPath',
       origin: env.BETTER_AUTH_URL,
     }),
+
+    /**
+     * Tenant-bound federated sign-in (Entra ID OIDC). Inert unless a provider
+     * is configured AND an organisation has an enabled binding on a verified
+     * domain; password + MFA remain the default path.
+     */
+    ssoPlugin(),
   ],
 });
 
