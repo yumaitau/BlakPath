@@ -70,6 +70,18 @@ against its public key — private key material never leaves KMS.
 4. Record date, operator, source, target, elapsed RTO, verification result
    outside restored environment.
 
+## Cluster guardrails
+
+Deploy `infra/aws/eks-guardrails.example.yaml` in `ap-southeast-2` before the
+namespace holds production records. It creates `alias/blakpath-eks-secrets` and
+the log group `/aws/eks/<cluster>/cluster` (365-day retention). It does not
+create a cluster.
+
+The live cluster then has to match `infra/aws/eks-cluster-guardrails.json`:
+control-plane logs `api`, `audit`, `authenticator`, `controllerManager` and
+`scheduler`; deletion protection on; secrets envelope encryption with that CMK.
+Commands and the irreversible-key warning are in `infra/aws/README.md`.
+
 ## Alarms
 
 Audit divergence, scan backlog past handling target, dead-letter email/export/

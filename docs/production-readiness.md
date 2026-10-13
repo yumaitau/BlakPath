@@ -23,6 +23,15 @@ region.
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Deploy `infra/aws/account-guardrails.example.yaml` in `ap-southeast-2`
+      (or align the existing Config recorder, CloudTrail trail, GuardDuty
+      detector, Security Hub standards and Access Analyzer to it). Config must
+      be recording every supported resource type in that Region.
+- [ ] Record the Security Hub score and triage every critical finding by hand.
+      The blank record is in `infra/aws/README.md`. Findings are account posture
+      and do not decide identity.
+- [ ] Apply the EKS control-plane logs, deletion protection and secrets CMK in
+      `infra/aws/eks-cluster-guardrails.json`.
 
 ## Signals and response
 
@@ -38,7 +47,9 @@ Alert on:
   the agreed handling target;
 - failed or dead-lettered email, export, retention and webhook jobs;
 - failed backup jobs or restore-drill failures;
-- sustained 5xx/readiness failures.
+- sustained 5xx/readiness failures;
+- GuardDuty findings at severity 7 or higher, and new critical Security Hub
+  findings, when `OnCallTopicArn` is set on the account guardrails stack.
 
 The stable log signals are `queue_job_exhausted`, `audit_integrity_failure`,
 `clamav_unavailable` and `readiness_dependency_down`. Response steps are in
