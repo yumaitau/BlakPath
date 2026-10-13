@@ -98,7 +98,12 @@ export function CertificatePanel({
     );
 
   const sign = (id: string) =>
-    run(`sign:${id}`, () => fetch(`/api/certificates/${id}/sign`, { method: 'POST' }));
+    run(`sign:${id}`, () =>
+      fetch(`/api/certificates/${id}/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
 
   const revoke = (id: string) => {
     const reason = window.prompt('Reason for revoking this certificate?');

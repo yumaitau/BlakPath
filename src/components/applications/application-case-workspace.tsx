@@ -150,6 +150,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
       }
       const completed = await fetch(`/api/evidence/${prepared.evidence.id}/complete`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!completed.ok) {
         setError('The file arrived, but its security scan could not be started.');

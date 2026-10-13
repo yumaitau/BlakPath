@@ -22,6 +22,11 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   use: {
     baseURL,
+    // APIRequestContext does not send Origin. Browser fetch() does. Cookie
+    // mutations require the application origin.
+    extraHTTPHeaders: {
+      Origin: baseURL,
+    },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },

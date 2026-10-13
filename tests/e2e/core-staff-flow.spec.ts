@@ -1,5 +1,6 @@
 import axe from 'axe-core';
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import {
   ADMIN_EMAIL,
   APPLICANT_EMAIL,
@@ -12,7 +13,19 @@ async function expectNoSeriousAccessibilityViolations(page: Page): Promise<void>
   // App Router metadata can stream after the page's visible content on a slow
   // CI runner. Wait for the title before asking axe to inspect the final DOM.
   await expect(page).toHaveTitle(/\S/);
-  await page.addScriptTag({ content: axe.source });
+  await page.evaluate((source) => {
+    let nonce = '';
+    for (const existing of document.scripts) {
+      if (existing.nonce) {
+        nonce = existing.nonce;
+        break;
+      }
+    }
+    const script = document.createElement('script');
+    if (nonce) script.nonce = nonce;
+    script.text = source;
+    document.head.appendChild(script);
+  }, axe.source);
   const violations = await page.evaluate(async () => {
     interface AxeResult {
       impact: string | null;

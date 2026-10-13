@@ -38,10 +38,12 @@ import { stepUp } from './step-up-plugin';
  *   TOTP with recovery codes. Staff MFA is enforced by `staff-policy.ts`.
  *   Enrolment and second-factor lockout are stored on the auth tables; see
  *   `schema-coverage.ts`.
- * - Cookies are httpOnly + SameSite=Lax, and Secure in production. A session
- *   with an active organisation expires 12 hours after it is created, and
- *   sooner when idle (30–60 minutes, per tenant). Other sessions keep a 7-day
- *   ceiling. Sensitive routes require a fresh authentication via step-up.
+ * - Cookies are httpOnly + SameSite=Lax, and Secure in production. Production
+ *   names use the `__Host-` prefix (Path=/, no Domain) so they cannot be
+ *   scoped to a parent domain. A session with an active organisation expires
+ *   12 hours after it is created, and sooner when idle (30–60 minutes, per
+ *   tenant). Other sessions keep a 7-day ceiling. Sensitive routes require a
+ *   fresh authentication via step-up.
  * - Rate limiting is enabled to blunt credential-stuffing and brute force; the
  *   TOTP plugin records repeated failed second-factor attempts on the factor
  *   row and refuses verification until the lock window ends.
@@ -76,6 +78,33 @@ export function hashCredentialPassword(password: string): Promise<string> {
 }
 
 assertAuthSchemaCoverage();
+
+/** Legacy cache-cookie names, plus the production `__Host-` name, to expire. */
+export const SESSION_DATA_COOKIE_NAMES = [
+  'blakpath.session_data',
+  '__Secure-blakpath.session_data',
+  '__Host-blakpath.session_data',
+] as const;
+
+/**
+ * `__Host-` cookies must be Secure, Path=/, and must not set Domain.
+ * Better Auth prepends `__Secure-` when `useSecureCookies` is on, which would
+ * produce a name that does not start with `__Host-`, so production sets the
+ * full name explicitly and leaves that flag off.
+ */
+function hostCookie(cookieName: string) {
+  return {
+    name: `__Host-blakpath.${cookieName}`,
+    attributes: {
+      httpOnly: true,
+      sameSite: 'lax' as const,
+      secure: true,
+      path: '/',
+    },
+  };
+}
+
+const HOST_ONLY_SESSION_COOKIES = isProduction();
 
 export const auth = betterAuth({
   appName: 'BlakPath',
@@ -196,20 +225,31 @@ export const auth = betterAuth({
   advanced: {
     // Rate limits and session addresses read CF-Connecting-IP. The auth route
     // sets that header only after clientIp accepts the request, and removes
-    // client-supplied forwarding headers first.
+    // client-supplied forwarding headers first. `useSecureCookies` would prefix
+    // `__Secure-` and break the `__Host-` names used in production.
     ipAddress: {
       ipAddressHeaders: ['cf-connecting-ip'],
     },
-    // Cookies are Secure in production (HTTPS-only). Even in development the
-    // flags below keep them httpOnly and SameSite=Lax.
-    useSecureCookies: isProduction(),
+    useSecureCookies: false,
     cookiePrefix: 'blakpath',
     defaultCookieAttributes: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: isProduction(),
+      secure: HOST_ONLY_SESSION_COOKIES,
       path: '/',
     },
+    ...(HOST_ONLY_SESSION_COOKIES
+      ? {
+          cookies: {
+            session_token: hostCookie('session_token'),
+            session_data: hostCookie('session_data'),
+            account_data: hostCookie('account_data'),
+            dont_remember: hostCookie('dont_remember'),
+            two_factor: hostCookie('two_factor'),
+            trust_device: hostCookie('trust_device'),
+          },
+        }
+      : {}),
     // Application-generated UUIDv7 so ids are known pre-insert (audit hash
     // chaining, object-storage keys) and are time-ordered for indexing.
     database: {
