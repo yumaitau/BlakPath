@@ -56,6 +56,16 @@ const PRESIGN_TTL_SECONDS = 300;
  * environments. Local S3-compatible endpoints may not have a KMS configured,
  * so development relies on the local volume controls instead.
  */
+export function s3ServerSideEncryption():
+  | {
+      ServerSideEncryption: ServerSideEncryption;
+      SSEKMSKeyId?: string;
+    }
+  | undefined {
+  if (env.S3_ENDPOINT) return undefined;
+  return encryptionOptions();
+}
+
 function encryptionOptions(): {
   ServerSideEncryption: ServerSideEncryption;
   SSEKMSKeyId?: string;
@@ -226,7 +236,7 @@ export async function putObjectBytes(params: {
       Key: params.key,
       Body: params.body,
       ContentType: params.contentType,
-      ...(env.S3_ENDPOINT ? {} : encryptionOptions()),
+      ...(s3ServerSideEncryption() ?? {}),
     }),
   );
 }

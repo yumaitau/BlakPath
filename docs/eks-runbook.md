@@ -7,8 +7,12 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
-   `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
-   `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`.
+   `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
+   `ENCRYPTION_MASTER_KEY`, `SMTP_USER`, `SMTP_PASSWORD`,
+   `EMAIL_WEBHOOK_SECRET`, `AUDIT_ANCHOR_SIGNING_KEY_ID`. Create a separate
+   secret at `/blakpath/production/migrator` with only
+   `DATABASE_MIGRATION_URL` (role `blakpath_migrator`). Do not put the
+   migrator URL in the runtime secret.
 3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
 4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
@@ -42,6 +46,10 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
   versioning on, AWS Backup coverage. MinIO exists for local dev only.
+- S3 audit-anchor bucket: created with Object Lock compliance retention
+  (see `infra/aws/audit-anchor-bucket.example.yaml`). The worker may put and
+  read objects. It must not be granted delete or governance bypass. Web tasks
+  do not use this bucket.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
 - PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:
@@ -51,6 +59,31 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   `Authorization: Bearer <key>` and a JSON body of
   `{from, to, subject, text}`. Wiring the sender to PaperBoy is tracked work;
   until then mail flows through the SES API under the workload role.
+
+## Database roles
+
+The application role must not own the tables. As the RDS master, run
+`infra/postgres/audit-roles.sql` once: create `blakpath_migrator` and
+`blakpath_app`, then reassign existing objects to the migrator. Store their
+connection URLs in the two secrets above. `infra/k8s/jobs/migrate.yaml` reads
+`DATABASE_MIGRATION_URL` from `blakpath-migrator` and refuses to run in
+production when that role matches `DATABASE_URL`. After migrate, the app role
+has `SELECT` and `INSERT` only on `audit_events` and
+`audit_integrity_checkpoints`.
+
+## Audit anchor signing key (KMS)
+
+Daily chain-head anchors are signed with a separate asymmetric KMS key from
+the CoA key. Private key material never leaves KMS.
+
+1. Create the key: RSA_2048 (or ECC_NIST_P256), usage SIGN_VERIFY, alias
+   `alias/blakpath-audit-anchor`, ap-southeast-2.
+2. Grant the worker role `kms:Sign`, `kms:GetPublicKey` and `kms:DescribeKey`
+   on that key. Do not grant `kms:Sign` to the web role.
+3. Set `AUDIT_ANCHOR_SIGNING_KEY_ID` to the key ARN in the runtime secret.
+4. Set `S3_BUCKET_AUDIT_ANCHORS` and `AUDIT_ANCHOR_OBJECT_LOCK=true` in the
+   ConfigMap. Confirm the first day's objects exist before accepting
+   production records.
 
 ## CoA signing key (KMS)
 

@@ -4,12 +4,13 @@ import type { AuditAction, AuditResult, ResourceType } from './events';
 /**
  * Canonical serialisation and SHA-256 hash-chaining for the audit trail.
  *
- * Tamper-evidence relies on each event committing to (a) its own content and
- * (b) the hash of the previous event in the same chain. Because the hash is
- * computed over a DETERMINISTIC serialisation (keys sorted, stable primitive
- * encoding), any later re-computation over the stored rows yields the same
- * digest — unless a byte was changed, a row was inserted, or a row was removed,
- * in which case the chain no longer verifies.
+ * Each event commits to (a) its own content and (b) the hash of the previous
+ * event in the same chain. The digest is an unkeyed SHA-256 over a
+ * DETERMINISTIC serialisation (keys sorted, stable primitive encoding), so a
+ * later re-computation over the stored rows yields the same digest — and a
+ * rewrite of the rows can recompute it too. A stored-row mismatch still
+ * pinpoints an in-place edit. A full rewrite is detected by the signed
+ * chain-head anchor kept outside the database (`anchor.ts`).
  *
  * Redaction is a first-class concern: raw document contents, secrets,
  * passwords, TOTP seeds, recovery codes and full sensitive form answers must

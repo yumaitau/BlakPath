@@ -23,6 +23,15 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            # Owning role. Must not be the application DATABASE_URL. The
+            # runtime secret must not carry this value; web and worker never
+            # mount blakpath-migrator.
+            - name: DATABASE_MIGRATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-migrator
+                  key: DATABASE_MIGRATION_URL
           resources:
             requests:
               cpu: 250m

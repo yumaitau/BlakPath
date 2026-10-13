@@ -7,7 +7,13 @@ const valid = {
   S3_REGION: 'ap-southeast-2',
   APP_URL: 'https://blakpath.example.org',
   BETTER_AUTH_URL: 'https://blakpath.example.org',
-  DATABASE_URL: 'postgres://app:secret@db.internal/blakpath?sslmode=verify-full',
+  DATABASE_URL: 'postgres://blakpath_app:secret@db.internal/blakpath?sslmode=verify-full',
+  DATABASE_MIGRATION_URL:
+    'postgres://blakpath_migrator:secret@db.internal/blakpath?sslmode=verify-full',
+  S3_BUCKET_AUDIT_ANCHORS: 'blakpath-prod-audit-anchors',
+  AUDIT_ANCHOR_OBJECT_LOCK: 'true',
+  AUDIT_ANCHOR_SIGNING_KEY_ID:
+    'arn:aws:kms:ap-southeast-2:123456789012:key/12345678-1234-1234-1234-123456789abc',
   REDIS_URL: 'rediss://redis.internal:6379',
   S3_KMS_KEY_ID:
     'arn:aws:kms:ap-southeast-2:123456789012:key/12345678-1234-1234-1234-123456789abc',
@@ -68,5 +74,13 @@ describe('production readiness configuration', () => {
         'SMTP_HOST',
       ]),
     );
+  });
+
+  it('rejects a migration URL that reuses the application role', () => {
+    const issues = validateProductionReadiness({
+      ...valid,
+      DATABASE_MIGRATION_URL: valid.DATABASE_URL,
+    });
+    expect(issues.map(({ key }) => key)).toContain('DATABASE_MIGRATION_URL');
   });
 });

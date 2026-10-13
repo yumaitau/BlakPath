@@ -15,6 +15,8 @@ data:
   S3_REGION: ap-southeast-2
   S3_BUCKET_EVIDENCE: blakpath-prod-evidence-959038055523-ap-southeast-2
   S3_BUCKET_QUARANTINE: blakpath-prod-quarantine-959038055523-ap-southeast-2
+  S3_BUCKET_AUDIT_ANCHORS: blakpath-prod-audit-anchors-959038055523-ap-southeast-2
+  AUDIT_ANCHOR_OBJECT_LOCK: 'true'
   S3_KMS_KEY_ID: arn:aws:kms:ap-southeast-2:959038055523:key/737b7098-2c77-4a4e-b4c6-666597743651
   S3_FORCE_PATH_STYLE: 'false'
   # SES SMTP interface in ap-southeast-2; credentials from Secrets Manager.

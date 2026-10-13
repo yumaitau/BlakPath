@@ -8,6 +8,10 @@ Parameters:
     Type: String
   EvidenceKmsKeyArn:
     Type: String
+  AuditAnchorBucketArn:
+    Type: String
+  AuditAnchorSigningKeyArn:
+    Type: String
   RuntimeSecretArn:
     Type: String
   RuntimeSecretKmsKeyArn:
@@ -75,6 +79,27 @@ Resources:
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
                 Resource: [!Ref EvidenceKmsKeyArn]
+              - Sid: AuditAnchorReadWrite
+                Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: [!Ref AuditAnchorBucketArn]
+              - Sid: AuditAnchorObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: [!Sub '${AuditAnchorBucketArn}/*']
+              - Sid: AuditAnchorSign
+                Effect: Allow
+                Action: [kms:Sign, kms:GetPublicKey, kms:DescribeKey]
+                Resource: [!Ref AuditAnchorSigningKeyArn]
+              - Sid: AuditAnchorNoDelete
+                Effect: Deny
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:BypassGovernanceRetention
+                Resource:
+                  - !Ref AuditAnchorBucketArn
+                  - !Sub '${AuditAnchorBucketArn}/*'
 
   TaskExecutionRole:
     Type: AWS::IAM::Role
