@@ -35,3 +35,6 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 Bulk imports run as privileged worker jobs with tenant binding, quarantined
 evidence rescanned, every created record audited. No silent auto-determination:
 imported matters enter at intake states only.
+
+Leaving a tenant, or erasing a person's live records, does not erase backup
+copies early. The residual period is in `docs/offboarding.md`.

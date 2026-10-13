@@ -83,6 +83,30 @@ Consent is treated as a first-class, recorded fact, not an implicit assumption:
   would defeat tamper-evidence; audit retention is handled by whole, verified,
   archived periods, never by editing rows (`docs/audit-log-design.md`).
 
+## Backups after deletion
+
+Deleting a row, object or tenant from the live system does not erase AWS Backup
+copies. Production recovery points are defined by
+`infra/aws/backup-plan.example.yaml` and explained for privacy notices in
+`docs/offboarding.md`.
+
+- Recovery points stay in **`ap-southeast-2`**. The vault denies copies out.
+  There is no cross-region replica.
+- The vault is encrypted with a BlakPath CMK and locked in **compliance mode**
+  after a **7-day** cooling-off. The lock cannot then be removed or relaxed,
+  including by the account root.
+- **Minimum retention is 35 days.** A recovery point cannot be deleted sooner.
+  An erasure request cannot be accelerated inside the vault.
+- **Maximum retention is 90 days.** That is also the daily snapshot lifetime.
+  Continuous point-in-time recovery keeps **35 days**. The longest a deleted
+  record can still be restored is **90 days**.
+- The evidence bucket and the quarantine bucket are both protected. Quarantine
+  can hold personal information before a malware scan. Restored quarantine
+  objects stay unscanned and must not be promoted.
+- **Redis is not backed up.** It is not a durable copy of personal information.
+- Tell the person, in the council's privacy notice, that erased data can remain
+  in backups for up to 90 days. Publishing that notice is a council decision.
+
 ## No automated determination — the guarantee
 
 - **No scoring, ranking, prediction or inference of Aboriginality anywhere.** No

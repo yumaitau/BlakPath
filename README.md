@@ -216,6 +216,7 @@ BlakPath/
 | [`docs/audit-log-design.md`](docs/audit-log-design.md)                 | Event schema, SHA-256 hash chaining, checkpoints, redaction                                    |
 | [`docs/threat-model.md`](docs/threat-model.md)                         | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |
 | [`docs/privacy-architecture.md`](docs/privacy-architecture.md)         | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
+| [`docs/offboarding.md`](docs/offboarding.md)                           | Erasure, offboarding, and how long deleted data remains in locked backups                      |
 | [`docs/production-readiness.md`](docs/production-readiness.md)         | Production release gate, monitoring, backups and restore drills                                |
 | [`docs/operations-runbook.md`](docs/operations-runbook.md)             | Alert signals and incident response actions                                                    |
 | [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md) | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |

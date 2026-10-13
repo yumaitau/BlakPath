@@ -14,15 +14,19 @@ region.
       values in images, source control, CI logs or long-lived environment files.
 - [ ] Terminate TLS at the edge, forward only trusted proxy headers and keep
       the security headers in `next.config.ts` enabled.
-- [ ] Configure database point-in-time recovery and versioned, encrypted object
-      storage backups. Redis is not a durable source of record.
+- [ ] Deploy `infra/aws/backup-plan.example.yaml` in `ap-southeast-2`. The vault
+      is CMK-encrypted and compliance-locked (minimum 35 days, maximum 90 days)
+      with continuous recovery and daily snapshots of RDS, evidence and
+      quarantine. Redis is not a durable source of record.
 - [ ] Run a documented restore drill into an isolated environment. Confirm a
       tenant can sign in, their records are present, objects can be read only after
       the normal authorisation checks, and `audit-verify` reports a clean chain.
 - [ ] Set an owner and escalation path for failed readiness checks, scanner
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
-      (or reviewed equivalents) and complete an on-call test notification.
+      (or reviewed equivalents). Complete an on-call test notification, including
+      a test fire of `blakpath-backup-job-failed`, and record
+      `list-protected-resources` showing the RDS instance and both buckets.
 
 ## Signals and response
 

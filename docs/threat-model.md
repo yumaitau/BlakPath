@@ -148,6 +148,8 @@ When something goes wrong, BlakPath **denies rather than exposes**:
 
 - Cultural governance and the correctness of human determinations sit with the
   organisation; BlakPath assures process integrity, not the merits of a decision.
-- Infrastructure hardening (network policy, secret management via KMS, backups,
-  patching) is assumed to be enforced in the `ap-southeast-2` deployment
-  environment and is out of scope for this application-level model.
+- Infrastructure hardening (network policy, secret management via KMS, patching)
+  is assumed to be enforced in the `ap-southeast-2` deployment environment and
+  is out of scope for this application-level model. Backup coverage, the
+  compliance vault lock and how long erased data remains in recovery points are
+  specified in `infra/aws/backup-plan.example.yaml` and `docs/offboarding.md`.

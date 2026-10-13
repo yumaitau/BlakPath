@@ -31,10 +31,15 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 ## Data services
 
-- RDS Postgres with point-in-time recovery. Proxy in front for failover.
-- ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
+- RDS Postgres. `infra/aws/backup-plan.example.yaml` keeps 35-day continuous
+  point-in-time recovery and a 90-day daily snapshot in a compliance-locked
+  vault. Proxy in front for failover. Do not also enrol the instance in another
+  continuous backup plan.
+- ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers. Not
+  in the backup plan.
 - S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
-  versioning on, AWS Backup coverage. MinIO exists for local dev only.
+  versioning on. Both buckets are in that backup plan. MinIO exists for local
+  dev only.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
 - PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:
@@ -62,8 +67,13 @@ against its public key — private key material never leaves KMS.
 
 ## Restore drill (EKS variant)
 
-1. Snapshot RDS + S3 point-in-time into isolated namespace with separate
-   secret copy. Never restore into live namespace.
+Use a recovery point from the locked BlakPath vault, not an ad-hoc dump.
+`docs/operations-runbook.md` has the `list-protected-resources` check.
+
+1. Restore RDS and both buckets into an isolated namespace with a separate
+   secret copy. Never restore into the live namespace. Quarantine objects stay
+   unscanned. Re-apply audited deletions newer than the recovery point
+   (`docs/offboarding.md`).
 2. Run migrations, sign in as seeded admin, confirm records present.
 3. Download clean evidence through normal authorised path (quarantine blocks
    bypass). Run audit-verify, expect clean chain.
@@ -73,5 +83,7 @@ against its public key — private key material never leaves KMS.
 ## Alarms
 
 Audit divergence, scan backlog past handling target, dead-letter email/export/
-retention/webhook jobs, backup failures, sustained 5xx / readiness failures.
-See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+retention/webhook jobs, backup failures (`blakpath-backup-job-failed`),
+sustained 5xx / readiness failures. See `infra/aws/operational-alerts.example.yaml`
+for application log signals and `infra/aws/backup-plan.example.yaml` for the
+backup-job alarm.
