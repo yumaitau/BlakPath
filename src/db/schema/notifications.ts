@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -39,9 +39,19 @@ export const notifications = pgTable(
     readAt: timestamp('read_at', { withTimezone: true }),
     /** When an email copy was dispatched by the notification worker. */
     emailedAt: timestamp('emailed_at', { withTimezone: true }),
+    /**
+     * Optional producer idempotency key, e.g. `calendar-reminder:<id>:<user>`.
+     * Unique per tenant so a retried producer (a reminder sweep that crashed
+     * part-way) cannot create, or email, the same notification twice.
+     */
+    dedupeKey: text('dedupe_key'),
     ...timestamps,
   },
   (table) => [
+    uniqueIndex('notifications_org_dedupe_key_unique').on(
+      table.organisationId,
+      table.dedupeKey,
+    ),
     index('notifications_org_user_read_idx').on(
       table.organisationId,
       table.userId,

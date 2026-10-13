@@ -42,6 +42,13 @@ export interface CreateNotificationInput {
   body?: string;
   resourceType?: string;
   resourceId?: string;
+  /**
+   * Producer idempotency key, unique per tenant. When a row with this key
+   * already exists, no second row is created and the existing one is returned
+   * (its delivery job is re-offered under the same job id, so it is not
+   * duplicated either).
+   */
+  dedupeKey?: string;
 }
 
 /**
@@ -65,24 +72,46 @@ export async function createNotification(
         body: input.body ?? null,
         resourceType: input.resourceType ?? null,
         resourceId: input.resourceId ?? null,
+        dedupeKey: input.dedupeKey ?? null,
       }),
     )
+    .onConflictDoNothing({
+      target: [notifications.organisationId, notifications.dedupeKey],
+    })
     .returning();
-  const row = inserted[0];
+  let row = inserted[0];
+  if (!row && input.dedupeKey) {
+    // A previous (possibly crashed) run already created this notification.
+    const existing = await scope.db
+      .select()
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.organisationId, input.organisationId),
+          eq(notifications.dedupeKey, input.dedupeKey),
+        ),
+      )
+      .limit(1);
+    row = existing[0];
+  }
   if (!row) {
     throw new Error('Expected a notification row to be returned from the database.');
   }
 
-  await addJob(
-    QueueName.Notification,
-    'deliver',
-    {
-      organisationId: input.organisationId,
-      correlationId,
-      notificationId: id,
-    },
-    { jobId: id },
-  );
+  // Already emailed: nothing left to deliver. Otherwise (re-)offer the job; the
+  // stable job id de-duplicates it and the processor skips emailed rows.
+  if (!row.emailedAt) {
+    await addJob(
+      QueueName.Notification,
+      'deliver',
+      {
+        organisationId: input.organisationId,
+        correlationId,
+        notificationId: row.id,
+      },
+      { jobId: row.id },
+    );
+  }
 
   return row;
 }
