@@ -10,6 +10,10 @@ region.
 - [ ] Run `pnpm release:check` in the exact production web and worker runtime
       environments; attach the successful key-only output to the release record.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
+      Size RDS `max_connections` at or above the 1 GiB floor (112) in
+      [`eks-runbook.md`](eks-runbook.md). Leave `DATABASE_POOL_MAX` on the
+      ConfigMap pin. Do not raise HPA `maxReplicas` without updating
+      `src/lib/fleet-capacity.ts`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.
 - [ ] Terminate TLS at the edge, forward only trusted proxy headers and keep

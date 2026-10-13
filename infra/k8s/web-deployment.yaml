@@ -20,7 +20,25 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-app
     spec:
+      # 15s preStop plus 25s for the process to exit. The kubelet clock
+      # includes the sleep. See src/lib/fleet-capacity.ts.
+      terminationGracePeriodSeconds: 40
       serviceAccountName: blakpath
+      # Hard spread: min 2 replicas need two AZs and two nodes, or the second
+      # pod stays Pending. Do not relax whenUnsatisfiable.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: blakpath-app
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: blakpath-app
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -43,11 +61,23 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          # Overrides envFrom. The runtime secret must not raise the pool.
+          env:
+            - name: DATABASE_POOL_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: blakpath-config
+                  key: DATABASE_POOL_MAX
           volumeMounts:
             - mountPath: /tmp
               name: tmp
             - mountPath: /app/.next/cache
               name: next-cache
+          # Hold the process until ALB deregistration (15s) finishes.
+          lifecycle:
+            preStop:
+              exec:
+                command: [/bin/sh, -c, 'sleep 15']
           livenessProbe:
             httpGet:
               path: /api/health

@@ -16,6 +16,66 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
+## Rollouts and the database connection budget
+
+The namespace label `elbv2.k8s.aws/pod-readiness-gate-inject: enabled` tells the
+AWS Load Balancer Controller to inject a target-health readiness gate. Install
+that controller before the first deploy. Without it the label does nothing and
+the ALB can still route to a pod that is not registered.
+
+Web pods sleep 15 seconds in `preStop`. That matches the Ingress attribute
+`deregistration_delay.timeout_seconds=15`, so in-flight requests finish before
+SIGTERM. `terminationGracePeriodSeconds` on web is 40. The kubelet counts the
+sleep against that period, then the process still has 25 seconds to exit.
+
+Workers do not sleep in `preStop`. SIGTERM starts their job drain
+(`WORKER_SHUTDOWN_GRACE_SECONDS`, 25 seconds). Their grace period is 30 seconds.
+
+Web, worker and ClamAV use `topologySpreadConstraints` on
+`topology.kubernetes.io/zone` and `kubernetes.io/hostname` with `maxSkew: 1`
+and `whenUnsatisfiable: DoNotSchedule`. The node group must already span at
+least two AZs, with a schedulable node in each, or the second web or worker
+replica stays Pending. ClamAV is one replica; the same rules apply if it is
+scaled past one.
+
+Connection budget, from `src/lib/fleet-capacity.ts`:
+
+- RDS floor: 1 GiB class (`db.t4g.micro`), default `max_connections` 112.
+  Formula: `LEAST({DBInstanceClassMemory/9531392}, 5000)`. A larger class is
+  inside this budget. A parameter group that lowers `max_connections` is not.
+- Cap: peak connections must stay under 80% of `max_connections` (89.6 on the
+  floor).
+- Pool: `DATABASE_POOL_MAX` 10 per web or worker process. The ConfigMap holds
+  the value. Web and worker pin that key with an explicit `env` entry, which
+  overrides `envFrom`, so `/blakpath/production/runtime` must not be relied on
+  to set the pool. Do not add `DATABASE_POOL_MAX` to that secret.
+- Web HPA: min 2, max 4, `maxSurge` 1, `maxUnavailable` 0.
+- Workers: 2 replicas, `maxSurge` 1, `maxUnavailable` 0. No worker HPA.
+- Migrate job: 1 connection.
+
+Rollout peak is `(4 + 1 + 2 + 1) × 10 + 1 = 81`, under 80% of 112. Steady
+state at HPA max, with no rollout, is `(4 + 2) × 10 = 60`. Do not raise
+`maxReplicas` without changing the module. The unit test computes the new
+maximum. Do not run the seed job during a rollout while web is at
+`maxReplicas`: seed takes a full pool and is outside the 81-connection peak.
+
+### Check a rollout
+
+Applying these manifests, and the load test below, is a human step. This
+repository does not apply them to a cluster.
+
+On a cluster whose nodes already span two AZs:
+
+1. Send load through the ALB at `https://blakpath.yumait.au/api/ready`.
+2. Roll web (`kubectl rollout restart deployment/blakpath-app -n blakpath`)
+   and drain one node.
+3. ALB `HTTPCode_Target_5XX_Count` and `HTTPCode_ELB_5XX_Count` stay at 0
+   for that window.
+4. `kubectl get pods -n blakpath -o wide` shows web and worker pods in at
+   least two zones.
+5. RDS `DatabaseConnections` stays under 90 while the HPA is at max and a
+   rollout is in progress.
+
 ## Secrets and keys
 
 - Dedicated folder: every BlakPath secret lives under

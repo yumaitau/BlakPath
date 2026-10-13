@@ -9,6 +9,9 @@ data:
   BETTER_AUTH_URL: https://blakpath.yumait.au
   HOSTNAME: 0.0.0.0
   PORT: '3000'
+  # postgres.js pool cap per web/worker process. Both Deployments pin this
+  # key so the runtime secret cannot raise it. See src/lib/fleet-capacity.ts.
+  DATABASE_POOL_MAX: '10'
   NODE_ENV: production
   NEXT_TELEMETRY_DISABLED: '1'
   LOG_LEVEL: info

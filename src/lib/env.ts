@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DATABASE_POOL_MAX as databasePoolMax } from '@/lib/fleet-capacity';
 
 /**
  * Centralised, validated environment configuration.
@@ -25,7 +26,7 @@ const serverSchema = z
 
     // Database
     DATABASE_URL: z.string().url(),
-    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
+    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(databasePoolMax),
 
     // Redis (queues, rate limiting, ephemeral state)
     REDIS_URL: z.string().url(),
