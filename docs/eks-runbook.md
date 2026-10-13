@@ -5,11 +5,16 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 ## Deploy
 
-1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
+1. Review and apply `infra/terraform` (pilot or `./infra/terraform/staging-up.sh`).
+   Push web + worker images to ECR in ap-southeast-2 with immutable tags.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
-   `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`.
-3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
+   `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`. Terraform creates the
+   secret shell and does not write the value.
+3. Install External Secrets Operator and apply
+   `infra/k8s/external-secrets-serviceaccount.yaml` plus
+   `infra/k8s/cluster-secret-store.yaml`. The store is `blakpath`. Auth is
+   EKS Pod Identity (`blakpath-pilot-external-secrets`), not a shared IRSA role.
 4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
 5. Run `pnpm release:check` inside the exact web and worker images before
@@ -23,9 +28,11 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   `blakpath-runtime` Secret via External Secrets Operator; the platform ESO
   role stays shared and is never narrowed per app.
 - Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
-  Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
-  `alias/blakpath-prod-evidence` covers both S3 buckets. RDS uses its
-  provisioned key. No AWS-managed default keys in the secret path.
+  Secrets Manager folder. It is not the account default EBS key; new volumes
+  use `alias/account-ebs-default` (`infra/terraform/live/account-baseline`).
+  `alias/blakpath-prod-evidence` covers both S3 buckets. RDS and ElastiCache
+  use their own provisioned key. No AWS-managed default keys in the secret path.
+  Both BlakPath keys have annual rotation.
 - ElastiCache runs with transit and at-rest encryption. Redis holds
   ephemeral state only — never tenant records.
 
@@ -52,8 +59,9 @@ against its public key — private key material never leaves KMS.
 
 1. Create the key: RSA_2048 (or ECC_NIST_P256), usage SIGN_VERIFY, alias
    `alias/blakpath-coa-signing`, ap-southeast-2.
-2. Grant the workload role `kms:Sign`, `kms:Verify`, `kms:GetPublicKey`,
-   `kms:DescribeKey` on the key ARN (Pod Identity association).
+2. Grant the web Pod Identity role `kms:Sign`, `kms:Verify`, `kms:GetPublicKey`,
+   `kms:DescribeKey` on the key ARN. Pass the key ARN as `coa_signing_key_arn`
+   on the pilot stack and re-apply. The association is per service account.
 3. Set `COA_SIGNING_KEY_ID` to the key ARN in `blakpath-eks-runtime`.
 4. Rotate by creating a new key version/alias target; existing seals verify
    against their stored `signingKeyId`, so rotation never invalidates issued

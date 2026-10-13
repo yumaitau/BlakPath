@@ -42,3 +42,12 @@ infra/k8s/secret.yaml
 
 # otel / observability local
 /.otel
+
+# Terraform local state and provider cache. Lock files stay committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+infra/terraform/**/backend.hcl

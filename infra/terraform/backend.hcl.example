@@ -1,0 +1,8 @@
+# Copy to backend.hcl (gitignored) and pass -backend-config=backend.hcl.
+# Create the bucket out of band before the first remote init. Do not put the
+# state bucket in the same state it stores.
+bucket       = "blakpath-terraform-state-959038055523-ap-southeast-2"
+key          = "pilot/terraform.tfstate"
+region       = "ap-southeast-2"
+encrypt      = true
+use_lockfile = true

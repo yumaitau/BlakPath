@@ -1,8 +1,10 @@
 # AWS production controls
 
-These CloudFormation examples are deployment inputs, not a turn-key account
-bootstrap. Deploy them only in `ap-southeast-2` after replacing every parameter
-with resources owned by the production environment.
+Terraform under `infra/terraform/` is the account source of truth. Plan and
+apply that, in `ap-southeast-2` only. See `infra/terraform/README.md`.
+
+These CloudFormation files document the workload policy split and the
+operational log signals. They are not a second way to deploy.
 
 - `workload-roles.example.yaml` separates web, worker and ECS execution roles.
   The application roles have no Secrets Manager permission and no access keys;

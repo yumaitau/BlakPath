@@ -21,6 +21,8 @@ data:
   SMTP_HOST: email-smtp.ap-southeast-2.amazonaws.com
   SMTP_PORT: '587'
   SMTP_FROM: BlakPath <no-reply@blakpath.yumait.au>
+  # Matches infra/terraform live/pilot SES configuration set.
+  SES_CONFIGURATION_SET: blakpath-pilot-transactional
   # PaperBoy replaces direct SES SMTP in production; key lives in Secrets
   # Manager. Sender contract: POST {PAPERBOY_URL}/api/v1/emails, Bearer auth.
   PAPERBOY_URL: https://paperboy.yumait.au

@@ -20,7 +20,7 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-app
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-web
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001

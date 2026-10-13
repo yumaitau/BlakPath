@@ -15,7 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-worker
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-worker
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001

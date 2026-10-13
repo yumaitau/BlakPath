@@ -63,6 +63,9 @@ const serverSchema = z
     SMTP_USER: z.string().optional(),
     SMTP_PASSWORD: z.string().optional(),
     SMTP_FROM: z.string().default('BlakPath <no-reply@blakpath.local>'),
+    // SES configuration set that publishes bounces and complaints to SNS.
+    // Unset locally. Production sets the name Terraform creates.
+    SES_CONFIGURATION_SET: z.string().min(1).optional(),
     // PaperBoy transactional email (https://paperboy.yumait.au).
     // Placeholder wiring: the sender posts JSON to
     // `{PAPERBOY_URL}/api/v1/emails` with `Authorization: Bearer
