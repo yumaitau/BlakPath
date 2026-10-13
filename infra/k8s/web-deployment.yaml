@@ -43,6 +43,11 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: blakpath-web
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://blakpath-otel-collector.blakpath.svc.cluster.local:4318
           volumeMounts:
             - mountPath: /tmp
               name: tmp

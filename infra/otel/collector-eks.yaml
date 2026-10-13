@@ -1,0 +1,93 @@
+# ADOT collector for BlakPath on EKS. Region is fixed to ap-southeast-2.
+# Traces go to X-Ray. Metrics go to CloudWatch via EMF in the metrics log group.
+# The app scrubs span attributes before export; these deletes are defence in depth.
+# Local compose keeps docker/otel-collector-config.yaml on the debug exporter.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+  attributes/scrub:
+    actions:
+      - key: applicant.name
+        action: delete
+      - key: applicant.dob
+        action: delete
+      - key: evidence.content
+        action: delete
+      - key: http.url
+        action: delete
+      - key: url.full
+        action: delete
+      - key: url.query
+        action: delete
+      - key: db.statement
+        action: delete
+      - key: db.query.text
+        action: delete
+      - pattern: (?i).*authorization.*
+        action: delete
+      - pattern: (?i).*cookie.*
+        action: delete
+
+exporters:
+  awsxray:
+    region: ap-southeast-2
+  awsemf:
+    region: ap-southeast-2
+    namespace: BlakPath/Operations
+    log_group_name: /blakpath/production/metrics
+    dimension_rollup_option: ZeroAndSingleDimensionRollup
+    metric_declarations:
+      - dimensions: [[]]
+        metric_name_selectors:
+          - http.server.requests
+          - http.server.errors
+          - http.server.duration
+          - http.server.duration_p95_ms
+          - quarantine.backlog
+          - quarantine.oldest_age_seconds
+          - clamav.signature_age_seconds
+          - scan.duration
+          - scan.duration_p95_ms
+          - app.errors
+          - db.pool.max
+      - dimensions: [[queue]]
+        metric_name_selectors:
+          - queue.depth
+          - queue.oldest_age_seconds
+          - queue.failed
+      - dimensions: [[pool]]
+        metric_name_selectors:
+          - db.pool.open
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [awsxray]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [awsemf]
+  telemetry:
+    logs:
+      level: info

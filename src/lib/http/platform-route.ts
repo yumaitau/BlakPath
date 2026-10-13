@@ -10,6 +10,7 @@ import {
 } from '@/lib/auth/session';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { BreakGlassError } from '@/domains/break-glass';
+import { captureException } from '@/lib/observability/errors';
 
 /**
  * Route guard for PLATFORM-operator actions (e.g. requesting/activating
@@ -45,5 +46,6 @@ export function breakGlassErrorResponse(error: unknown): NextResponse {
   if (error instanceof BreakGlassError || error instanceof AuthorizationError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+  captureException(error);
   return NextResponse.json({ error: 'Internal error' }, { status: 500 });
 }

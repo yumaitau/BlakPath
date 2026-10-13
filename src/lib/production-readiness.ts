@@ -36,6 +36,31 @@ function addRequiredUrl(
   return parsed;
 }
 
+/**
+ * Production OTLP must stay in-region. HTTPS is required for anything outside
+ * the cluster. Plain HTTP is accepted only for the in-cluster collector DNS
+ * name, because that hop never leaves the VPC and the collector's AWS
+ * exporters use TLS.
+ */
+function addOtelEndpoint(
+  issues: ReadinessIssue[],
+  environment: ProductionEnvironment,
+): void {
+  const key = 'OTEL_EXPORTER_OTLP_ENDPOINT';
+  const parsed = parseUrl(environment[key]);
+  const inCluster =
+    parsed?.protocol === 'http:' &&
+    parsed.hostname.endsWith('.svc.cluster.local') &&
+    !LOCAL_HOST.test(parsed.hostname);
+  const external = parsed?.protocol === 'https:' && !LOCAL_HOST.test(parsed.hostname);
+  if (!parsed || (!inCluster && !external)) {
+    issues.push({
+      key,
+      message: 'must be https:// to a non-local collector, or http://*.svc.cluster.local',
+    });
+  }
+}
+
 /** Return key-only, non-secret reasons a production deployment must be blocked. */
 export function validateProductionReadiness(
   environment: ProductionEnvironment,
@@ -88,7 +113,7 @@ export function validateProductionReadiness(
     });
   }
 
-  addRequiredUrl(issues, environment, 'OTEL_EXPORTER_OTLP_ENDPOINT', 'https:');
+  addOtelEndpoint(issues, environment);
   for (const key of ['CLAMAV_HOST', 'SMTP_HOST'] as const) {
     const value = environment[key];
     if (!value || LOCAL_HOST.test(value)) {

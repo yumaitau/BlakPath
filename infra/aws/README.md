@@ -9,6 +9,10 @@ with resources owned by the production environment.
   the execution role can inject one named runtime secret into the tasks.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
+- `observability.example.yaml` creates the KMS-encrypted application and metrics
+  log groups (30-day minimum retention), the ADOT and Fluent Bit roles, the
+  operations dashboard, SLO alarms and the `/api/ready` + sign-in canary.
+  See `docs/observability.md`.
 
 Network boundaries expected by these templates:
 

@@ -51,6 +51,10 @@ Startup ordering is enforced with healthchecks: `web` waits for `postgres` and
 docker compose --profile observability up -d
 ```
 
+The local collector exports to its debug logger. EKS uses
+`infra/otel/collector-eks.yaml` (X-Ray and CloudWatch in ap-southeast-2). See
+`docs/observability.md`.
+
 ### First-boot notes
 
 - **ClamAV** downloads its signature databases on first start and is not

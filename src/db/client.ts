@@ -22,6 +22,11 @@ const client =
     idle_timeout: 20,
     connect_timeout: 10,
     prepare: true,
+    // Lets the worker report pool usage per workload without listing every
+    // connection string. Web and worker set distinct OTEL_SERVICE_NAME values.
+    connection: {
+      application_name: env.OTEL_SERVICE_NAME,
+    },
   });
 
 if (env.NODE_ENV !== 'production') {

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { runWithTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { ApiKeyError, parseBearer, resolveApiKeyContext } from '@/domains/api-keys';
+import { captureException } from '@/lib/observability/errors';
 
 /**
  * Route helper for the public REST API (`/api/v1/*`).
@@ -36,5 +37,6 @@ export function apiErrorResponse(error: unknown): NextResponse {
   if (error instanceof AuthorizationError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+  captureException(error);
   return NextResponse.json({ error: 'Internal error' }, { status: 500 });
 }

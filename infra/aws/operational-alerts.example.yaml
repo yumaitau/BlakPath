@@ -23,6 +23,9 @@ Mappings:
     Readiness:
       Name: readiness_dependency_down
       Metric: ReadinessDependencyFailures
+    CapturedException:
+      Name: captured_exception
+      Metric: CapturedExceptions
 
 Resources:
   ExhaustedJobFilter:
@@ -55,6 +58,17 @@ Resources:
       MetricTransformations:
         - MetricNamespace: BlakPath/Operations
           MetricName: ScannerUnavailable
+          MetricValue: '1'
+          DefaultValue: 0
+
+  CapturedExceptionFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationLogGroupName
+      FilterPattern: '{ $.signal = "captured_exception" }'
+      MetricTransformations:
+        - MetricNamespace: BlakPath/Operations
+          MetricName: CapturedExceptions
           MetricValue: '1'
           DefaultValue: 0
 
@@ -127,6 +141,24 @@ Resources:
       Period: 60
       EvaluationPeriods: 3
       Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  CapturedExceptionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-captured-exceptions
+      AlarmDescription: >
+        Scrubbed operational exceptions exceeded 20 in five minutes. Messages
+        in the log group are already redacted; do not copy payloads into tickets.
+      Namespace: BlakPath/Operations
+      MetricName: CapturedExceptions
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 20
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
       AlarmActions: [!Ref OnCallTopicArn]

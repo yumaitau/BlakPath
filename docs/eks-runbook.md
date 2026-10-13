@@ -70,8 +70,17 @@ against its public key — private key material never leaves KMS.
 4. Record date, operator, source, target, elapsed RTO, verification result
    outside restored environment.
 
+## Observability
+
+Container logs, X-Ray traces, CloudWatch metrics, SLOs and the readiness
+canary are described in [`observability.md`](observability.md). Apply
+`infra/aws/observability.example.yaml` before the workloads, then point
+`operational-alerts.example.yaml` at `/blakpath/production/application`.
+
 ## Alarms
 
 Audit divergence, scan backlog past handling target, dead-letter email/export/
-retention/webhook jobs, backup failures, sustained 5xx / readiness failures.
-See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+retention/webhook jobs, backup failures, sustained 5xx / readiness failures,
+queue depth, quarantine age and two consecutive canary failures.
+See `infra/aws/operational-alerts.example.yaml` and
+`infra/aws/observability.example.yaml`.

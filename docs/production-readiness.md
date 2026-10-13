@@ -21,8 +21,10 @@ region.
       the normal authorisation checks, and `audit-verify` reports a clean chain.
 - [ ] Set an owner and escalation path for failed readiness checks, scanner
       availability, exhausted jobs, audit-chain divergence and backup failures.
-- [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
-      (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Deploy the workload-role, observability and operational-alarm controls
+      under `infra/aws/` (or reviewed equivalents) and complete an on-call test
+      notification. Observability apply steps are in
+      [`observability.md`](observability.md).
 
 ## Signals and response
 

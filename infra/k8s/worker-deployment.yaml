@@ -31,6 +31,11 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: blakpath-worker
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://blakpath-otel-collector.blakpath.svc.cluster.local:4318
           resources:
             requests:
               cpu: 500m

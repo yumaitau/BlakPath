@@ -23,6 +23,22 @@ describe('production readiness configuration', () => {
     expect(validateProductionReadiness(valid)).toEqual([]);
   });
 
+  it('accepts the in-cluster collector and rejects plain HTTP elsewhere', () => {
+    expect(
+      validateProductionReadiness({
+        ...valid,
+        OTEL_EXPORTER_OTLP_ENDPOINT:
+          'http://blakpath-otel-collector.blakpath.svc.cluster.local:4318',
+      }),
+    ).toEqual([]);
+
+    const issues = validateProductionReadiness({
+      ...valid,
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://otel.internal:4318',
+    });
+    expect(issues.map(({ key }) => key)).toContain('OTEL_EXPORTER_OTLP_ENDPOINT');
+  });
+
   it('rejects local services, static object credentials and missing transport security', () => {
     const issues = validateProductionReadiness({
       ...valid,
