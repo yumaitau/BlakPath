@@ -4,6 +4,7 @@ import { useId, useRef, useState } from 'react';
 
 import type { PublicForm } from '@/domains/forms';
 import type { FormField } from '@/lib/forms/fields';
+import { CollectionNotice } from '@/components/privacy/collection-notice';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Field } from '@/components/ui/field';
@@ -20,6 +21,10 @@ import { cn } from '@/lib/utils';
  * is the recipient's only capability, and no session is involved. Server-side
  * validation (against the form's own field defs) is the source of truth; the
  * light client coercion here just shapes the answer object.
+ *
+ * The organisation's collection notice is shown before the questions and must
+ * be acknowledged before the form can be submitted; the acknowledgement (notice
+ * version + hash) is posted with the answers and re-checked by the server.
  *
  * PRODUCT INVARIANT: a form collects information a human provides. It never
  * scores, ranks or determines a person's Aboriginality.
@@ -121,6 +126,9 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
   );
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
   const [invalidKeys, setInvalidKeys] = useState<ReadonlySet<string>>(new Set());
+  const [noticeAcknowledged, setNoticeAcknowledged] = useState(false);
+  const [noticeInvalid, setNoticeInvalid] = useState(false);
+  const noticeId = `${baseId}-collection-notice`;
   const successRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
 
@@ -158,15 +166,22 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
     const missing = form.fields.filter((field) =>
       missingRequiredAnswer(field, values[field.key] ?? initialValue(field)),
     );
-    if (missing.length > 0) {
+    setNoticeInvalid(!noticeAcknowledged);
+    if (!noticeAcknowledged || missing.length > 0) {
       const keys = new Set(missing.map(({ key }) => key));
       setInvalidKeys(keys);
       setSubmit({
         status: 'error',
-        message: 'Some answers need another look. Please check the form and try again.',
+        message: noticeAcknowledged
+          ? 'Some answers need another look. Please check the form and try again.'
+          : 'Please read and confirm the collection notice before submitting.',
       });
       const first = missing[0];
       requestAnimationFrame(() => {
+        if (!noticeAcknowledged) {
+          document.getElementById(noticeId)?.focus();
+          return;
+        }
         if (!first) return;
         const id = `${baseId}-${first.key}`;
         const focusId = first.type === 'multiselect' ? `${id}-opt-0` : id;
@@ -183,7 +198,10 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
       const res = await fetch(`/api/public/forms/${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers }),
+        body: JSON.stringify({
+          answers,
+          acknowledgement: { version: form.notice.version, hash: form.notice.hash },
+        }),
       });
 
       if (res.ok) {
@@ -197,6 +215,16 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
         setSubmit({
           status: 'error',
           message: 'This link is no longer valid.',
+        });
+        requestAnimationFrame(() => errorRef.current?.focus());
+        return;
+      }
+
+      if (res.status === 409) {
+        setSubmit({
+          status: 'error',
+          message:
+            'The collection notice has changed since this page opened. Please reload the page and review it before submitting.',
         });
         requestAnimationFrame(() => errorRef.current?.focus());
         return;
@@ -250,6 +278,17 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
+          <CollectionNotice
+            notice={form.notice}
+            id={noticeId}
+            headingLevel={4}
+            acknowledged={noticeAcknowledged}
+            invalid={noticeInvalid}
+            onAcknowledgedChange={(acknowledged) => {
+              setNoticeAcknowledged(acknowledged);
+              if (acknowledged) setNoticeInvalid(false);
+            }}
+          />
           {form.fields.map((field) => (
             <FieldControl
               key={field.key}

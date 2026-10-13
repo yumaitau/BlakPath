@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { collectionNoticeAcknowledgementSchema } from '@/lib/privacy/collection-notice';
 import { isAllowedContentType, MAX_EVIDENCE_BYTES } from './status';
 
 /**
@@ -46,6 +47,12 @@ export const requestUploadSchema = z.object({
   sizeBytes: z.coerce.number().int().positive().max(MAX_EVIDENCE_BYTES),
   /** Optional link to the staff request this upload fulfils. */
   fulfilsRequestId: z.uuid().optional(),
+  /**
+   * Acknowledgement of the organisation's collection notice. Optional in the
+   * schema so a missing one maps to a 409 (not a generic 400); the service
+   * rejects any upload that does not name the CURRENT notice.
+   */
+  collectionNotice: collectionNoticeAcknowledgementSchema.optional(),
 });
 export type RequestUploadInput = z.input<typeof requestUploadSchema>;
 

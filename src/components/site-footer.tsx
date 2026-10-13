@@ -3,8 +3,8 @@ import Link from 'next/link';
 /**
  * Public site footer (RSC).
  *
- * Provides a secondary navigation landmark for accessibility, privacy and
- * support links, and a plain-English statement of the product's boundaries.
+ * Provides a secondary navigation landmark for accessibility, privacy, terms
+ * and support links, and a plain-English statement of the product's boundaries.
  */
 function SiteFooter() {
   const year = new Date().getFullYear();
@@ -40,6 +40,12 @@ function SiteFooter() {
               className="text-foreground focus-visible:ring-ring rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
             >
               Privacy
+            </Link>
+            <Link
+              href="/terms"
+              className="text-foreground focus-visible:ring-ring rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+            >
+              Terms of use
             </Link>
             <Link
               href="/support"

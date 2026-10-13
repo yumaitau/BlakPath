@@ -67,6 +67,37 @@ Consent is treated as a first-class, recorded fact, not an implicit assumption:
   whom, when, the wording shown, and any withdrawal — as an append-only history
   so consent state is always explainable and auditable.
 
+## Collection notices (APP 5) and acknowledgements
+
+Every point of collection shows the owning organisation's collection notice and
+refuses the submission until it is acknowledged:
+
+| Point of collection          | Who acknowledges                                     | Enforced in                                                                            |
+| ---------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Public tokenised form        | The recipient (`self`)                               | `submitPublicResponse` (`src/domains/forms`)                                           |
+| Applicant evidence upload    | The applicant (`self`)                               | `requestUpload` (`src/domains/evidence`)                                               |
+| Staff-led application intake | Staff attest the notice was given (`staff_attested`) | `POST /api/applications` → `createApplication(..., { requireCollectionNotice: true })` |
+
+- Wording is resolved server-side by `resolveCollectionNotice`
+  (`src/lib/privacy/collection-notice.ts`) from
+  `organisation_settings.consent_wording`, falling back to a platform template
+  that is a **draft pending counsel review** (flagged in the UI).
+- `consent_wording` shape (all keys optional; invalid JSON falls back to the
+  template): `{ version, title, paragraphs: string[], contact: { name, email,
+phone }, privacyPolicyUrl }`. Supplying `paragraphs` replaces the template;
+  otherwise the template is used with the organisation's contact and policy link.
+  Bump `version` whenever the wording changes.
+- The client echoes `{ version, hash }` of the notice it displayed. The server
+  recomputes the current notice and rejects a missing or stale acknowledgement
+  with `409` before storing anything. `GET /api/collection-notice` returns the
+  current notice for API clients.
+- Acknowledgements are append-only rows in `collection_notice_acknowledgements`
+  (version, SHA-256 hash of the exact wording, context, method, who, when, and the
+  collected record), written in the same transaction as the record. They have no
+  foreign key to that record so they survive its retention disposal.
+- Bulk imports (`src/domains/imports`) do not require an acknowledgement; the
+  importing organisation remains responsible for having given its notice.
+
 ## Retention & deletion vs official records
 
 - **Tenant-set defaults.** Retention periods are organisation-configured

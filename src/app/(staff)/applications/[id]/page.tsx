@@ -19,6 +19,7 @@ import {
   type ApplicationStatus,
 } from '@/domains/applications';
 import { listCertificates } from '@/domains/certificates';
+import { currentCollectionNotice } from '@/domains/consent';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
 import { listReviewsForApplication } from '@/domains/reviews';
@@ -71,6 +72,10 @@ export default async function ApplicationDetailPage({
       const decisionDetails = await Promise.all(
         decisions.map((decision) => getDecisionWithVotes(decision.id)),
       );
+      const uploadEvidence =
+        application.applicantUserId === ctx.userId &&
+        hasPermission(subject, 'evidence:upload-own');
+      const collectionNotice = uploadEvidence ? await currentCollectionNotice() : null;
       const actions = availableActions(application.status as ApplicationStatus)
         .filter((action) => hasAny(subject, permissionsForAction(action)))
         .map((action) => ({ value: action, label: actionLabels[action] ?? action }));
@@ -122,10 +127,9 @@ export default async function ApplicationDetailPage({
               'application:read-assigned',
               'application:update-intake',
             ]),
-            uploadEvidence:
-              application.applicantUserId === ctx.userId &&
-              hasPermission(subject, 'evidence:upload-own'),
+            uploadEvidence,
           },
+          collectionNotice,
         },
         governance: {
           applicationId: id,

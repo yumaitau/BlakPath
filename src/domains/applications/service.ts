@@ -14,6 +14,11 @@ import {
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import {
+  assertNoticeAcknowledged,
+  currentCollectionNotice,
+  recordNoticeAcknowledgement,
+} from '@/domains/consent/notices';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
   requireAny,
@@ -269,15 +274,30 @@ export async function listApplicationParticipants(): Promise<ApplicationParticip
     .orderBy(users.name);
 }
 
-/** Create a new application in `draft`. Requires `application:create`. */
+/**
+ * Create a new application in `draft`. Requires `application:create`.
+ *
+ * Staff-led intake passes `requireCollectionNotice` so the record cannot be
+ * created until the staff member attests they gave the applicant the
+ * organisation's CURRENT collection notice; the attestation is stored with the
+ * application. Bulk import paths do not require it, but any acknowledgement
+ * that IS supplied must name the current notice.
+ */
 export async function createApplication(
   rawInput: CreateApplicationInput,
+  options: { requireCollectionNotice?: boolean } = {},
 ): Promise<ApplicationRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'application:create');
 
   const input = createApplicationSchema.parse(rawInput);
   const scope = currentScope();
+
+  const notice =
+    options.requireCollectionNotice || input.collectionNotice !== undefined
+      ? await currentCollectionNotice()
+      : null;
+  if (notice) assertNoticeAcknowledged(notice, input.collectionNotice);
 
   // Optional client link must belong to this tenant, else the matter could
   // silently attach to another tenant's person record.
@@ -301,33 +321,52 @@ export async function createApplication(
   const id = uuidv7();
   const reference = makeReference(id);
 
-  const inserted = await scope.db
-    .insert(applications)
-    .values(
-      scope.insertValues({
-        id,
-        reference,
-        applicantName: input.applicantName,
-        applicantUserId: input.applicantUserId ?? null,
-        clientId,
-        priority: input.priority,
-        intake: input.intake ?? null,
-        createdByUserId: ctx.userId,
-        status: 'draft',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'application');
+  const row = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(applications)
+      .values(
+        scope.insertValues({
+          id,
+          reference,
+          applicantName: input.applicantName,
+          applicantUserId: input.applicantUserId ?? null,
+          clientId,
+          priority: input.priority,
+          intake: input.intake ?? null,
+          createdByUserId: ctx.userId,
+          status: 'draft',
+        }),
+      )
+      .returning();
 
-  await scope.db.insert(applicationStatusHistory).values(
-    scope.insertValues({
-      applicationId: id,
-      fromStatus: null,
-      toStatus: 'draft',
-      action: 'create',
-      actorUserId: ctx.userId,
-    }),
-  );
+    await tx.insert(applicationStatusHistory).values(
+      scope.insertValues({
+        applicationId: id,
+        fromStatus: null,
+        toStatus: 'draft',
+        action: 'create',
+        actorUserId: ctx.userId,
+      }),
+    );
+
+    if (notice) {
+      await recordNoticeAcknowledgement(
+        {
+          organisationId: scope.organisationId,
+          notice,
+          context: 'application_intake',
+          method: 'staff_attested',
+          resourceType: 'application',
+          resourceId: id,
+          acknowledgedByUserId: ctx.userId,
+          subjectUserId: input.applicantUserId ?? null,
+        },
+        tx,
+      );
+    }
+
+    return must(inserted[0], 'application');
+  });
 
   await recordAudit({
     action: 'application.created',

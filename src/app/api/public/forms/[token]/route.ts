@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
+import { CollectionNoticeError } from '@/domains/consent';
 import { FormTokenError, submitPublicResponse } from '@/domains/forms';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 
@@ -15,7 +16,9 @@ import { isAuthorizationError } from '@/lib/permissions/errors';
  * `withRequestTenant`. Failures are mapped to generic messages that do not
  * reveal whether a token existed.
  *
- * The request body is `{ answers: {...} }` (the renderer posts this shape).
+ * The request body is `{ answers: {...}, acknowledgement: { version, hash } }`
+ * (the renderer posts this shape). The acknowledgement must name the
+ * organisation's CURRENT collection notice or nothing is stored (409).
  */
 
 // Token-specific and side-effecting; never cached.
@@ -28,9 +31,14 @@ export async function POST(
   const { token } = await params;
 
   let answers: unknown;
+  let acknowledgement: unknown;
   try {
-    const body = (await request.json()) as { answers?: unknown };
+    const body = (await request.json()) as {
+      answers?: unknown;
+      acknowledgement?: unknown;
+    };
     answers = body.answers;
+    acknowledgement = body.acknowledgement;
   } catch {
     // Malformed JSON is treated as invalid answers rather than a server fault.
     return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
@@ -41,13 +49,19 @@ export async function POST(
   const ipAddress = forwardedFor?.split(',')[0]?.trim() || undefined;
 
   try {
-    await submitPublicResponse(token, answers, ipAddress);
+    await submitPublicResponse(token, answers, ipAddress, acknowledgement);
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (error instanceof FormTokenError) {
       return NextResponse.json(
         { error: 'This form link is invalid or has expired.' },
         { status: 404 },
+      );
+    }
+    if (error instanceof CollectionNoticeError) {
+      return NextResponse.json(
+        { error: 'Please read and acknowledge the current collection notice.' },
+        { status: 409 },
       );
     }
     if (isAuthorizationError(error)) {

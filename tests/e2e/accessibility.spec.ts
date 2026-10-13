@@ -20,8 +20,9 @@ test('public and authentication journeys meet automated WCAG checks', async ({
   test.setTimeout(60_000);
   const routes = [
     ['/', 'A clearer path'],
-    ['/accessibility', 'Accessibility'],
-    ['/privacy', 'Privacy'],
+    ['/accessibility', 'Accessibility statement'],
+    ['/privacy', 'Privacy policy'],
+    ['/terms', 'Terms of use'],
     ['/support', 'Support'],
     ['/organisations', 'Find an organisation'],
     ['/verify', 'Check a certificate'],
@@ -57,6 +58,7 @@ test('organisation selection and core staff journeys meet automated WCAG checks'
   await auditRoute(page, '/applications', 'Applications');
   const applicantName = `Accessibility case ${Date.now()}`;
   await page.getByLabel('Name as provided').fill(applicantName);
+  await page.getByLabel('I have given this collection notice to the applicant').check();
   await page.getByRole('button', { name: 'Start application' }).click();
   await expect(page).toHaveURL(/\/applications\/[0-9a-f-]+$/);
   await expectNoWcagViolations(page);
@@ -148,6 +150,10 @@ test('keyboard users can navigate menus, board work and public forms', async ({
 
   await page.goto(publicUrl);
   const response = page.getByLabel('Your response');
+  const notice = page.getByLabel('I have read this collection notice');
+  await notice.focus();
+  await page.keyboard.press('Space');
+  await expect(notice).toBeChecked();
   await page.getByRole('button', { name: 'Submit' }).focus();
   await page.keyboard.press('Enter');
   await expect(
