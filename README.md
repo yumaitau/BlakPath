@@ -146,6 +146,7 @@ docker compose up -d
 pnpm db:migrate
 
 # 5. Seed baseline data (permission catalogue, system roles, dev org/user)
+#    Developer accounts need ALLOW_DEV_SEED=1 and a loopback DATABASE_URL.
 pnpm db:seed
 
 # 6. Run the app (and, in another shell, the background worker)

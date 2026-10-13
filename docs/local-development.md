@@ -70,6 +70,10 @@ pnpm db:migrate     # apply migrations (tsx src/db/migrate.ts)
 pnpm db:seed        # seed permission catalogue, system roles, dev org/user
 ```
 
+`pnpm db:seed` creates the local administrator only when `ALLOW_DEV_SEED=1`
+and `DATABASE_URL` points at `localhost`, `127.0.0.1`, or `::1`. Copying
+`.env.example` sets the flag. A non-local database fails the command.
+
 The non-production seed prints two synthetic test accounts. The administrator
 combines the operational roles needed to exercise every staff screen locally.
 The spare staff account starts with no organisation membership so the Playwright

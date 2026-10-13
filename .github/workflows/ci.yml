@@ -85,6 +85,7 @@ jobs:
           --health-retries 5
     env:
       NODE_ENV: test
+      ALLOW_DEV_SEED: '1'
       DATABASE_URL: postgres://blakpath:blakpath@localhost:5432/blakpath_test
       REDIS_URL: redis://localhost:6379
       # Test-only secrets — never real. Satisfy env validation at import time.
@@ -187,6 +188,7 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       NODE_ENV: development
+      ALLOW_DEV_SEED: '1'
       DATABASE_URL: postgres://blakpath:blakpath@localhost:5432/blakpath_e2e
       REDIS_URL: redis://localhost:6379
       BETTER_AUTH_SECRET: ci-e2e-secret-value-at-least-32-characters-long

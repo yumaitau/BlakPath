@@ -13,6 +13,11 @@ export async function register(): Promise<void> {
   const { assertAuthSchemaCoverage } = await import('@/lib/auth/schema-coverage');
   assertAuthSchemaCoverage();
 
+  // Fail boot on invalid configuration. Later steps are best-effort and must
+  // not swallow this.
+  const { env } = await import('@/lib/env');
+  void env.NODE_ENV;
+
   const { start } = await import('@/lib/observability/otel');
   await start();
 

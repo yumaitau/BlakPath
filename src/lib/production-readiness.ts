@@ -45,6 +45,12 @@ export function validateProductionReadiness(
   if (environment.NODE_ENV !== 'production') {
     issues.push({ key: 'NODE_ENV', message: 'must be production' });
   }
+  if ((environment.PILOT_BOOTSTRAP_TOKEN ?? '').trim() !== '') {
+    issues.push({
+      key: 'PILOT_BOOTSTRAP_TOKEN',
+      message: 'must be unset in production',
+    });
+  }
   for (const key of ['APP_REGION', 'S3_REGION'] as const) {
     if (environment[key] !== 'ap-southeast-2') {
       issues.push({ key, message: 'must be ap-southeast-2' });

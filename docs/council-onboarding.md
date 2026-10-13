@@ -5,13 +5,21 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 
 ## 1. Create tenant
 
-1. Insert `organisations` row: `organisationType='council'`, status `onboarding`,
-   region `ap-southeast-2`, slug reserved.
+1. Reserve the organisation slug and legal name. Do not insert the organisation
+   row by hand.
 2. Seed system roles + permission catalogue (`pnpm db:seed` covers platform
    defaults; tenant clones roles on first admin sign-in).
-3. Create teams (Intake, Casework, Committee support) and groups via
+3. Email the first administrator with the operator job
+   `infra/k8s/jobs/invite-admin.yaml` (`pnpm admin:invite`). The job creates
+   the organisation (`organisationType='council'`, status `onboarding`,
+   applications closed, region `ap-southeast-2`), assigns only the
+   organisation-administrator role, and does not create a password. Production
+   keeps organisation tools closed until that person enrols a passkey or
+   authenticator. Further staff are invited from the people screen. The job
+   refuses when any organisation already exists.
+4. Create teams (Intake, Casework, Committee support) and groups via
    `/settings/teams` or `POST /api/teams`, `/api/groups`.
-4. Record consent wording + evidence requirements in `organisation_settings`.
+5. Record consent wording + evidence requirements in `organisation_settings`.
 
 ## 2. Identity
 
