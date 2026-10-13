@@ -37,6 +37,7 @@ jobs:
           severity: HIGH,CRITICAL
           limit-severities-for-sarif: true
           ignore-unfixed: true
+          trivyignores: .trivyignore
           exit-code: '0'
 
       - name: Upload code scanning results
