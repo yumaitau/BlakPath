@@ -17,6 +17,7 @@ const valid = {
   BETTER_AUTH_SECRET: 'a-secure-runtime-value-that-is-long-enough',
   PLATFORM_KMS_KEY_ARN:
     'arn:aws:kms:ap-southeast-2:123456789012:key/12345678-1234-1234-1234-123456789abc',
+  OPERATOR_ONCALL_EMAIL: 'oncall@blakpath.internal',
 } as const;
 
 describe('production readiness configuration', () => {

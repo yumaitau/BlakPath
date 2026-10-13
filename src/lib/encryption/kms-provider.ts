@@ -1,4 +1,9 @@
-import { DecryptCommand, GenerateDataKeyCommand, KMSClient } from '@aws-sdk/client-kms';
+import {
+  DecryptCommand,
+  DescribeKeyCommand,
+  GenerateDataKeyCommand,
+  KMSClient,
+} from '@aws-sdk/client-kms';
 import { env } from '@/lib/env';
 import {
   asKmsKeyAccessError,
@@ -37,6 +42,23 @@ export class KmsKeyProvider implements KeyProvider {
         plaintext,
         ciphertextBlob,
         keyId: out.KeyId ?? input.keyArn,
+      };
+    } catch (error) {
+      const access = asKmsKeyAccessError(error);
+      if (access) throw access;
+      throw error;
+    }
+  }
+
+  async describeKey(keyArn: string): Promise<{ keyState: string; enabled: boolean }> {
+    this.assertRegion(keyArn);
+    try {
+      const out = await this.client.send(new DescribeKeyCommand({ KeyId: keyArn }));
+      const state = out.KeyMetadata?.KeyState;
+      if (!state) throw new Error('KMS DescribeKey returned no key state');
+      return {
+        keyState: state,
+        enabled: out.KeyMetadata?.Enabled === true && state === 'Enabled',
       };
     } catch (error) {
       const access = asKmsKeyAccessError(error);

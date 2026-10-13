@@ -115,6 +115,8 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
       id: orgId,
       legalName: 'BlakPath Development Organisation',
       slug: 'dev-org',
+      // Non-production only. Production uses activateOrganisation, which
+      // refuses until the key handshake has passed.
       status: 'active',
       publicApplicationsOpen: true,
     })

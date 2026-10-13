@@ -7,6 +7,7 @@ vi.mock('@/lib/queues', () => ({
     AuditVerify: 'audit-verify',
     Retention: 'retention',
     Reminder: 'reminder',
+    KeyHealth: 'key-health',
   },
   getQueue: vi.fn(),
 }));
@@ -91,6 +92,7 @@ describe('tenant maintenance scheduler', () => {
       auditSchedulers: 2,
       retentionSchedulers: 2,
       reminderSchedulers: 0,
+      keyHealthSchedulers: 0,
       removedSchedulers: 2,
     });
   });
@@ -115,6 +117,33 @@ describe('tenant maintenance scheduler', () => {
       },
     ]);
     expect(report.reminderSchedulers).toBe(1);
+    expect(report.keyHealthSchedulers).toBe(0);
     expect(report.removedSchedulers).toBe(0);
+  });
+
+  it('schedules a key-health check on the configured interval', async () => {
+    const auditQueue = fakeQueue();
+    const retentionQueue = fakeQueue();
+    const keyHealthQueue = fakeQueue();
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue,
+      retentionQueue,
+      keyHealthQueue,
+      intervals: {
+        auditVerifyMs: 60_000,
+        retentionSweepMs: 120_000,
+        keyHealthMs: 300_000,
+      },
+    });
+    expect(keyHealthQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.KeyHealth, 'org-a'),
+        every: 300_000,
+        name: 'check',
+        organisationId: 'org-a',
+      },
+    ]);
+    expect(report.keyHealthSchedulers).toBe(1);
   });
 });

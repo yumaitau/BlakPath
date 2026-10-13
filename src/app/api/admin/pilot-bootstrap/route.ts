@@ -75,6 +75,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     legalName: 'Pilot Council (E2E verification only)',
     organisationType: 'council',
     slug: 'pilot-council',
+    // Verification shortcut. Production activation is POST /api/organisation/activation.
     status: 'active',
     publicApplicationsOpen: false,
   });

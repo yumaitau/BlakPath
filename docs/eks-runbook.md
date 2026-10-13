@@ -31,6 +31,10 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   provisioned key. No AWS-managed default keys in the secret path.
 - ElastiCache runs with transit and at-rest encryption. Redis holds
   ephemeral state only — never tenant records.
+- Set `OPERATOR_ONCALL_EMAIL` on the worker. Key-health state changes email
+  that address and emit `key_health_state_change` for the on-call alarm.
+  Tenant CMKs are registered per organisation; see
+  `docs/client-key-onboarding.md`.
 
 ## Data services
 

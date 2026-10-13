@@ -3,6 +3,7 @@ import { logger } from '@/lib/observability/logger';
 import {
   getOrganisationKey,
   markOrganisationKeyUnavailable,
+  type OrganisationKeyStatus,
 } from '@/domains/organisation-keys';
 import { dekCacheKey, sharedDekCache, type DekCache } from './dek-cache';
 import {
@@ -32,7 +33,7 @@ export interface TenantKeyMaterial {
   readonly organisationId: string;
   readonly kmsKeyArn: string;
   readonly keyVersion: number;
-  readonly status: 'active' | 'disabled' | 'pending_deletion' | 'unavailable';
+  readonly status: OrganisationKeyStatus;
 }
 
 export interface ScopeOptions {
@@ -105,6 +106,7 @@ function httpStatusFor(status: TenantKeyMaterial['status']): 423 | 503 | null {
       return null;
     case 'disabled':
     case 'pending_deletion':
+    case 'pending_validation':
       return 423;
     case 'unavailable':
       return 503;

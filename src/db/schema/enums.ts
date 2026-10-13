@@ -238,10 +238,20 @@ export const keyCustodyMode = pgEnum('key_custody_mode', [
   'client_owned_escrow',
 ]);
 
-/** Whether a tenant key may wrap or unwrap data. */
+/**
+ * Whether a tenant key may wrap or unwrap data.
+ * `pending_validation` is not usable: the handshake has not passed.
+ */
 export const organisationKeyStatus = pgEnum('organisation_key_status', [
   'active',
   'disabled',
   'pending_deletion',
   'unavailable',
+  'pending_validation',
 ]);
+
+/** Result of the GenerateDataKey / Decrypt handshake for a tenant key. */
+export const organisationKeyValidationStatus = pgEnum(
+  'organisation_key_validation_status',
+  ['pending', 'passed', 'failed'],
+);

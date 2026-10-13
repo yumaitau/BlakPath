@@ -234,6 +234,17 @@ const reminderProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Key health. Describes the tenant CMK and decrypts the stored canary.
+ * A state change notifies tenant admins and on-call. This does not read
+ * records and does not decide anything about a person.
+ */
+const keyHealthProcessor: ProcessorFn = async (job) => {
+  const { organisationId, correlationId } = job.data;
+  const { checkTenantKeyHealth } = await import('@/domains/organisation-keys/health');
+  await checkTenantKeyHealth({ organisationId, correlationId });
+};
+
+/**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
  * runs. Adding a real processor later is a one-line swap here.
@@ -247,6 +258,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Export]: exportProcessor,
   [QueueName.Webhook]: webhookProcessor,
   [QueueName.Reminder]: reminderProcessor,
+  [QueueName.KeyHealth]: keyHealthProcessor,
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

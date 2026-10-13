@@ -1,10 +1,13 @@
 import { Alert } from '@/components/ui/alert';
+import type { OrganisationKeyStatus } from '@/domains/organisation-keys';
 
-export type LockedKeyStatus = 'disabled' | 'pending_deletion' | 'unavailable';
+export type LockedKeyStatus = Exclude<OrganisationKeyStatus, 'active'>;
 
 const detail: Record<LockedKeyStatus, string> = {
   disabled: 'The encryption key for this organisation is turned off.',
   pending_deletion: 'The encryption key for this organisation is pending deletion.',
+  pending_validation:
+    'The encryption key for this organisation has not passed validation.',
   unavailable: 'The encryption key for this organisation cannot be reached.',
 };
 

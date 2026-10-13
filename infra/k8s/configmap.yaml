@@ -30,4 +30,6 @@ data:
   CLAMAV_HOST: blakpath-clamav
   CLAMAV_PORT: '3310'
   AI_FEATURES_ENABLED: 'false'
+  # On-call mailbox for tenant key health changes. Not a secret.
+  # OPERATOR_ONCALL_EMAIL: oncall@blakpath.yumait.au
   OTEL_SERVICE_NAME: blakpath

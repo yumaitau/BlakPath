@@ -9,6 +9,9 @@ with resources owned by the production environment.
   the execution role can inject one named runtime secret into the tasks.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
+  `key_health_state_change` is one of those signals.
+- `tenant-cmk/` is the per-tenant CMK an operator applies. It does not run
+  itself. Client-account keys live in `infra/client-kms/`.
 
 Network boundaries expected by these templates:
 

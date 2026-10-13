@@ -10,6 +10,10 @@ import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import {
+  OrganisationActivationError,
+  OrganisationKeyInputError,
+} from '@/domains/organisation-keys';
 import { tenantKeyErrorResponse } from '@/lib/http/tenant-key-response';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
@@ -76,8 +80,14 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof NoActiveOrganisationError) {
     return NextResponse.json({ error: 'No active organisation' }, { status: 409 });
   }
-  if (error instanceof ZodError) {
+  if (error instanceof ZodError || error instanceof OrganisationKeyInputError) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  }
+  if (error instanceof OrganisationActivationError) {
+    return NextResponse.json(
+      { error: 'Organisation cannot become active' },
+      { status: 409 },
+    );
   }
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
