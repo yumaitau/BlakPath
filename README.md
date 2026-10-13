@@ -157,22 +157,23 @@ The app runs at <http://localhost:3000>.
 
 ## Common commands
 
-| Command              | Purpose                                       |
-| -------------------- | --------------------------------------------- |
-| `pnpm dev`           | Run the Next.js app in development            |
-| `pnpm worker:dev`    | Run the BullMQ background worker (watch mode) |
-| `pnpm typecheck`     | `tsc --noEmit` (strict)                       |
-| `pnpm lint`          | ESLint                                        |
-| `pnpm test`          | Unit + integration tests (Vitest)             |
-| `pnpm test:e2e`      | End-to-end tests (Playwright)                 |
-| `pnpm test:live`     | Full live-service Playwright verification     |
-| `pnpm test:restore`  | Backup, restore and recovery verification     |
-| `pnpm release:check` | Validate production configuration and roles   |
-| `pnpm screenshot`    | Refresh the README screenshot gallery         |
-| `pnpm db:generate`   | Generate a migration from schema changes      |
-| `pnpm db:migrate`    | Apply migrations                              |
-| `pnpm db:studio`     | Open Drizzle Studio                           |
-| `pnpm db:seed`       | Seed baseline data                            |
+| Command               | Purpose                                       |
+| --------------------- | --------------------------------------------- |
+| `pnpm dev`            | Run the Next.js app in development            |
+| `pnpm worker:dev`     | Run the BullMQ background worker (watch mode) |
+| `pnpm typecheck`      | `tsc --noEmit` (strict)                       |
+| `pnpm lint`           | ESLint                                        |
+| `pnpm test`           | Unit + integration tests (Vitest)             |
+| `pnpm test:e2e`       | End-to-end tests (Playwright, `next dev`)     |
+| `pnpm test:e2e:smoke` | Smoke the production `runner` image           |
+| `pnpm test:live`      | Full live-service Playwright verification     |
+| `pnpm test:restore`   | Backup, restore and recovery verification     |
+| `pnpm release:check`  | Validate production configuration and roles   |
+| `pnpm screenshot`     | Refresh the README screenshot gallery         |
+| `pnpm db:generate`    | Generate a migration from schema changes      |
+| `pnpm db:migrate`     | Apply migrations                              |
+| `pnpm db:studio`      | Open Drizzle Studio                           |
+| `pnpm db:seed`        | Seed baseline data                            |
 
 Accessibility acceptance coverage and the required assisted-review record are
 documented in [`docs/accessibility-acceptance.md`](docs/accessibility-acceptance.md).

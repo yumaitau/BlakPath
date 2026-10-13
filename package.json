@@ -40,6 +40,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test --config playwright.smoke.config.ts",
     "test:live": "bash scripts/verify-live-stack.sh",
     "release:check": "tsx scripts/check-production-readiness.ts",
     "test:restore": "bash scripts/verify-restore-drill.sh",

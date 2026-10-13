@@ -1,40 +1,97 @@
-# E2E user journeys — full matrix
+# E2E user journeys
 
-Runner: Playwright, `tests/e2e`, chromium, single worker. Helpers:
-`tests/e2e/helpers/auth.ts` (isolated client IP, cookie reuse),
-`tests/e2e/helpers/accessibility.ts` (axe WCAG 2.2 AA).
+Playwright, chromium, one worker. `pnpm test:e2e` runs `tests/e2e` against
+`next dev`. `pnpm test:e2e:smoke` runs `tests/e2e-smoke` through
+`playwright.smoke.config.ts` against an already running production `runner`
+container. CI job `e2e-smoke` builds that image and starts it. The full suite
+stays on `next dev`.
 
-## Environment gates
+Helpers: `tests/e2e/helpers/auth.ts`, `tests/e2e/helpers/accessibility.ts`
+(axe, WCAG 2.2 AA), `tests/e2e/helpers/page-errors.ts`. Each spec below
+watches `pageerror` and runs the axe helper on a primary view.
 
-- Evidence upload journey requires real object storage: run with
-  `RUN_EVIDENCE_E2E=true` against local MinIO (`docker compose up minio
-minio-init`) or S3 staging buckets. Without it the test skips; the path is
-  covered in staging per `docs/eks-runbook.md`.
+Evidence upload needs object storage. Set `RUN_EVIDENCE_E2E=true` and point
+S3 at MinIO or staging buckets. Without that flag the evidence step skips.
+CI sets the flag and starts MinIO.
 
-## Suites
+## auth-onboarding.spec.ts
 
-1. `auth-onboarding.spec.ts` — sign-up, verify-email gate, sign-in,
-   wrong-password generic error, MFA fail-safe, passkey empty state,
-   org picker, invite accept, sign-out session end (401 + redirect).
-2. `coa-lifecycle.spec.ts` — application intake, evidence upload quarantine,
-   review create/finalise, meeting agenda, decision propose/vote/finalise,
-   certificate generate/sign/download, public verify path. Asserts human-only
-   determination (no auto-approve UI/API).
-3. `team-isolation.spec.ts` — council A vs council B: no cross-read,
-   team-assigned read vs unassigned deny, group scoping, invitation
-   email-mismatch deny, audit log records denials.
-4. `calendar-journeys.spec.ts` — create event, week/day/agenda views,
-   recurring RRULE expand, attendee invite/response, reminder set,
-   drag reschedule persist + reload, ICS import/export round-trip,
-   resource conflict warning.
-5. `sso-consent.spec.ts` — SSO bindings gating, consent gate on
-   representative access, SCIM-off denial without enumeration.
-6. Existing kept: `core-staff-flow`, `product-workflows`,
-   `membership-lifecycle`, `api-boundaries`, `accessibility`.
+- sign-up stays invite-only
+- verify-email gate
+- sign-in and org picker
+- sign-out session end
 
-## Rules
+## core-staff-flow.spec.ts
 
-Each test: fresh stamp titles, `watchForPageErrors` empty, axe check on
-primary view, tenant isolation assert (second org cannot fetch first org id),
-audit spot-check where sensitive. No hard-coded prod secrets. Live stack
-variant stays in `tests/live`, gated by env.
+- wrong-password generic error
+- evidence upload quarantine
+
+## product-workflows.spec.ts
+
+- passkey empty state
+- MFA fail-safe
+
+## membership-lifecycle.spec.ts
+
+- invite accept
+
+## coa-lifecycle.spec.ts
+
+- dashboard loads with attention items
+- board task persists across reload
+- applications list is tenant-scoped
+- meetings calendar renders
+- no auto-determination UI
+
+## coa-sealed-lifecycle.spec.ts
+
+- application intake
+- review create and finalise
+- decision propose vote and finalise
+- human outcome is an explicit recorded act
+- certificate generate sign and download
+- public verify
+
+## team-isolation.spec.ts
+
+- anonymous tenant APIs deny
+- council A cannot read council B
+- team-assigned read vs unassigned deny
+- group list stays inside the tenant
+- invitation email-mismatch deny
+
+## calendar-journeys.spec.ts
+
+- month navigation
+- create event
+- week view
+- agenda view
+- reschedule persists across reload
+- ICS import and export
+- recurring RRULE round-trip
+- attendee invite and response
+- reminder set
+- resource conflict warning
+
+## sso-consent.spec.ts
+
+- SSO bindings gating
+- consent gate on representative access
+- SCIM-off denial without enumeration
+
+## production-smoke.spec.ts
+
+- production image health and liveness
+- production image serves sign-in
+
+Seed creates a second council (`dev-org-b`) and an org A team fixture. Isolation
+steps use those rows. Outcomes stay recorded human acts. Nothing in these
+journeys scores, ranks, or decides identity.
+
+No separate day view. Week view shows each day. No committee meeting agenda
+HTTP route. Meetings are the calendar and ICS import. No staff screen reads
+the audit log. The invitation email-mismatch step asserts the 403 denial the
+service records. Reschedule uses the week-view Move control, which calls the
+same `moveEvent` handler as dragging an event. HTML5 drag is not automated.
+Resource overlap warns (201 plus a conflicts list) unless the hard-block flag
+is on.

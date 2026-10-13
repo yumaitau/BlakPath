@@ -5,6 +5,7 @@ import {
   signIn,
   signInAndSelectOrganisation,
 } from './helpers/auth';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 async function auditRoute(page: Page, path: string, heading: string): Promise<void> {
   await test.step(`${path} meets automated WCAG checks`, async () => {
@@ -17,6 +18,7 @@ async function auditRoute(page: Page, path: string, heading: string): Promise<vo
 test('public and authentication journeys meet automated WCAG checks', async ({
   page,
 }) => {
+  const pageErrors = watchForPageErrors(page);
   test.setTimeout(60_000);
   const routes = [
     ['/', 'A clearer path'],
@@ -31,11 +33,13 @@ test('public and authentication journeys meet automated WCAG checks', async ({
   ] as const;
 
   for (const [path, heading] of routes) await auditRoute(page, path, heading);
+  expectNoPageErrors(pageErrors);
 });
 
 test('organisation selection and core staff journeys meet automated WCAG checks', async ({
   page,
 }) => {
+  const pageErrors = watchForPageErrors(page);
   test.setTimeout(60_000);
   await signIn(page);
   await expect(
@@ -70,11 +74,13 @@ test('organisation selection and core staff journeys meet automated WCAG checks'
   await notifications.click();
   await expect(page.getByRole('region', { name: 'Notifications' })).toBeVisible();
   await expectNoWcagViolations(page);
+  expectNoPageErrors(pageErrors);
 });
 
 test('keyboard users can navigate menus, board work and public forms', async ({
   page,
 }) => {
+  const pageErrors = watchForPageErrors(page);
   test.setTimeout(120_000);
   await signInAndSelectOrganisation(page);
 
@@ -169,4 +175,5 @@ test('keyboard users can navigate menus, board work and public forms', async ({
   await expect(confirmation).toBeVisible();
   await expect(confirmation.locator('..')).toBeFocused();
   await expectNoWcagViolations(page);
+  expectNoPageErrors(pageErrors);
 });

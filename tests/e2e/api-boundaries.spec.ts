@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { expectNoWcagViolations } from './helpers/accessibility';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 test('sensitive APIs consistently reject anonymous requests', async ({ request }) => {
   const protectedGets = [
@@ -79,19 +81,35 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
 });
 
 test('public operational endpoints expose only their intended status', async ({
+  page,
   request,
 }) => {
-  const live = await request.get('/api/live');
-  expect(live.status()).toBe(200);
-  await expect(live.json()).resolves.toMatchObject({ status: 'ok' });
+  const pageErrors = watchForPageErrors(page);
 
-  const health = await request.get('/api/health');
-  expect([200, 503]).toContain(health.status());
-  const healthPayload = (await health.json()) as { status: string; checks: object };
-  expect(healthPayload.status).toMatch(/^(healthy|degraded)$/);
-  expect(healthPayload.checks).toBeTruthy();
+  await test.step('liveness is ok', async () => {
+    const live = await request.get('/api/live');
+    expect(live.status()).toBe(200);
+    await expect(live.json()).resolves.toEqual({ status: 'ok' });
+  });
+
+  await test.step('readiness status matches the payload', async () => {
+    const health = await request.get('/api/health');
+    const healthPayload = (await health.json()) as { status: string; checks: object };
+    if (healthPayload.status === 'healthy') {
+      expect(health.status()).toBe(200);
+    } else {
+      expect(healthPayload.status).toBe('degraded');
+      expect(health.status()).toBe(503);
+    }
+    expect(healthPayload.checks).toBeTruthy();
+  });
 
   const missingCertificate = await request.get('/verify/not-a-real-certificate');
   expect(missingCertificate.status()).toBe(200);
   expect(await missingCertificate.text()).toContain('Certificate not found');
+
+  await page.goto('/sign-in');
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expectNoWcagViolations(page);
+  expectNoPageErrors(pageErrors);
 });
