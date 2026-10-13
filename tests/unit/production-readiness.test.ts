@@ -22,6 +22,7 @@ const valid = {
   SMTP_HOST: 'smtp.internal',
   BETTER_AUTH_SECRET: 'a-secure-runtime-value-that-is-long-enough',
   ENCRYPTION_MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+  ORIGIN_VERIFY_SECRET: 'a-different-runtime-value-that-is-long-enough',
 } as const;
 
 describe('production readiness configuration', () => {
@@ -58,6 +59,13 @@ describe('production readiness configuration', () => {
       CLAMAV_HOST: 'localhost',
       SMTP_HOST: 'localhost',
     });
+
+    expect(
+      validateProductionReadiness({
+        ...valid,
+        ORIGIN_VERIFY_SECRET: 'replace-me-not-a-real-origin-secret',
+      }).map(({ key }) => key),
+    ).toContain('ORIGIN_VERIFY_SECRET');
 
     expect(issues.map(({ key }) => key)).toEqual(
       expect.arrayContaining([

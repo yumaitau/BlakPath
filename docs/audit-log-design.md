@@ -13,24 +13,24 @@ Implementation: `src/db/schema/audit.ts` (`audit_events`,
 
 Each row in `audit_events` captures one audited action:
 
-| Field                        | Type           | Purpose                                                                                           |
-| ---------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
-| `id`                         | uuidv7         | App-generated id (time-ordered; known before insert, needed for chaining).                        |
-| `organisationId`             | uuid, nullable | Tenant owner. **Null = platform-level** event; set = tenant event. Indexed first.                 |
-| `timestamp`                  | timestamptz    | When the action occurred.                                                                         |
-| `actorUserId`                | uuid, nullable | Who acted; null for system/unauthenticated events.                                                |
-| `actingRole`                 | text           | The role the actor was acting under (audit attribution).                                          |
-| `sessionId`                  | uuid, nullable | Session that performed the action.                                                                |
-| `action`                     | text           | What happened, e.g. `application.update`, `decision.record`, `auth.signin`.                       |
-| `resourceType`               | text           | Kind of resource, e.g. `application`, `evidence`, `membership`.                                   |
-| `resourceId`                 | text, nullable | The affected resource id.                                                                         |
-| `result`                     | enum           | `success` \| `failure` \| `denied` (`audit_result`). `denied` = authz refusal; `failure` = error. |
-| `reason`                     | text, nullable | Human-readable reason, especially for `denied`/`failure`.                                         |
-| `ipAddress`, `userAgent`     | text           | Request origin.                                                                                   |
-| `correlationId`, `requestId` | text           | Trace/correlation, from the `TenantContext`.                                                      |
-| `beforeMeta`, `afterMeta`    | jsonb          | **Minimal, non-sensitive** change context — never full evidence payloads or secrets.              |
-| `prevHash`                   | text, nullable | Hash of the previous event in this chain (null for the first).                                    |
-| `hash`                       | text           | SHA-256 of this event's canonical content **plus** `prevHash`.                                    |
+| Field                        | Type           | Purpose                                                                                              |
+| ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------- |
+| `id`                         | uuidv7         | App-generated id (time-ordered; known before insert, needed for chaining).                           |
+| `organisationId`             | uuid, nullable | Tenant owner. **Null = platform-level** event; set = tenant event. Indexed first.                    |
+| `timestamp`                  | timestamptz    | When the action occurred.                                                                            |
+| `actorUserId`                | uuid, nullable | Who acted; null for system/unauthenticated events.                                                   |
+| `actingRole`                 | text           | The role the actor was acting under (audit attribution).                                             |
+| `sessionId`                  | uuid, nullable | Session that performed the action.                                                                   |
+| `action`                     | text           | What happened, e.g. `application.update`, `decision.record`, `auth.signin`.                          |
+| `resourceType`               | text           | Kind of resource, e.g. `application`, `evidence`, `membership`.                                      |
+| `resourceId`                 | text, nullable | The affected resource id.                                                                            |
+| `result`                     | enum           | `success` \| `failure` \| `denied` (`audit_result`). `denied` = authz refusal; `failure` = error.    |
+| `reason`                     | text, nullable | Human-readable reason, especially for `denied`/`failure`.                                            |
+| `ipAddress`, `userAgent`     | text           | Request origin. `ipAddress` is the trusted client address, or null when the origin was not verified. |
+| `correlationId`, `requestId` | text           | Trace/correlation, from the `TenantContext`.                                                         |
+| `beforeMeta`, `afterMeta`    | jsonb          | **Minimal, non-sensitive** change context — never full evidence payloads or secrets.                 |
+| `prevHash`                   | text, nullable | Hash of the previous event in this chain (null for the first).                                       |
+| `hash`                       | text           | SHA-256 of this event's canonical content **plus** `prevHash`.                                       |
 
 Attribution comes straight from the verified `TenantContext`
 (`src/lib/tenancy/context.ts`): `organisationId`, `userId`, acting `roles`,

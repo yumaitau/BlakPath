@@ -14,8 +14,12 @@ region.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.
-- [ ] Terminate TLS at the edge, forward only trusted proxy headers and keep
-      the security headers in `next.config.ts` enabled.
+- [ ] Terminate TLS at the origin listener (HTTP redirects to HTTPS), set the
+      Cloudflare zone to Full (strict), verify the zone-level Authenticated
+      Origin Pull certificate, attach the regional WAF web ACL, and set
+      `ORIGIN_VERIFY_SECRET` in both the runtime secret and the Cloudflare
+      request-header transform. Keep the security headers in `next.config.ts`
+      enabled. Client addresses come from `clientIp` (`src/lib/http/client-ip.ts`).
 - [ ] Configure database point-in-time recovery and versioned, encrypted object
       storage backups. Redis is not a durable source of record.
 - [ ] Run a documented restore drill into an isolated environment. Confirm a

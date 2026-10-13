@@ -10,6 +10,7 @@ import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy'
 import { env } from '@/lib/env';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
+import { clientIp } from '@/lib/http/client-ip';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { WebhookDestinationError } from '@/domains/webhooks/destination';
@@ -59,7 +60,7 @@ export async function withRequestTenant<T>(
       organisationId: activeOrganisationId,
       correlationId: globalThis.crypto.randomUUID(),
       requestId: globalThis.crypto.randomUUID(),
-      ipAddress: h.get('x-forwarded-for') ?? undefined,
+      ipAddress: clientIp({ headers: h }) ?? undefined,
       userAgent: h.get('user-agent') ?? undefined,
     },
     fn,

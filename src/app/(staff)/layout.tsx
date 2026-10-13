@@ -9,6 +9,7 @@ import {
   StaffMfaRequiredError,
 } from '@/lib/auth/staff-policy';
 import { getServerSession } from '@/lib/auth/session';
+import { clientIp } from '@/lib/http/client-ip';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,
@@ -39,7 +40,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
       await requireStaffMfa(session.user.id, {
         organisationId: activeOrganisationId,
         sessionId: session.session.id,
-        ipAddress: h.get('x-forwarded-for'),
+        ipAddress: clientIp({ headers: h }) ?? undefined,
         userAgent: h.get('user-agent'),
       });
     } catch (error) {

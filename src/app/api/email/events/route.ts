@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { env } from '@/lib/env';
-import { clientIp } from '@/lib/http/client-ip';
+import { clientIpForLimits } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, limitIp, limitSubject } from '@/lib/http/request-limits';
 import { logger } from '@/lib/observability/logger';
 import { recordSuppression } from '@/domains/email';
@@ -48,7 +48,7 @@ function snsHostOk(url: string): boolean {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const ipLimited = await limitIp(REQUEST_LIMITS.emailEvents, clientIp(request.headers));
+  const ipLimited = await limitIp(REQUEST_LIMITS.emailEvents, clientIpForLimits(request.headers));
   if (ipLimited) return ipLimited;
   const url = new URL(request.url);
   const provided =

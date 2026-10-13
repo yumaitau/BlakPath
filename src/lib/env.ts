@@ -41,6 +41,10 @@ const serverSchema = z
     // Better Auth
     BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be >= 32 chars'),
     BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
+    // Shared with the Cloudflare zone. Present on origin requests as
+    // `x-blakpath-origin-verify`. Unset locally. Required before production
+    // traffic is accepted (see the release check).
+    ORIGIN_VERIFY_SECRET: z.string().min(32).optional(),
 
     // Application-level envelope encryption. Master key is a base64-encoded
     // 32-byte key. In production this is sourced from KMS, never the DB.

@@ -183,6 +183,12 @@ export const auth = betterAuth({
    * either way.
    */
   advanced: {
+    // Rate limits and session addresses read CF-Connecting-IP. The auth route
+    // sets that header only after clientIp accepts the request, and removes
+    // client-supplied forwarding headers first.
+    ipAddress: {
+      ipAddressHeaders: ['cf-connecting-ip'],
+    },
     // Cookies are Secure in production (HTTPS-only). Even in development the
     // flags below keep them httpOnly and SameSite=Lax.
     useSecureCookies: isProduction(),
@@ -199,11 +205,9 @@ export const auth = betterAuth({
       generateId: () => uuidv7(),
     },
     /**
-     * Client IP for auth limits and session rows. `cf-connecting-ip` is one
-     * address set by Cloudflare. The load balancer only accepts Cloudflare
-     * ranges, so this header is the client. Do not add `x-forwarded-for`:
-     * a multi-value list cannot be resolved and every client would share
-     * one bucket.
+     * Client IP for auth limits and session rows. The auth route replaces
+     * forwarded address headers with the verified `cf-connecting-ip` before
+     * this runs. Do not add another address header here.
      */
     ipAddress: {
       ipAddressHeaders: ['cf-connecting-ip'],

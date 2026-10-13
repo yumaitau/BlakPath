@@ -1,4 +1,5 @@
 import { headers } from 'next/headers';
+import { headersWithTrustedClientIp } from '@/lib/http/client-ip';
 import { auth } from './index';
 
 /**
@@ -27,7 +28,9 @@ export type SessionUser = ServerSession['user'];
  * verified session either way.
  */
 export async function getServerSession(): Promise<ServerSession | null> {
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await auth.api.getSession({
+    headers: headersWithTrustedClientIp(new Headers(await headers())),
+  });
   return session ?? null;
 }
 

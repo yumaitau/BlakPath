@@ -9,13 +9,16 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
    `ENCRYPTION_MASTER_KEY`, `SMTP_USER`, `SMTP_PASSWORD`,
-   `EMAIL_WEBHOOK_SECRET`, `AUDIT_ANCHOR_SIGNING_KEY_ID`. Create a separate
-   secret at `/blakpath/production/migrator` with only
-   `DATABASE_MIGRATION_URL` (role `blakpath_migrator`). Do not put the
-   migrator URL in the runtime secret.
+   `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
+   `AUDIT_ANCHOR_SIGNING_KEY_ID`. Create a separate secret at
+   `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
+   `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
 3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
 4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
-   after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
+   after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, certificate ARN,
+   trust store ARN and WAF ACL ARN. Complete the edge section below first.
+   Rolling the app before the origin-verify header is live makes production
+   requests return 403.
 5. Run `pnpm release:check` inside the exact web and worker images before
    promoting. It rejects static S3 credentials and `PILOT_BOOTSTRAP_TOKEN`.
    SDK uses the IRSA task role chain. Do not put `PILOT_BOOTSTRAP_TOKEN` in
@@ -26,6 +29,35 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    a password. That person enrols a passkey or authenticator before the
    organisation tools open.
 7. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+
+## Edge and origin
+
+Do this before the deployment above accepts production traffic. The listener
+manifest is `infra/k8s/service-ingress.yaml`. The example stack is
+`infra/aws/origin-edge.example.yaml`.
+
+1. Create a private CA and a client certificate signed by it. Keep the private
+   key out of git. Upload that client certificate to Cloudflare as a
+   **zone-level or per-hostname** Authenticated Origin Pull for
+   `blakpath.yumait.au`. Do not use the global Authenticated Origin Pull
+   certificate: it is shared by every Cloudflare account.
+2. Upload only the CA certificate PEM to a private S3 object. Deploy
+   `origin-edge.example.yaml` in `ap-southeast-2`. Publish the ACM DNS
+   validation record in the zone as DNS-only, and wait until the certificate
+   is issued.
+3. Set the zone SSL/TLS mode to **Full (strict)**.
+4. Generate `ORIGIN_VERIFY_SECRET` (at least 32 characters). Store it only in
+   the runtime secret. Add a Cloudflare request-header transform for the
+   hostname that sets `x-blakpath-origin-verify` to that value on the request
+   to the origin. Do not put the value in a response header or in git.
+5. Substitute `CertificateArn`, `TrustStoreArn` and `WebAclArn` into the
+   ingress annotations, then apply. Port 80 redirects to 443. Port 443 uses
+   TLS 1.2 and 1.3, drops invalid header fields, removes `X-Forwarded-For`,
+   requires the zone client certificate, and attaches the regional WAF ACL.
+6. Check from outside the cluster: `curl -sI http://<alb-dns>` returns a
+   redirect and not the application; `curl -sI https://<alb-dns>` without the
+   client certificate is rejected. A request that presents the secret records
+   `CF-Connecting-IP`. A different `X-Forwarded-For` value does not change it.
 
 ## Secrets and keys
 
