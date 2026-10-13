@@ -14,6 +14,7 @@ const mutationSchema = z.discriminatedUnion('operation', [
     operation: z.literal('finalise'),
     outcome: z.enum(['confirmed', 'not_confirmed', 'deferred']),
     note: z.string().trim().max(5000).optional(),
+    meetingId: z.uuid().optional(),
   }),
 ]);
 
@@ -32,7 +33,11 @@ export async function PATCH(
         await withdrawVote(id);
         return null;
       }
-      return finaliseDecision(id, { outcome: input.outcome, note: input.note });
+      return finaliseDecision(id, {
+        outcome: input.outcome,
+        note: input.note,
+        meetingId: input.meetingId,
+      });
     });
     return NextResponse.json({ result });
   } catch (error) {

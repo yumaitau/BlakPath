@@ -31,6 +31,13 @@ export {
 } from './schemas';
 
 export {
+  resolveMeetingLink,
+  type MeetingLinkFailure,
+  type MeetingLinkResult,
+} from './meeting-link';
+
+export {
+  actorConflictedOnApplication,
   castVote,
   finaliseDecision,
   getDecisionWithVotes,

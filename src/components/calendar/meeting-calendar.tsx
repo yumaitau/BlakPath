@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -20,6 +21,8 @@ export interface CalendarEvent {
   end?: string | null;
   status: string;
   location?: string | null;
+  /** Committee meetings link into the sitting. Calendar events do not. */
+  href?: string;
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
@@ -73,6 +76,16 @@ const MONTH_NAMES = [
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function EventLabel({ event, withTime }: { event: CalendarEvent; withTime: boolean }) {
+  const text = withTime ? `${formatTime(event.start)} ${event.title}` : event.title;
+  if (!event.href) return text;
+  return (
+    <Link href={event.href} className="underline-offset-2 hover:underline">
+      {text}
+    </Link>
+  );
 }
 
 export function MeetingCalendar({
@@ -480,7 +493,9 @@ export function MeetingCalendar({
                   className="flex items-baseline justify-between gap-3 p-3"
                 >
                   <div>
-                    <p className="text-sm font-medium">{event.title}</p>
+                    <p className="text-sm font-medium">
+                      <EventLabel event={event} withTime={false} />
+                    </p>
                     <p className="text-muted-foreground text-xs">
                       {new Date(event.start).toLocaleString('en-AU')}
                       {event.location ? ` · ${event.location}` : ''}
@@ -536,7 +551,7 @@ export function MeetingCalendar({
                             onDragStart={() => setDragId(event.id)}
                             onDragEnd={() => setDragId(null)}
                           >
-                            {formatTime(event.start)} {event.title}
+                            <EventLabel event={event} withTime />
                           </li>
                         ))}
                       </ul>
@@ -637,7 +652,7 @@ export function MeetingCalendar({
                                 : 'bg-primary/10 text-primary',
                             )}
                           >
-                            {formatTime(event.start)} {event.title}
+                            <EventLabel event={event} withTime />
                           </li>
                         ))}
                       </ul>

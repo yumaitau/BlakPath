@@ -165,6 +165,9 @@ export type AuditAction =
   | 'meeting.updated'
   | 'meeting.cancelled'
   | 'meeting.agenda_changed'
+  | 'meeting.attendance_recorded'
+  | 'meeting.quorum_attested'
+  | 'meeting.minutes_recorded'
   // Calendar events (RangerOS parity).
   | 'calendar.created'
   | 'calendar.updated'
