@@ -16,8 +16,7 @@
       "next@<16.3.3": ">=16.3.3",
       "postcss@<8.5.18": ">=8.5.18",
       "nanoid@<3.3.18": ">=3.3.18",
-      "browserslist@<=4.28.6": ">=4.28.7",
-      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0"
+      "browserslist@<=4.28.6": ">=4.28.7"
     },
     "auditConfig": {
       "ignoreGhsas": [
@@ -64,10 +63,10 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^5.0.0",
     "@node-rs/argon2": "^2.0.0",
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/auto-instrumentations-node": "^0.52.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.54.0",
-    "@opentelemetry/sdk-node": "^0.54.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/auto-instrumentations-node": "^0.80.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-dropdown-menu": "^2.1.2",
     "@radix-ui/react-label": "^2.1.0",
