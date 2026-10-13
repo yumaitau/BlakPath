@@ -43,6 +43,7 @@
     "test:live": "bash scripts/verify-live-stack.sh",
     "release:check": "tsx scripts/check-production-readiness.ts",
     "test:restore": "bash scripts/verify-restore-drill.sh",
+    "key-ceremony": "tsx scripts/key-ceremony.ts",
     "screenshot": "tsx scripts/capture-readme-screenshots.ts",
     "screenshot:landing": "tsx scripts/capture-readme-screenshot.ts",
     "db:generate": "drizzle-kit generate",
@@ -91,6 +92,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.53.0",
+    "shamir-secret-sharing": "0.0.4",
     "tailwind-merge": "^2.5.4",
     "uuidv7": "^1.0.2",
     "zod": "^4.0.0"
