@@ -10,6 +10,7 @@ resources:
   - worker-deployment.yaml
   - service-ingress.yaml
   - autoscaling.yaml
+  - worker-scaledobject.yaml
 images:
   - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
     newTag: 7350f7c

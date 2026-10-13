@@ -4,11 +4,14 @@
 # BlakPath production image — multi-stage build for Next.js 16 standalone.
 #
 # Stages:
-#   base    - pinned Node + pnpm, tini for signal handling
-#   deps    - full dependency install (cached on lockfile)
-#   build   - compile Next.js standalone output + the worker
-#   runner  - minimal, non-root runtime for the web server
-#   worker  - minimal, non-root runtime for the BullMQ worker
+#   base          - pinned Node + pnpm, tini for signal handling
+#   deps          - full dependency install (cached on lockfile)
+#   build         - compile Next.js standalone output
+#   prod-deps     - production dependencies only
+#   worker-bundle - bundle the worker to dist/worker.js
+#   runtime       - node + tini, package managers removed
+#   runner        - minimal, non-root runtime for the web server
+#   worker        - minimal, non-root runtime for the BullMQ worker
 #
 # Security posture:
 #   - Non-root user (uid 1001) in every runtime stage.
@@ -25,9 +28,8 @@ FROM node:${NODE_VERSION}-alpine AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH="${PNPM_HOME}:${PATH}"
 # tini gives us a real init for signal handling; ca-certificates for TLS to
-# managed Postgres/Redis/S3. curl is used only by the web HEALTHCHECK; procps
-# provides pgrep for the worker HEALTHCHECK.
-RUN apk add --no-cache tini curl ca-certificates procps
+# managed Postgres/Redis/S3. curl is used only by the web HEALTHCHECK.
+RUN apk add --no-cache tini curl ca-certificates
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 WORKDIR /app
 
@@ -107,39 +109,43 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "server.js"]
 
+####################################  prod-deps  ############################
+# Production install only. The worker runtime copies this tree and does not
+# keep the package manager from the base stage.
+FROM base AS prod-deps
+COPY package.json pnpm-lock.yaml ./
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+  pnpm install --frozen-lockfile --prod
+
+##################################  worker-bundle  ##########################
+FROM deps AS worker-bundle
+COPY . .
+RUN pnpm worker:build
+
 ######################################  worker  ##############################
-# The worker is TypeScript run via tsx (a pinned project dependency). tsx honours
-# the tsconfig path aliases (@/*), so the worker can import shared contracts such
-# as `@/lib/env` without a separate bundling step.
-FROM base AS worker
+# Bundled entrypoint on the package-manager-free runtime stage. node resolves
+# external production dependencies from node_modules. tini remains PID 1.
+FROM runtime AS worker
+ENV NODE_ENV=production
 WORKDIR /app
 
 RUN addgroup -S -g 1001 nodejs \
   && adduser -S -u 1001 -G nodejs worker
 
-# Full dependency set (tsx lives in devDependencies and is required at runtime
-# to execute the TypeScript worker). Install BEFORE setting NODE_ENV, otherwise
-# pnpm prunes devDependencies and tsx is missing at runtime.
-COPY package.json pnpm-lock.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-  pnpm install --frozen-lockfile
-
-ENV NODE_ENV=production
-
-# Only the sources the worker needs: the worker entrypoint, the shared library
-# contracts it imports, the DB layer, operational scripts, and tsconfig for
-# path alias resolution (@/*) under tsx.
-COPY --chown=worker:nodejs tsconfig.json ./tsconfig.json
-COPY --from=build --chown=worker:nodejs /app/worker ./worker
-COPY --from=build --chown=worker:nodejs /app/src ./src
-COPY --from=build --chown=worker:nodejs /app/scripts ./scripts
+COPY --from=prod-deps --chown=worker:nodejs /app/node_modules ./node_modules
+COPY --from=worker-bundle --chown=worker:nodejs /app/dist/worker.js ./dist/worker.js
+COPY --chown=worker:nodejs scripts/worker-liveness.sh ./scripts/worker-liveness.sh
+# A one-field manifest marks dist/worker.js as ESM. The repo manifest is not
+# copied: it names development tooling that does not belong in this image.
+RUN chmod 755 ./scripts/worker-liveness.sh \
+  && printf '%s\n' '{"type":"module","private":true}' > ./package.json \
+  && chown worker:nodejs ./package.json
 
 USER worker
 
-# No exposed port; the worker is not an HTTP service. A process-liveness check
-# keeps orchestrators informed without opening a socket.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD pgrep -f "worker/index.ts" > /dev/null || exit 1
+# No exposed port. The heartbeat file is the liveness signal.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD ["/app/scripts/worker-liveness.sh"]
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["pnpm", "exec", "tsx", "worker/index.ts"]
+CMD ["node", "dist/worker.js"]

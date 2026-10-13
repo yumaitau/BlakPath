@@ -80,7 +80,9 @@ starting point, not turn-key. Key differences from dev:
 
 - Built from the production `Dockerfile` (`runner` and `worker` targets):
   multi-stage, non-root, minimal base, Next.js standalone output, `tini` as
-  PID 1 for graceful shutdown.
+  PID 1 for graceful shutdown. The worker target runs `node dist/worker.js`
+  with production dependencies only. Its healthcheck is the Redis heartbeat
+  file (`scripts/worker-liveness.sh`), and the stop grace is 630s.
 - **No `postgres` / `redis` / `minio` containers.** Production uses managed
   services (RDS/Aurora, ElastiCache, S3) in **ap-southeast-2** for Australian
   data residency. They are referenced only via env/secrets.

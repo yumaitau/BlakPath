@@ -1,10 +1,14 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
-import { redis } from '@/lib/redis';
+import { env } from '@/lib/env';
+import { pingRedis, redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
-import { closeQueues, type TenantJob } from '@/lib/queues';
-import { PROCESSORS, REGISTERED_QUEUES } from './processors';
-import { startTenantScheduleSync } from './scheduler';
+import { closeQueues, QUEUE_PREFIX, type TenantJob } from '@/lib/queues';
+import { clearHeartbeat, heartbeatExists, recordHeartbeat } from './heartbeat';
 import { queueFailureSignal } from './operational-signals';
+import { PROCESSORS, REGISTERED_QUEUES } from './processors';
+import { HEARTBEAT_INTERVAL_MS, SHUTDOWN_GRACE_MS } from './runtime';
+import { startTenantScheduleSync } from './scheduler';
+import { shutdown } from './shutdown';
 
 /**
  * BlakPath background worker bootstrap.
@@ -15,8 +19,11 @@ import { queueFailureSignal } from './operational-signals';
  *     process.env directly, never open a second uncoordinated pool.
  *   - Handle SIGTERM/SIGINT for GRACEFUL SHUTDOWN: stop accepting new jobs, let
  *     in-flight jobs finish (up to a hard deadline), close the queues and the
- *     Redis connection, then exit 0. Docker/Kubernetes send SIGTERM on stop;
- *     without this an in-flight malware scan could be killed mid-flight.
+ *     Redis connection, then exit 0. tini is PID 1 in the image and forwards
+ *     SIGTERM; the pod must not override the container command.
+ *   - Rewrite a heartbeat file after each successful Redis ping. The liveness
+ *     probe fails when the file is missing, which is how a lost Redis
+ *     connection restarts the pod.
  *
  * Security posture: this process holds privileged infrastructure access. It
  * performs NO identity determination — see `worker/processors.ts`. Every job is
@@ -35,9 +42,6 @@ const workerLogger = logger.child({ component: 'worker' });
  */
 const connection = redis as unknown as ConnectionOptions;
 
-/** Maximum time to wait for in-flight jobs on shutdown before forcing exit. */
-const SHUTDOWN_GRACE_MS = 25_000;
-
 const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const processor = PROCESSORS[queueName];
   const childLogger = workerLogger.child({ queue: queueName });
@@ -47,7 +51,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
     async (job) => processor(job, childLogger),
     {
       connection,
-      prefix: 'bp:queue',
+      prefix: QUEUE_PREFIX,
       // Conservative default; per-queue tuning lands with real processors.
       concurrency: 4,
       // Do not autorun until all workers are constructed and listeners wired.
@@ -74,51 +78,72 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   return worker;
 });
 
-let shuttingDown = false;
 let stopTenantScheduleSync: (() => void) | null = null;
+let stopHeartbeat: (() => void) | null = null;
 
-/**
- * Graceful shutdown: close every worker (waits for active jobs to settle),
- * close the queue producers, then close Redis. A hard deadline guards against a
- * stuck job hanging the container forever.
- */
-async function shutdown(signal: NodeJS.Signals): Promise<void> {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  workerLogger.info({ signal }, 'shutdown requested — draining workers');
-
-  const deadline = setTimeout(() => {
-    workerLogger.error(
-      { graceMs: SHUTDOWN_GRACE_MS },
-      'shutdown deadline exceeded — forcing exit',
-    );
-    process.exit(1);
-  }, SHUTDOWN_GRACE_MS);
+function armDeadline(fire: () => void, ms: number): { clear: () => void } {
+  const timer = setTimeout(fire, ms);
   // Do not keep the event loop alive solely for the deadline timer.
-  deadline.unref();
-
-  try {
-    stopTenantScheduleSync?.();
-    await Promise.all(workers.map((w) => w.close()));
-    await closeQueues();
-    await redis.quit();
-    clearTimeout(deadline);
-    workerLogger.info('shutdown complete');
-    process.exit(0);
-  } catch (err) {
-    workerLogger.error({ err }, 'error during shutdown');
-    process.exit(1);
-  }
+  timer.unref();
+  return { clear: () => clearTimeout(timer) };
 }
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void onSignal('SIGTERM'));
+process.on('SIGINT', () => void onSignal('SIGINT'));
+
+async function onSignal(signal: NodeJS.Signals): Promise<void> {
+  const heartbeatPresent = await heartbeatExists(env.WORKER_HEARTBEAT_PATH);
+  await shutdown(signal, {
+    graceMs: SHUTDOWN_GRACE_MS,
+    heartbeatPresent,
+    workers,
+    stopScheduler: () => stopTenantScheduleSync?.(),
+    stopHeartbeat: () => stopHeartbeat?.(),
+    closeQueues,
+    quitRedis: async () => {
+      await redis.quit();
+    },
+    log: workerLogger,
+    exit: (code) => process.exit(code),
+    setDeadline: armDeadline,
+  });
+}
+
+function startHeartbeat(): () => void {
+  const path = env.WORKER_HEARTBEAT_PATH;
+  let stopped = false;
+
+  async function beat(): Promise<void> {
+    if (stopped) return;
+    try {
+      const reachable = await pingRedis();
+      const fresh = await recordHeartbeat(path, reachable);
+      if (!fresh) {
+        workerLogger.error('redis unreachable — withholding heartbeat');
+      }
+    } catch (err) {
+      workerLogger.error({ err }, 'heartbeat update failed');
+      await clearHeartbeat(path).catch(() => undefined);
+    }
+  }
+
+  const timer = setInterval(() => void beat(), HEARTBEAT_INTERVAL_MS);
+  timer.unref();
+  void beat();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
 
 process.on('unhandledRejection', (reason) => {
   workerLogger.error({ err: reason }, 'unhandled rejection');
 });
 
 async function main(): Promise<void> {
+  // Heartbeat starts first so a Redis outage fails the probe even if schedule
+  // sync is still running. A missing file is what the liveness script checks.
+  stopHeartbeat = startHeartbeat();
   // Create (or update) the durable per-tenant maintenance schedules before
   // accepting jobs. A startup failure is intentional: a worker without its
   // integrity/retention schedules is not healthy enough to serve.

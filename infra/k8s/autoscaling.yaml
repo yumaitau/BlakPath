@@ -28,3 +28,14 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: blakpath-app
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: blakpath-worker
+  namespace: blakpath
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: blakpath-worker
