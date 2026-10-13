@@ -9,6 +9,7 @@ import {
   Columns3,
   FolderOpen,
   LayoutDashboard,
+  ScrollText,
   Settings,
   UserCog,
   Users,
@@ -32,6 +33,7 @@ const navigation = [
   { href: '/clients', label: 'Clients', icon: Users },
   { href: '/board', label: 'Board', icon: Columns3 },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays },
+  { href: '/audit', label: 'Audit', icon: ScrollText },
   { href: '/forms', label: 'Forms', icon: ClipboardList },
   { href: '/settings/teams', label: 'Teams', icon: UserCog },
   { href: '/settings/security', label: 'Settings', icon: Settings },
@@ -95,6 +97,7 @@ export function StaffShell({
                 <Link
                   key={item.href}
                   href={item.href}
+                  {...(item.href === '/audit' ? { prefetch: false } : {})}
                   aria-current={currentPath ? 'page' : undefined}
                   className={cn(
                     'flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none',
@@ -183,6 +186,7 @@ export function StaffShell({
               <Link
                 key={item.href}
                 href={item.href}
+                {...(item.href === '/audit' ? { prefetch: false } : {})}
                 aria-current={currentPath ? 'page' : undefined}
                 className={cn(
                   'flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none',

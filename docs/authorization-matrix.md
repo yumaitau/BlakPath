@@ -29,8 +29,14 @@ set is cached on the verified `TenantContext.permissions`
 
 ## Permission key catalogue
 
-Permission keys are namespaced `resource:action`. This is the Phase-1 catalogue;
-domains added later extend it, never bypass it.
+Permission keys are namespaced `resource:action`. The executable catalogue is
+`src/lib/permissions/catalog.ts`, and system-role grants are
+`src/lib/permissions/roles.ts`. Docs use those names. Audit access is
+`audit:view` only. Chain verification is a worker job, not a permission
+(`docs/audit-log-design.md`).
+
+The table below is an earlier draft. Where a key is not in the catalogue, the
+catalogue wins. The audit row matches the catalogue.
 
 | Category       | Key                                 | Description                                              |
 | -------------- | ----------------------------------- | -------------------------------------------------------- |
@@ -61,8 +67,7 @@ domains added later extend it, never bypass it.
 | decision       | `decision:review`                   | Second-person review of a recorded decision              |
 | certificate    | `certificate:issue`                 | Issue a certificate for an approved decision             |
 | certificate    | `certificate:revoke`                | Revoke a previously issued certificate                   |
-| audit          | `audit:read`                        | Read the organisation's audit trail                      |
-| audit          | `audit:verify`                      | Trigger/verify audit integrity checkpoints               |
+| audit          | `audit:view`                        | View the tamper-evident audit trail for the organisation |
 
 ## Roles × permissions
 
@@ -97,16 +102,16 @@ domains added later extend it, never bypass it.
 | `decision:review`                   |                   |            |          |         ✓          |     ✓     |         |
 | `certificate:issue`                 |                   |            |          |         ✓          |           |         |
 | `certificate:revoke`                |                   |            |          |         ✓          |     ✓     |         |
-| `audit:read`                        |                   |            |          |                    |     ✓     |    ✓    |
-| `audit:verify`                      |                   |            |          |                    |     ✓     |    ✓    |
+| `audit:view`                        |                   |            |          |                    |     ✓     |         |
 
 Notes:
 
 - **Org Admin** manages people and configuration but is deliberately **not**
   granted `decision:record`, `decision:review` or `certificate:issue` by
   default — administrative power is separated from determination power.
-- **Auditor** is read-only oversight: audit and role visibility, no data
-  mutation and no case access.
+- **Auditor** in this draft table is not a system role. `organisation-admin`
+  holds `audit:view` and no case-mutation permissions. A tenant may clone a
+  read-only role and grant `audit:view` alone.
 
 ## Separation-of-duties rules
 
@@ -123,8 +128,10 @@ Enforced in domain services on top of the permission check:
    `decision:record` or `certificate:issue`.
 4. **Granting representative access is not self-serving.** A user cannot grant
    themselves representative access to another person's application.
-5. **Auditor cannot edit.** `audit:read`/`audit:verify` never accompany mutating
-   case permissions in the same role.
+5. **Audit access does not edit cases.** `audit:view` reads and exports the
+   trail and records that a human completed the monthly review. On
+   `organisation-admin` it is not bundled with application, evidence, decision
+   or certificate permissions.
 
 ## Contextual policies
 

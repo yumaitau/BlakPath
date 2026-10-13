@@ -238,10 +238,13 @@ export type AuditAction =
   | 'admin.domain_verified'
   | 'admin.domain_removed'
   | 'admin.terminology_updated'
-  // Audit self-events (integrity).
+  // Audit self-events (integrity and access to the trail itself).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'
-  | 'audit.divergence_detected';
+  | 'audit.divergence_detected'
+  | 'audit.viewed'
+  | 'audit.exported'
+  | 'audit.monthly_review_recorded';
 
 /**
  * The exhaustive set of resource types an audit event may reference. Stable
@@ -294,7 +297,8 @@ export type ResourceType =
   | 'break_glass_request'
   | 'integration'
   | 'search'
-  | 'audit_chain';
+  | 'audit_chain'
+  | 'audit_log';
 
 /** All audit results, useful for runtime validation and enumeration. */
 export const AUDIT_RESULTS: readonly AuditResult[] = [
