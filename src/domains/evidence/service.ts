@@ -175,8 +175,8 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     resourceId: evidenceId,
     result: 'success',
     after: {
-      data: { applicationId: row.applicationId, fileName: row.fileName },
-      allow: ['applicationId', 'fileName'],
+      data: { applicationId: row.applicationId },
+      allow: ['applicationId'],
     },
   });
   await recordAudit({
@@ -213,7 +213,7 @@ export async function getDownloadUrl(
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'denied',
-      reason: 'evidence not clean or not promoted',
+      reason: 'evidence.not_servable',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
@@ -450,7 +450,14 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'failure',
-      reason: `declared ${row.declaredContentType}, detected ${detected ?? 'unknown'}`,
+      reason: 'evidence.content_type_mismatch',
+      after: {
+        data: {
+          declaredContentType: row.declaredContentType,
+          detectedContentType: detected ?? 'unknown',
+        },
+        allow: ['declaredContentType', 'detectedContentType'],
+      },
     });
     return;
   }
@@ -465,7 +472,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'failure',
-      reason: 'scanner unavailable',
+      reason: 'evidence.scanner_unavailable',
     });
     // Stays quarantined. Rethrow so BullMQ retries with backoff.
     throw err;
@@ -485,7 +492,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'failure',
-      reason: verdict.signature ?? 'malware detected',
+      reason: 'evidence.malware_detected',
     });
 
     // Let the uploader know, calmly and without file details. Best-effort: a

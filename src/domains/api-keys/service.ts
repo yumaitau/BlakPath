@@ -77,8 +77,8 @@ export async function createApiKey(
     resourceId: apiKey.id,
     result: 'success',
     after: {
-      data: { name: input.name, prefix: apiKey.prefix },
-      allow: ['name', 'prefix'],
+      data: { prefix: apiKey.prefix },
+      allow: ['prefix'],
     },
   });
 

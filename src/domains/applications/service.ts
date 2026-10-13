@@ -13,6 +13,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -22,6 +23,7 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { applicationIntakeAuditMeta } from './audit-meta';
 import { canReadApplication, readsAllApplications } from './policies';
 import {
   addNoteSchema,
@@ -189,7 +191,7 @@ export async function getApplication(id: string): Promise<ApplicationDetail> {
       resourceType: 'application',
       resourceId: id,
       result: 'denied',
-      reason: 'not readable by actor or not found',
+      reason: 'application.not_readable',
     });
     // Same error whether missing or forbidden — never reveal which.
     throw new AuthorizationError('POLICY_DENIED');
@@ -368,22 +370,31 @@ export async function updateIntake(
     .returning();
   const row = must(updated[0], 'application');
 
+  const changed: string[] = [];
+  if (
+    input.applicantName !== undefined &&
+    input.applicantName !== existing.applicantName
+  ) {
+    changed.push('applicantName');
+  }
+  if (input.priority !== undefined && input.priority !== existing.priority) {
+    changed.push('priority');
+  }
+  if (input.intake !== undefined) changed.push('intake');
+
+  const intakeAudit = applicationIntakeAuditMeta({
+    beforePriority: existing.priority,
+    afterPriority: row.priority,
+    changed,
+  });
+
   await recordAudit({
     action: 'application.updated',
     resourceType: 'application',
     resourceId: id,
     result: 'success',
-    before: {
-      data: {
-        applicantName: existing.applicantName,
-        priority: existing.priority,
-      },
-      allow: ['applicantName', 'priority'],
-    },
-    after: {
-      data: { applicantName: row.applicantName, priority: row.priority },
-      allow: ['applicantName', 'priority'],
-    },
+    before: intakeAudit.before,
+    after: intakeAudit.after,
   });
 
   return row;
@@ -490,6 +501,7 @@ export async function transitionApplication(
   }
   if (action === 'close') patch.closedAt = now;
 
+  let statusHistoryId: string | null = null;
   const updatedRows = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(applications)
@@ -497,29 +509,47 @@ export async function transitionApplication(
       .where(scope.where(applications.organisationId, eq(applications.id, id)))
       .returning();
 
-    await tx.insert(applicationStatusHistory).values(
-      scope.insertValues({
-        applicationId: id,
-        fromStatus: from,
-        toStatus: to,
-        action,
-        actorUserId: ctx.userId,
-        note: input.note ?? null,
-      }),
-    );
+    const history = await tx
+      .insert(applicationStatusHistory)
+      .values(
+        scope.insertValues({
+          applicationId: id,
+          fromStatus: from,
+          toStatus: to,
+          action,
+          actorUserId: ctx.userId,
+          note: input.note ?? null,
+        }),
+      )
+      .returning({ id: applicationStatusHistory.id });
+    statusHistoryId = history[0]?.id ?? null;
 
     return updated;
   });
   const row = must(updatedRows[0], 'application');
+
+  // The note text stays on application_status_history (mutable). The trail
+  // records the code and, when a note was written, that row's id.
+  const reason =
+    input.note && statusHistoryId
+      ? auditReason('application.transition_note', statusHistoryId)
+      : null;
 
   await recordAudit({
     action: TRANSITIONS[action].audit,
     resourceType: 'application',
     resourceId: id,
     result: 'success',
-    reason: input.note ?? null,
+    reason,
     before: { data: { status: from }, allow: ['status'] },
-    after: { data: { status: to, action }, allow: ['status', 'action'] },
+    after: {
+      data: {
+        status: to,
+        action,
+        ...(statusHistoryId ? { statusHistoryId } : {}),
+      },
+      allow: ['status', 'action', 'statusHistoryId'],
+    },
   });
 
   return row;

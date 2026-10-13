@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { logger } from '@/lib/observability/logger';
 import {
@@ -142,7 +143,7 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
       resourceType: 'integration',
       resourceId: endpoint.id,
       result: 'failure',
-      reason: `HTTP ${res.status}`,
+      reason: auditReason('webhook.http_status', String(res.status)),
     });
     if (!giveUp) throw new Error(`webhook delivery failed: HTTP ${res.status}`);
   } catch (err) {
@@ -160,7 +161,7 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
       resourceType: 'integration',
       resourceId: endpoint.id,
       result: 'failure',
-      reason: 'network error',
+      reason: 'webhook.network_error',
     });
     logger.warn({ organisationId, deliveryId, attempts }, 'webhook delivery error');
     if (!giveUp) throw err instanceof Error ? err : new Error('webhook delivery error');

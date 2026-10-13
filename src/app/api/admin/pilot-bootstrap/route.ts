@@ -133,7 +133,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     resourceType: 'membership',
     resourceId: membershipId,
     result: 'success',
-    reason: 'pilot bootstrap',
+    reason: 'admin.pilot_bootstrap',
     organisationId,
     actorUserId: userId,
   });

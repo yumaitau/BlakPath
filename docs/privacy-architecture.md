@@ -19,8 +19,12 @@ recorded consent, thoughtful retention, and hard limits on automation.
   organisation-authored config (terminology, guidance, branding) — never for data
   other modules must query, and never to smuggle in identity judgements.
 - **Audit stores metadata, not payloads.** `beforeMeta`/`afterMeta` capture
-  minimal change context; evidence content and secrets are never written to the
-  audit trail (`docs/audit-log-design.md`).
+  changed field names, statuses and ids. They do not capture names, contact
+  details, notes, file names, form answers, evidence content or secrets.
+  `reason` is a code, with free text left on a mutable row
+  (`docs/audit-log-design.md`). Retention can anonymise the application row
+  without leaving the applicant's name in `audit_events`, because the trail
+  never received it. The trail itself is not edited.
 - **Ids don't leak counts.** UUIDv7 identifiers are non-sequential and
   public-safe, so exposing an id never reveals how many records exist
   (`src/db/schema/_helpers.ts`).

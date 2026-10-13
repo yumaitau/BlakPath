@@ -69,7 +69,7 @@ async function callTool(
     resourceType: 'search',
     resourceId: name,
     result: 'success',
-    reason: `mcp:${name}`,
+    reason: 'mcp.tool',
   });
 
   try {

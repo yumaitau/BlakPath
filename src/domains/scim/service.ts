@@ -166,7 +166,7 @@ export async function provisionScimUser(
     resourceType: 'membership',
     resourceId: membershipId ?? null,
     result: 'success',
-    reason: 'scim provision',
+    reason: 'scim.provision',
     organisationId,
   });
   return { id: membershipId ?? userId, userName: email };

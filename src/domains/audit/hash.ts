@@ -12,9 +12,12 @@ import type { AuditAction, AuditResult, ResourceType } from './events';
  * in which case the chain no longer verifies.
  *
  * Redaction is a first-class concern: raw document contents, secrets,
- * passwords, TOTP seeds, recovery codes and full sensitive form answers must
- * NEVER enter `beforeMeta`/`afterMeta` and therefore must never be hashed. Use
- * {@link redactMeta} with an explicit allowlist to prepare change metadata.
+ * passwords, TOTP seeds, recovery codes, personal names, contact details,
+ * free-text notes, file names and full form answers must NEVER enter
+ * `beforeMeta`/`afterMeta` or `reason`, and therefore must never be hashed.
+ * Use {@link redactMeta} with an explicit allowlist to prepare change metadata.
+ * `reason` is a coded value ({@link auditReason}); free text stays on a
+ * mutable row the code can point at.
  */
 
 /**
@@ -81,15 +84,64 @@ const FORBIDDEN_KEY_FRAGMENTS: readonly string[] = [
   'answers',
   'apikey',
   'api_key',
+  // Personal data. Substring match covers applicantName, fileName, emailAddress,
+  // phoneNumber, decisionNote and the same shape of key. The value stays on the
+  // mutable row; the trail records that the field changed, not what it said.
+  'name',
+  'email',
+  'phone',
+  'note',
+  'filename',
+  'file_name',
 ];
 
 const REDACTED = '[REDACTED]' as const;
 /** Maximum length for any string value stored in metadata. */
 const MAX_STRING_LENGTH = 2048;
 
-function isForbiddenKey(key: string): boolean {
+/** True when `key` must not be allowlisted into audit metadata. */
+export function isForbiddenAuditKey(key: string): boolean {
   const normalised = key.toLowerCase();
   return FORBIDDEN_KEY_FRAGMENTS.some((fragment) => normalised.includes(fragment));
+}
+
+/**
+ * `reason` is a dotted code, optionally `code:recordId` where `recordId`
+ * identifies the mutable row that holds free text. No spaces, no prose.
+ */
+const CODED_AUDIT_REASON =
+  /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*(?::[A-Za-z0-9_-]{1,128})?$/;
+
+/** Whether `reason` is safe to hash into the append-only trail. */
+export function isCodedAuditReason(reason: string): boolean {
+  return CODED_AUDIT_REASON.test(reason);
+}
+
+/**
+ * Build a coded audit reason. Pass `recordId` only when that id is not already
+ * the event's `resourceId` — it must be an id, never free text.
+ */
+export function auditReason(code: string, recordId?: string | null): string {
+  if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*$/.test(code)) {
+    throw new Error('Audit reason code must be a dotted identifier');
+  }
+  if (recordId == null || recordId === '') return code;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(recordId)) {
+    throw new Error('Audit reason reference must be an id');
+  }
+  return `${code}:${recordId}`;
+}
+
+/**
+ * Accept a coded reason or null. Reject free text. The error does not echo
+ * `reason`, because that string may be the personal data we are refusing to store.
+ */
+export function assertCodedAuditReason(reason: string | null | undefined): string | null {
+  if (reason == null || reason === '') return null;
+  if (!isCodedAuditReason(reason)) {
+    throw new Error('Audit reason must be a coded value, not free text');
+  }
+  return reason;
 }
 
 /**
@@ -118,7 +170,7 @@ export function redactMeta(
     if (!allowed.has(key)) {
       continue;
     }
-    if (isForbiddenKey(key)) {
+    if (isForbiddenAuditKey(key)) {
       out[key] = REDACTED;
       continue;
     }
@@ -159,7 +211,7 @@ function sanitiseValue(value: unknown): JsonValue {
     const obj = value as Record<string, unknown>;
     const result: Record<string, JsonValue> = {};
     for (const key of Object.keys(obj).sort()) {
-      result[key] = isForbiddenKey(key) ? REDACTED : sanitiseValue(obj[key]);
+      result[key] = isForbiddenAuditKey(key) ? REDACTED : sanitiseValue(obj[key]);
     }
     return result;
   }
