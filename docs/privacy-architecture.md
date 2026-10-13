@@ -54,6 +54,13 @@ database. These are protected with **envelope encryption**:
 - `organisation_keys` records custody mode, key ARN, version, status
   (`active`, `disabled`, `pending_deletion`, `unavailable`) and whether an
   escrow copy exists. Changes are appended to the platform audit chain.
+- Organisation administrators see custody mode, key ARN, status, last health
+  check, last rotation, escrow status and the key's change history on
+  Settings → Encryption keys (`/settings/encryption-keys`, step-up required).
+  A health check wraps and unwraps a throwaway data key with purpose
+  `key_health`. Views are audited on the tenant chain; checks and status
+  changes on the platform chain. The client trust pack is
+  [`customer-held-keys.md`](customer-held-keys.md) (draft).
 - A disabled or unreachable key fails closed (`TenantKeyUnavailableError`).
   The API returns 423 or 503 with code `TENANT_KEY_UNAVAILABLE`. There is no
   plaintext fallback. Unwrapped data keys stay in a process-local cache for at

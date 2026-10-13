@@ -23,6 +23,11 @@ region.
       the normal authorisation checks, and `audit-verify` reports a clean chain.
 - [ ] Set an owner and escalation path for failed readiness checks, scanner
       availability, exhausted jobs, audit-chain divergence and backup failures.
+- [ ] Record counsel and pilot-council review of the client trust pack
+      ([`customer-held-keys.md`](customer-held-keys.md)) and one auditor
+      walkthrough of its verification steps against a staging tenant. Include the
+      encryption-keys page, its health-check endpoint and the escrow vault in the
+      penetration-test scope.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
 
