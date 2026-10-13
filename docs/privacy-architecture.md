@@ -54,18 +54,38 @@ database. These are protected with **envelope encryption**:
 - Plaintext exists only transiently in memory during a single operation; it is
   never logged (pino) and never persisted.
 
-## Consent ledger (planned)
+## Consent ledger
 
-Consent is treated as a first-class, recorded fact, not an implicit assumption:
+Consent is treated as a first-class, recorded fact, not an implicit assumption
+(`src/domains/consent`, `src/db/schema/consent.ts`):
 
-- Consent wording is tenant-authored (`organisation_settings.consentWording`).
-- Representative access (a parent for a child, an authorised advocate) is already
-  modelled as time-boxed, revocable grants and carries a `consentRecordId`
-  placeholder that the consent domain will populate
-  (`representative_authorisations` in `src/db/schema/membership.ts`).
-- The **consent ledger** (later phase) will record what was consented to, by
-  whom, when, the wording shown, and any withdrawal — as an append-only history
-  so consent state is always explainable and auditable.
+- **Append-only.** `consent_events` holds one row per recorded act — a `granted`
+  event, or a `withdrawn` event that points at the grant it ends. A database
+  trigger rejects every UPDATE, DELETE and TRUNCATE, so history can never be
+  rewritten; current state (live, withdrawn, expired) is derived from it.
+- **Versioned wording.** Tenants publish wording per purpose to
+  `consent_wording_versions` (immutable, numbered, with a SHA-256 of the body).
+  Every grant references the version shown. Changing wording means publishing a
+  new version; old grants keep pointing at the words actually consented to.
+- **Method and evidence.** Each grant and withdrawal records how it was given —
+  `signed-form` or `written-request` (evidence reference required),
+  `verbal-witnessed` (witness required) or `online-acknowledgement` (only by the
+  person themselves, signed in).
+- **Granular purposes.** `application-processing`, `evidence-handling`,
+  `representative-access`, `inter-organisation-sharing` (names the receiving
+  organisation) and `communications`.
+- **People without accounts.** The subject is a user account and/or a `clients`
+  record, so consent from paper or phone intake is recorded against the client.
+- **Representatives and guardians.** A grant records who gave it (`subject`,
+  `representative`, `guardian`) with their name and relationship.
+- **Withdrawal.** Staff record withdrawals given on paper, verbally or in
+  writing; the person (or their active representative) withdraws online through
+  `POST /api/consents/{id}/withdraw` without needing any staff permission.
+  Withdrawal is audited and runs downstream effects in the same transaction —
+  withdrawing `representative-access` revokes every authorisation it backs
+  (`representative_authorisations.consentEventId`).
+- The v1 `consent_records` table is legacy: no service writes it, and it is
+  retained only so the migration does not destroy existing rows.
 
 ## Retention & deletion vs official records
 

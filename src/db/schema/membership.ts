@@ -15,7 +15,7 @@ import {
 } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
-import { consentRecords } from './consent';
+import { consentEvents, consentRecords } from './consent';
 import { teams } from './teams';
 
 /**
@@ -176,8 +176,9 @@ export const membershipInvitations = pgTable(
 /**
  * Phase-1 stub for applicant-representative access (e.g. a parent acting for a
  * child, or an authorised advocate). Tenant-owned. Access granted here is
- * always time-boxed, revocable and, when the consent domain lands, tied to a
- * `consentRecordId`. It never bypasses permission checks or tenant isolation.
+ * always time-boxed, revocable and tied to a live `representative-access`
+ * grant in the consent ledger (`consentEventId`). It never bypasses permission
+ * checks or tenant isolation.
  */
 export const representativeAuthorisations = pgTable(
   'representative_authorisations',
@@ -199,9 +200,16 @@ export const representativeAuthorisations = pgTable(
     grantedAt: timestamp('granted_at', { withTimezone: true }),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
-    /** Link to a consent record; consent domain is fleshed out later. */
+    /** LEGACY v1 consent link; superseded by `consentEventId`. */
     consentRecordId: refId('consent_record_id').references(() => consentRecords.id, {
       onDelete: 'set null',
+    }),
+    /**
+     * The `representative-access` grant in the consent ledger that backs this
+     * authorisation. Withdrawing that grant revokes the authorisation.
+     */
+    consentEventId: refId('consent_event_id').references(() => consentEvents.id, {
+      onDelete: 'restrict',
     }),
     ...timestamps,
   },

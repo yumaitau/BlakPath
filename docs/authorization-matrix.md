@@ -145,7 +145,14 @@ answer "for this specific record, right now":
   permission (`docs/evidence-scanning-design.md`).
 - **Representative time-boxing.** Representative access is honoured only while the
   `representative_authorisations` grant is `active` and unexpired/unrevoked, and
-  (when the consent domain lands) tied to a consent record.
+  tied to a live `representative-access` grant in the consent ledger;
+  withdrawing that grant revokes the authorisation.
+- **Consent.** Staff record or withdraw consent given on paper, verbally or in
+  writing with `application:update-intake` or `application:assign`, and read
+  consent history with those or an application/client read permission.
+  Publishing consent wording needs `tenant:configure`. The subject (or their
+  active representative) may acknowledge or withdraw online with no staff
+  permission, only for themselves.
 - **Step-up for sensitive actions.** Actions such as `decision:record`,
   `certificate:issue`/`certificate:revoke` and break-glass require a recent
   successful authentication (`sessions.lastAuthenticatedAt`); see

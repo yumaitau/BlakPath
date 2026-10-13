@@ -39,7 +39,7 @@ of the same tenancy/authorisation/audit foundation.
 | **Evidence**          | Secure document upload, quarantine → scan → serve lifecycle (`docs/evidence-scanning-design.md`)                     | Phase 3     |
 | **Genealogy**         | Family/ancestry records supporting an application                                                                    | Later phase |
 | **Decisions**         | Human-recorded determinations and certificate issuance                                                               | Later phase |
-| **Consent**           | Consent ledger; ties representative access to recorded consent                                                       | Later phase |
+| **Consent**           | Append-only consent ledger with versioned wording; ties representative access to recorded consent                    | Phase 1     |
 | **Notifications**     | Email and in-app messaging (via the worker)                                                                          | Later phase |
 
 Every future tenant-owned table uses the shared helpers (`organisationId()`,

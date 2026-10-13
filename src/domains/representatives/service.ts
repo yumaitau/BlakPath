@@ -1,8 +1,9 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { consentRecords, representativeAuthorisations } from '@/db/schema';
+import { representativeAuthorisations } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import { isLiveGrant } from '@/domains/consent/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
@@ -11,10 +12,10 @@ import { AuthorizationError } from '@/lib/permissions/errors';
  * Representative access — consent-backed, time-boxed, revocable.
  *
  * A representative (parent, advocate) acts for a subject user. Activation
- * REQUIRES a live consent grant (`hasLiveConsent` semantics inlined here so
- * the check and the state change share one scope): granted status, unrevoked,
- * unexpired. Purpose is fixed to `representative-access`. No consent, no
- * access — the check runs on request AND on activation.
+ * REQUIRES a live `representative-access` grant in the consent ledger
+ * (unwithdrawn, unexpired) for that subject. No consent, no access — the check
+ * runs on request AND on activation, and withdrawing the grant revokes the
+ * authorisation (domains/consent/service.ts).
  */
 
 export type RepresentativeRow = typeof representativeAuthorisations.$inferSelect;
@@ -29,7 +30,7 @@ const requestSchema = z.object({
   subjectUserId: z.uuid(),
   representativeUserId: z.uuid(),
   purpose: z.string().trim().min(1).max(500),
-  consentRecordId: z.uuid(),
+  consentEventId: z.uuid(),
   expiresAt: z.coerce.date().optional(),
 });
 
@@ -40,39 +41,13 @@ function must<T>(row: T | undefined, what: string): T {
 
 async function liveConsent(
   scope: ReturnType<typeof currentScope>,
-  consentRecordId: string,
+  consentEventId: string,
   subjectUserId: string,
 ): Promise<boolean> {
-  const now = new Date();
-  const rows = await scope.db
-    .select({ id: consentRecords.id })
-    .from(consentRecords)
-    .where(
-      and(
-        eq(consentRecords.organisationId, scope.organisationId),
-        eq(consentRecords.id, consentRecordId),
-        eq(consentRecords.subjectUserId, subjectUserId),
-        eq(consentRecords.purpose, 'representative-access'),
-        eq(consentRecords.status, 'granted'),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row) return false;
-  const full = await scope.db
-    .select()
-    .from(consentRecords)
-    .where(
-      and(
-        eq(consentRecords.organisationId, scope.organisationId),
-        eq(consentRecords.id, consentRecordId),
-      ),
-    )
-    .limit(1);
-  const record = full[0];
-  if (!record || record.revokedAt) return false;
-  if (record.expiresAt && record.expiresAt.getTime() <= now.getTime()) return false;
-  return true;
+  return isLiveGrant(scope, consentEventId, {
+    subjectUserId,
+    purpose: 'representative-access',
+  });
 }
 
 export async function requestRepresentativeAccess(
@@ -85,7 +60,7 @@ export async function requestRepresentativeAccess(
     throw new AuthorizationError('POLICY_DENIED');
   }
   const scope = currentScope();
-  if (!(await liveConsent(scope, input.consentRecordId, input.subjectUserId))) {
+  if (!(await liveConsent(scope, input.consentEventId, input.subjectUserId))) {
     await recordAudit({
       action: 'representative.requested',
       resourceType: 'representative_authorisation',
@@ -104,7 +79,7 @@ export async function requestRepresentativeAccess(
         purpose: input.purpose,
         status: 'pending',
         expiresAt: input.expiresAt ?? null,
-        consentRecordId: input.consentRecordId,
+        consentEventId: input.consentEventId,
       }),
     )
     .returning();
@@ -138,8 +113,8 @@ export async function activateRepresentativeAccess(
   if (!existing || existing.status !== 'pending')
     throw new AuthorizationError('POLICY_DENIED');
   if (
-    !existing.consentRecordId ||
-    !(await liveConsent(scope, existing.consentRecordId, existing.subjectUserId))
+    !existing.consentEventId ||
+    !(await liveConsent(scope, existing.consentEventId, existing.subjectUserId))
   ) {
     await recordAudit({
       action: 'representative.activated',
