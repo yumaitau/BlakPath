@@ -1,0 +1,342 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+# One line at a time. A waiting production approval keeps the next main push queued.
+concurrency:
+  group: cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-2
+  ECR_REGISTRY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com
+  WEB_REPOSITORY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
+  WORKER_REPOSITORY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9.12.0'
+
+jobs:
+  build:
+    name: Build, push, and attest
+    if: ${{ !contains(github.event.head_commit.message, '[skip cd]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+    outputs:
+      web_digest: ${{ steps.web.outputs.digest }}
+      worker_digest: ${{ steps.worker.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require the OIDC role
+        env:
+          AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
+        run: |
+          if [[ -z "$AWS_CD_ROLE_ARN" ]]; then
+            echo "Set repository variable AWS_CD_ROLE_ARN to the OIDC role. Do not add access keys." >&2
+            exit 1
+          fi
+
+      - name: Assume CD role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CD_ROLE_ARN }}
+          aws-region: ap-southeast-2
+          role-session-name: blakpath-cd-${{ github.run_id }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push web
+        id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runner
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.WEB_REPOSITORY }}:run-${{ github.run_id }}-${{ github.run_attempt }}
+          # Placeholders satisfy Next's build-time route collection. They stay in
+          # the build stage and are not copied into the runtime image.
+          build-args: |
+            DATABASE_URL=postgres://blakpath:blakpath@localhost:5432/blakpath
+            REDIS_URL=redis://localhost:6379
+            BETTER_AUTH_SECRET=ci-build-secret-value-at-least-32-characters-long
+            ENCRYPTION_MASTER_KEY=dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtMTIzNDU=
+            S3_ACCESS_KEY_ID=test
+            S3_SECRET_ACCESS_KEY=test-secret
+          cache-from: type=gha,scope=blakpath-web
+          cache-to: type=gha,mode=max,scope=blakpath-web
+
+      - name: Build and push worker
+        id: worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: worker
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.WORKER_REPOSITORY }}:run-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=blakpath-worker
+          cache-to: type=gha,mode=max,scope=blakpath-worker
+
+      - name: Attest web provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.WEB_REPOSITORY }}
+          subject-digest: ${{ steps.web.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest worker provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.WORKER_REPOSITORY }}
+          subject-digest: ${{ steps.worker.outputs.digest }}
+          push-to-registry: true
+
+      - name: SBOM web
+        uses: anchore/sbom-action@v0.17.7
+        with:
+          image: ${{ env.WEB_REPOSITORY }}@${{ steps.web.outputs.digest }}
+          format: spdx-json
+          output-file: web.spdx.json
+
+      - name: SBOM worker
+        uses: anchore/sbom-action@v0.17.7
+        with:
+          image: ${{ env.WORKER_REPOSITORY }}@${{ steps.worker.outputs.digest }}
+          format: spdx-json
+          output-file: worker.spdx.json
+
+      - name: Attest web SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-name: ${{ env.WEB_REPOSITORY }}
+          subject-digest: ${{ steps.web.outputs.digest }}
+          sbom-path: web.spdx.json
+          push-to-registry: true
+
+      - name: Attest worker SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-name: ${{ env.WORKER_REPOSITORY }}
+          subject-digest: ${{ steps.worker.outputs.digest }}
+          sbom-path: worker.spdx.json
+          push-to-registry: true
+
+      - name: Verify attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          WORKER_DIGEST: ${{ steps.worker.outputs.digest }}
+        run: |
+          gh attestation verify "oci://${WEB_REPOSITORY}@${WEB_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/cd.yml" \
+            --deny-self-hosted-runners
+          gh attestation verify "oci://${WORKER_REPOSITORY}@${WORKER_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/cd.yml" \
+            --deny-self-hosted-runners
+
+  deploy-staging:
+    name: Deploy staging
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_APP_URL != '' && vars.STAGING_APP_URL || 'https://staging.blakpath.yumait.au' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: read
+    env:
+      AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      WEB_DIGEST: ${{ needs.build.outputs.web_digest }}
+      WORKER_DIGEST: ${{ needs.build.outputs.worker_digest }}
+      NAMESPACE: blakpath-staging
+      APP_URL: ${{ vars.STAGING_APP_URL != '' && vars.STAGING_APP_URL || 'https://staging.blakpath.yumait.au' }}
+      DEPLOY_ENVIRONMENT: staging
+      SMOKE_SIGN_IN_EMAIL: ${{ secrets.SMOKE_SIGN_IN_EMAIL }}
+      SMOKE_SIGN_IN_PASSWORD: ${{ secrets.SMOKE_SIGN_IN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Assume CD role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CD_ROLE_ARN }}
+          aws-region: ap-southeast-2
+          role-session-name: blakpath-cd-${{ github.run_id }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Configure cluster access
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region ap-southeast-2
+
+      - name: Verify attestations before rollout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "oci://${WEB_REPOSITORY}@${WEB_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/cd.yml" \
+            --deny-self-hosted-runners
+          gh attestation verify "oci://${WORKER_REPOSITORY}@${WORKER_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/cd.yml" \
+            --deny-self-hosted-runners
+
+      - name: Roll out staging
+        run: bash scripts/cd/rollout.sh
+
+  deploy-production:
+    name: Deploy production
+    needs: [build, deploy-staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_APP_URL != '' && vars.PRODUCTION_APP_URL || 'https://blakpath.yumait.au' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: read
+    env:
+      AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      WEB_DIGEST: ${{ needs.build.outputs.web_digest }}
+      WORKER_DIGEST: ${{ needs.build.outputs.worker_digest }}
+      NAMESPACE: blakpath
+      APP_URL: ${{ vars.PRODUCTION_APP_URL != '' && vars.PRODUCTION_APP_URL || 'https://blakpath.yumait.au' }}
+      DEPLOY_ENVIRONMENT: production
+      SMOKE_SIGN_IN_EMAIL: ${{ secrets.SMOKE_SIGN_IN_EMAIL }}
+      SMOKE_SIGN_IN_PASSWORD: ${{ secrets.SMOKE_SIGN_IN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # checkout omits tags unless asked. The next tag is based on the latest v*.
+          fetch-tags: true
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Plan the semver tag
+        id: plan
+        run: pnpm exec tsx scripts/cd/plan-release.ts
+
+      - name: Require production reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/environments/production" > "$RUNNER_TEMP/production-environment.json"
+          pnpm exec tsx scripts/cd/assert-environment.ts "$RUNNER_TEMP/production-environment.json"
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Assume CD role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CD_ROLE_ARN }}
+          aws-region: ap-southeast-2
+          role-session-name: blakpath-cd-${{ github.run_id }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Configure cluster access
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region ap-southeast-2
+
+      - name: Verify attestations before rollout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "oci://${WEB_REPOSITORY}@${WEB_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/cd.yml" \
+            --deny-self-hosted-runners
+          gh attestation verify "oci://${WORKER_REPOSITORY}@${WORKER_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/cd.yml" \
+            --deny-self-hosted-runners
+
+      - name: Roll out production
+        run: bash scripts/cd/rollout.sh
+
+      - name: Write the release record
+        run: |
+          pnpm exec tsx scripts/cd/write-release.ts \
+            --web-repository "$WEB_REPOSITORY" \
+            --worker-repository "$WORKER_REPOSITORY" \
+            --web-digest "$WEB_DIGEST" \
+            --worker-digest "$WORKER_DIGEST" \
+            --expect-tag "${{ steps.plan.outputs.tag }}" \
+            --out-dir "$RUNNER_TEMP/release"
+
+      - name: Tag the built commit and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "BlakPath ${TAG}
+
+          Web: ${WEB_REPOSITORY}@${WEB_DIGEST}
+          Worker: ${WORKER_REPOSITORY}@${WORKER_DIGEST}
+          Commit: ${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/release/notes.md" \
+            --target "$GITHUB_SHA" \
+            "$RUNNER_TEMP/release/release-record.json"

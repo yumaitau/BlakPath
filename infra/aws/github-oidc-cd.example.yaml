@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  GitHub Actions OIDC role for BlakPath continuous delivery. The role has no
+  access keys. Humans apply this in ap-southeast-2; the pipeline only assumes it.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: yumaitau
+  GitHubRepo:
+    Type: String
+    Default: BlakPath
+  CreateOidcProvider:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ''
+  EksClusterName:
+    Type: String
+    Default: ''
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+  HasCluster: !Not [!Equals [!Ref EksClusterName, '']]
+
+Rules:
+  AustralianRegion:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'ap-southeast-2']
+        AssertDescription: Apply this stack only in ap-southeast-2.
+  OidcConfigured:
+    Assertions:
+      - Assert:
+          !Or [
+            !Equals [!Ref CreateOidcProvider, 'true'],
+            !Not [!Equals [!Ref ExistingOidcProviderArn, '']],
+          ]
+        AssertDescription: Set CreateOidcProvider to true or pass ExistingOidcProviderArn.
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      # CloudFormation still requires a thumbprint. AWS no longer uses it to
+      # validate this provider.
+      ThumbprintList: ['6938fd4d98bab03faadb97b34396831e3780aea1']
+
+  CdRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-github-cd
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated:
+                !If [
+                  CreateProvider,
+                  !Ref GitHubOidcProvider,
+                  !Ref ExistingOidcProviderArn,
+                ]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub '${GitHubOrg}/${GitHubRepo}/.github/workflows/cd.yml@refs/heads/main'
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main'
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:staging'
+                  - !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:production'
+      Policies:
+        - PolicyName: DenyStaticAccessKeys
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DenyAccessKeys
+                Effect: Deny
+                Action: [iam:CreateAccessKey, iam:UpdateAccessKey]
+                Resource: '*'
+
+  EcrPush:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: BlakPathCdEcrPush
+      Roles: [!Ref CdRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AuthToken
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: PushBlakPathImages
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:CompleteLayerUpload
+              - ecr:DescribeImages
+              - ecr:DescribeRepositories
+              - ecr:GetDownloadUrlForLayer
+              - ecr:InitiateLayerUpload
+              - ecr:ListImages
+              - ecr:PutImage
+              - ecr:UploadLayerPart
+            Resource:
+              - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/blakpath/app'
+              - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/blakpath/worker'
+
+  EksRead:
+    Type: AWS::IAM::Policy
+    Condition: HasCluster
+    Properties:
+      PolicyName: BlakPathCdEksRead
+      Roles: [!Ref CdRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DescribeCluster
+            Effect: Allow
+            Action: eks:DescribeCluster
+            Resource: !Sub 'arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${EksClusterName}'
+
+  ClusterAccess:
+    Type: AWS::EKS::AccessEntry
+    Condition: HasCluster
+    Properties:
+      ClusterName: !Ref EksClusterName
+      PrincipalArn: !GetAtt CdRole.Arn
+      Type: STANDARD
+
+  ClusterEdit:
+    Type: AWS::EKS::AccessPolicyAssociation
+    Condition: HasCluster
+    Properties:
+      ClusterName: !Ref EksClusterName
+      PrincipalArn: !GetAtt CdRole.Arn
+      PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy
+      AccessScope:
+        Type: namespace
+        Namespaces: [blakpath, blakpath-staging]
+
+Outputs:
+  RoleArn:
+    Description: Set GitHub repository variable AWS_CD_ROLE_ARN to this ARN. Do not create access keys.
+    Value: !GetAtt CdRole.Arn

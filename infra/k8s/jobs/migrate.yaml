@@ -1,4 +1,5 @@
-# One-shot operational jobs. NOT in kustomization.yaml — apply manually:
+# Manual fallback. The CD pipeline renders a digest-pinned migrate Job and does
+# not apply this mutable tag. NOT in kustomization.yaml.
 #   kubectl apply -f infra/k8s/jobs/migrate.yaml
 #   kubectl apply -f infra/k8s/jobs/seed.yaml
 apiVersion: batch/v1

@@ -7,6 +7,9 @@ with resources owned by the production environment.
 - `workload-roles.example.yaml` separates web, worker and ECS execution roles.
   The application roles have no Secrets Manager permission and no access keys;
   the execution role can inject one named runtime secret into the tasks.
+- `github-oidc-cd.example.yaml` is the GitHub Actions role for continuous
+  delivery. It trusts `token.actions.githubusercontent.com` and has no access
+  keys. Set the stack output as `AWS_CD_ROLE_ARN`. See `docs/cd.md`.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
 
