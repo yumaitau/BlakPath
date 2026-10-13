@@ -1,4 +1,5 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
+import { WORKER_QUEUE_CONCURRENCY } from '@/db/connection-budget';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
 import { closeQueues, type TenantJob } from '@/lib/queues';
@@ -48,8 +49,8 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
     {
       connection,
       prefix: 'bp:queue',
-      // Conservative default; per-queue tuning lands with real processors.
-      concurrency: 4,
+      // Matches DATABASE_WORKER_POOL_MAX: one pooled connection per in-flight job.
+      concurrency: WORKER_QUEUE_CONCURRENCY,
       // Do not autorun until all workers are constructed and listeners wired.
       autorun: false,
     },

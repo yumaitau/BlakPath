@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import 'dotenv/config';
+import { postgresClientOptions } from './postgres-options';
 
 /**
  * Migration entrypoint used by the Docker migration init container and
@@ -12,7 +13,10 @@ async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required to run migrations');
 
-  const sql = postgres(url, { max: 1 });
+  const sql = postgres(
+    url,
+    postgresClientOptions({ role: 'migrate', poolMax: 1, databaseUrl: url }),
+  );
   try {
     const database = drizzle(sql, { casing: 'snake_case' });
 

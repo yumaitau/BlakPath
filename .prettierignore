@@ -13,3 +13,6 @@ src/db/migrations/
 # Coverage / build outputs.
 coverage/
 dist/
+
+# Vendored public CA bundle. Not source.
+certs/*.pem

@@ -56,4 +56,19 @@ describe('production readiness configuration', () => {
       ]),
     );
   });
+
+  it('rejects sslmode=require and every mode weaker than verify-full', () => {
+    for (const sslmode of ['require', 'verify-ca', 'prefer', 'disable']) {
+      const issues = validateProductionReadiness({
+        ...valid,
+        DATABASE_URL: `postgres://app:secret@db.internal/blakpath?sslmode=${sslmode}`,
+      });
+      expect(issues).toEqual([
+        {
+          key: 'DATABASE_URL',
+          message: expect.stringContaining('verify-full'),
+        },
+      ]);
+    }
+  });
 });

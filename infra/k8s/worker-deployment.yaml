@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/name: blakpath-worker
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: blakpath-worker
@@ -31,6 +36,12 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          # Explicit env wins over envFrom. 32 = 8 queues × concurrency 4.
+          env:
+            - name: BLAKPATH_PROCESS
+              value: worker
+            - name: DATABASE_WORKER_POOL_MAX
+              value: '32'
           resources:
             requests:
               cpu: 500m

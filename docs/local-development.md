@@ -35,15 +35,15 @@ exceptions are `src/db/migrate.ts` and instrumentation).
 
 Key local defaults (see `.env.example`):
 
-| Variable                                      | Local value                                            | Notes                                          |
-| --------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------- |
-| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres                                       |
-| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                       |
-| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                          |
-| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                             |
-| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                               |
-| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                     |
-| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — must never decide/score/infer |
+| Variable                                      | Local value                                            | Notes                                                                |
+| --------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------- |
+| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres. No TLS locally. Production requires `sslmode=verify-full`. |
+| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                             |
+| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                |
+| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                   |
+| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                     |
+| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                           |
+| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — must never decide/score/infer                       |
 
 ## Local services (Docker)
 

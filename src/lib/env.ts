@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WEB_POOL_MAX, WORKER_POOL_MAX } from '@/db/connection-budget';
 
 /**
  * Centralised, validated environment configuration.
@@ -23,9 +24,13 @@ const serverSchema = z
     APP_URL: z.string().url().default('http://localhost:3000'),
     APP_REGION: z.string().default('ap-southeast-2'),
 
-    // Database
+    // Database. Workers set BLAKPATH_PROCESS=worker and use the worker pool,
+    // sized separately so queue concurrency is not squeezed into the web pool.
+    // See src/db/connection-budget.ts.
     DATABASE_URL: z.string().url(),
-    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
+    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(WEB_POOL_MAX),
+    DATABASE_WORKER_POOL_MAX: z.coerce.number().int().positive().default(WORKER_POOL_MAX),
+    BLAKPATH_PROCESS: z.enum(['web', 'worker']).default('web'),
 
     // Redis (queues, rate limiting, ephemeral state)
     REDIS_URL: z.string().url(),

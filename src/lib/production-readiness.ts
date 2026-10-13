@@ -58,13 +58,14 @@ export function validateProductionReadiness(
   }
 
   const database = addRequiredUrl(issues, environment, 'DATABASE_URL', 'postgres:');
-  if (
-    database &&
-    !['require', 'verify-ca', 'verify-full'].includes(
-      database.searchParams.get('sslmode') ?? '',
-    )
-  ) {
-    issues.push({ key: 'DATABASE_URL', message: 'must enforce TLS with sslmode' });
+  // `require` is not enough: postgres.js maps it to rejectUnauthorized:false,
+  // so a substitute certificate would be accepted. `verify-ca` skips the hostname.
+  if (database && database.searchParams.get('sslmode')?.toLowerCase() !== 'verify-full') {
+    issues.push({
+      key: 'DATABASE_URL',
+      message:
+        'must use sslmode=verify-full (certificate and hostname). sslmode=require does not verify the server',
+    });
   }
   addRequiredUrl(issues, environment, 'REDIS_URL', 'rediss:');
 

@@ -28,6 +28,11 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
+  // Standalone tracing does not follow the cwd read of the RDS CA bundle.
+  // The Docker runner also copies the file; this covers `next start` output.
+  outputFileTracingIncludes: {
+    '*': ['./certs/rds-global-bundle.pem'],
+  },
   serverExternalPackages: ['@node-rs/argon2', 'postgres', 'ioredis', 'bullmq'],
   experimental: {
     // Server Actions are used sparingly; keep body limits tight.
