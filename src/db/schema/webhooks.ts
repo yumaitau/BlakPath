@@ -18,6 +18,7 @@ import {
 import { webhookDeliveryStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Webhook tables (Phase 7).
@@ -51,8 +52,11 @@ export const webhookEndpoints = pgTable(
     ...timestamps,
     ...softDelete,
   },
-  (table) => [index('webhook_endpoints_org_idx').on(table.organisationId)],
-);
+  (table) => [
+    index('webhook_endpoints_org_idx').on(table.organisationId),
+    tenantIsolationPolicy(),
+  ],
+).enableRLS();
 
 /** A single delivery attempt record for one event to one endpoint. */
 export const webhookDeliveries = pgTable(
@@ -80,8 +84,9 @@ export const webhookDeliveries = pgTable(
       table.endpointId,
     ),
     index('webhook_deliveries_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const webhookEndpointsRelations = relations(webhookEndpoints, ({ one, many }) => ({
   organisation: one(organisations, {

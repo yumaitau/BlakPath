@@ -21,7 +21,10 @@ const client =
     max: env.DATABASE_POOL_MAX,
     idle_timeout: 20,
     connect_timeout: 10,
-    prepare: true,
+    // Prepared statements are planned as the role that first executes them.
+    // Tenant and platform work SET LOCAL ROLE on pooled connections, so a
+    // cached plan would outlive the role change. Unprepared queries re-plan.
+    prepare: false,
   });
 
 if (env.NODE_ENV !== 'production') {

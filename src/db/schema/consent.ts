@@ -8,6 +8,7 @@ import {
 } from './_helpers';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Consent records — the missing consent domain.
@@ -46,8 +47,9 @@ export const consentRecords = pgTable(
   (table) => [
     index('consent_org_subject_idx').on(table.organisationId, table.subjectUserId),
     index('consent_org_purpose_idx').on(table.organisationId, table.purpose),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
   organisation: one(organisations, {

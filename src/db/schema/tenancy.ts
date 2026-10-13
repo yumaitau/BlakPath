@@ -2,6 +2,7 @@ import { relations } from 'drizzle-orm';
 import { boolean, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
 import { primaryId, refId, rowVersion, timestamps } from './_helpers';
 import { organisationStatus } from './enums';
+import { tenantIsolationPolicy, tenantSharedReadPolicy } from './_rls';
 
 /**
  * Tenancy tables.
@@ -74,8 +75,11 @@ export const organisationSettings = pgTable(
     readinessChecklist: jsonb('readiness_checklist'),
     ...timestamps,
   },
-  (table) => [uniqueIndex('organisation_settings_org_unique').on(table.organisationId)],
-);
+  (table) => [
+    uniqueIndex('organisation_settings_org_unique').on(table.organisationId),
+    tenantIsolationPolicy(),
+  ],
+).enableRLS();
 
 /** A DNS domain claimed by an organisation (for email-domain-based routing). */
 export const organisationDomains = pgTable(
@@ -91,8 +95,11 @@ export const organisationDomains = pgTable(
     verificationToken: text('verification_token'),
     ...timestamps,
   },
-  (table) => [uniqueIndex('organisation_domains_domain_unique').on(table.domain)],
-);
+  (table) => [
+    uniqueIndex('organisation_domains_domain_unique').on(table.domain),
+    tenantIsolationPolicy(),
+  ],
+).enableRLS();
 
 /**
  * Feature flags. A null `organisationId` is the platform default for that key;
@@ -118,8 +125,10 @@ export const featureFlags = pgTable(
     // Postgres only when non-null; platform defaults (null) are enforced unique
     // per-key at the application layer. Tenant overrides are unique per (org,key).
     uniqueIndex('feature_flags_org_key_unique').on(table.organisationId, table.key),
+    tenantIsolationPolicy(),
+    tenantSharedReadPolicy(),
   ],
-);
+).enableRLS();
 
 export const organisationsRelations = relations(organisations, ({ one, many }) => ({
   settings: one(organisationSettings, {

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { db, type Database } from '@/db/client';
+import { applyRlsRole, APP_ROLE, PLATFORM_ROLE } from '@/db/rls';
 import { auditEvents } from '@/db/schema';
 import { getTenantContext } from '@/lib/tenancy/context';
 import type { AuditAction, AuditResult, ResourceType } from './events';
@@ -145,6 +146,9 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
   const lockKey = chainLockKey(organisationId);
 
   return db.transaction(async (tx) => {
+    // Tenant chains run as the app role so RLS hides every other organisation.
+    // The platform chain (null organisation) uses the bypass role.
+    await applyRlsRole(tx, organisationId ? APP_ROLE : PLATFORM_ROLE, organisationId);
     // Serialise concurrent appenders on THIS chain only. The lock is released
     // automatically when the transaction commits or rolls back.
     await tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`);

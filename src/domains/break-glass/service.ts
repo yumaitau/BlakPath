@@ -1,5 +1,5 @@
 import { and, desc, eq } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { breakGlassRequests } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';

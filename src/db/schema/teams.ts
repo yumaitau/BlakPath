@@ -9,6 +9,7 @@ import {
 } from './_helpers';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Teams, groups, clients — council tenant model.
@@ -36,8 +37,9 @@ export const teams = pgTable(
   (table) => [
     uniqueIndex('teams_org_slug_unique').on(table.organisationId, table.slug),
     index('teams_org_name_idx').on(table.organisationId, table.name),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** Staff assignment to team. Role is `lead` | `member` (app-checked). */
 export const teamMemberships = pgTable(
@@ -60,8 +62,9 @@ export const teamMemberships = pgTable(
     uniqueIndex('team_memberships_team_user_unique').on(table.teamId, table.userId),
     index('team_memberships_org_team_idx').on(table.organisationId, table.teamId),
     index('team_memberships_org_user_idx').on(table.organisationId, table.userId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** Sub-unit or permission bundle inside tenant, optionally under one team. */
 export const groups = pgTable(
@@ -80,8 +83,9 @@ export const groups = pgTable(
   (table) => [
     uniqueIndex('groups_org_slug_unique').on(table.organisationId, table.slug),
     index('groups_org_team_idx').on(table.organisationId, table.teamId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** Staff assignment to group. */
 export const groupMemberships = pgTable(
@@ -103,8 +107,9 @@ export const groupMemberships = pgTable(
     uniqueIndex('group_memberships_group_user_unique').on(table.groupId, table.userId),
     index('group_memberships_org_group_idx').on(table.organisationId, table.groupId),
     index('group_memberships_org_user_idx').on(table.organisationId, table.userId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Client person record owned by one council tenant. Distinct from auth
@@ -136,8 +141,9 @@ export const clients = pgTable(
     index('clients_org_team_idx').on(table.organisationId, table.assignedTeamId),
     index('clients_org_user_idx').on(table.organisationId, table.linkedUserId),
     index('clients_org_name_idx').on(table.organisationId, table.displayName),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const teamsRelations = relations(teams, ({ one, many }) => ({
   organisation: one(organisations, {

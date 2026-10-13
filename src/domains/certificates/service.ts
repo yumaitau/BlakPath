@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import {
   applications,
   certificates,

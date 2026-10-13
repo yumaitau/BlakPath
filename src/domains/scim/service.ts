@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { z } from 'zod';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { membershipRoles, memberships, organisations, roles, users } from '@/db/schema';
 import { recordAudit } from '@/domains/audit/service';
 import { env } from '@/lib/env';

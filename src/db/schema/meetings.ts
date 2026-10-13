@@ -19,6 +19,7 @@ import { conflictStatus, meetingStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Meeting tables (Phase 5).
@@ -52,8 +53,9 @@ export const meetings = pgTable(
   (table) => [
     index('meetings_org_start_idx').on(table.organisationId, table.scheduledStart),
     index('meetings_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** An application placed on a meeting's agenda, in a given position. */
 export const meetingAgendaItems = pgTable(
@@ -82,8 +84,9 @@ export const meetingAgendaItems = pgTable(
       table.meetingId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * A declared conflict of interest. Tied to an application (and optionally a
@@ -123,8 +126,9 @@ export const conflictDeclarations = pgTable(
       table.organisationId,
       table.meetingId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const meetingsRelations = relations(meetings, ({ one, many }) => ({
   organisation: one(organisations, {

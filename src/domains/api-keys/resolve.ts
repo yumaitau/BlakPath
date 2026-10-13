@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { apiKeys } from '@/db/schema';
 import { isPermission, type Permission } from '@/lib/permissions/catalog';
 import type { TenantContext } from '@/lib/tenancy/context';

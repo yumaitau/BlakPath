@@ -10,6 +10,7 @@ import {
 import { retentionAction } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Retention tables (Phase 7).
@@ -41,8 +42,9 @@ export const retentionPolicies = pgTable(
   },
   (table) => [
     index('retention_policies_org_idx').on(table.organisationId, table.resourceType),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** A legal hold that shields one record from retention until released. */
 export const legalHolds = pgTable(
@@ -70,8 +72,9 @@ export const legalHolds = pgTable(
       table.resourceType,
       table.resourceId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const retentionPoliciesRelations = relations(retentionPolicies, ({ one }) => ({
   organisation: one(organisations, {

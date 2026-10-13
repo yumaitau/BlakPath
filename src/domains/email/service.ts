@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { emailSuppressions } from '@/db/schema';
 import { recordAudit } from '@/domains/audit/service';
 

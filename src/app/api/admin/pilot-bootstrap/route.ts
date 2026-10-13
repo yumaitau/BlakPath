@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { hash as argon2Hash } from '@node-rs/argon2';
 import { uuidv7 } from 'uuidv7';
 import { type NextRequest, NextResponse } from 'next/server';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import {
   accounts,
   membershipRoles,

@@ -12,6 +12,7 @@ import { evidenceRequestStatus, evidenceStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Evidence tables (Phase 3).
@@ -59,8 +60,9 @@ export const evidenceRequests = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * A single uploaded file attached to an application. `status` drives the
@@ -115,8 +117,9 @@ export const evidence = pgTable(
   (table) => [
     index('evidence_org_application_idx').on(table.organisationId, table.applicationId),
     index('evidence_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const evidenceRequestsRelations = relations(evidenceRequests, ({ one, many }) => ({
   organisation: one(organisations, {

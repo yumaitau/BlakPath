@@ -12,6 +12,7 @@ import { boardTaskPriority, boardTaskStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Work-board task table (Kanban).
@@ -61,8 +62,9 @@ export const tasks = pgTable(
       table.position,
     ),
     index('tasks_org_assignee_idx').on(table.organisationId, table.assigneeUserId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const tasksRelations = relations(tasks, ({ one }) => ({
   organisation: one(organisations, {

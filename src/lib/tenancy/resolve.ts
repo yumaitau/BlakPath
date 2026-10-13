@@ -1,5 +1,5 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { memberships, membershipRoles, roles, rolePermissions } from '@/db/schema';
 import type { Permission } from '@/lib/permissions/catalog';
 import { isPermission } from '@/lib/permissions/catalog';
@@ -19,7 +19,8 @@ import { TenantContextError } from './context';
  *
  * This function is the single entry point that route handlers, server actions
  * and job runners call before doing any tenant-scoped work (usually via
- * with-tenant.ts, which wraps the result in runWithTenantContext).
+ * with-tenant.ts, which wraps the result in runWithTenantContext). The lookup
+ * itself uses the BYPASSRLS platform handle: the caller has no tenant role yet.
  */
 
 /** Inputs required to resolve a context. `organisationId` is UNTRUSTED input. */

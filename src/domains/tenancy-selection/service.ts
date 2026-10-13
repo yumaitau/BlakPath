@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { sessions } from '@/db/schema/auth';
 import { resolveTenantContext } from '@/lib/tenancy/resolve';
 

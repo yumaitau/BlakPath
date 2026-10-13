@@ -13,6 +13,7 @@ import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
 import { decisions } from './decisions';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Certificate tables (Phase 6).
@@ -83,8 +84,9 @@ export const certificates = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const certificatesRelations = relations(certificates, ({ one }) => ({
   organisation: one(organisations, {

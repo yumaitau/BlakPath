@@ -1,6 +1,7 @@
 import { and, eq, type SQL } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
-import { db, type Database } from './client';
+import type { Database } from './client';
+import { tenantBoundDb } from './bound-db';
 import { requireTenantContext, TenantIsolationError } from '@/lib/tenancy/context';
 
 /**
@@ -33,7 +34,11 @@ export interface TenantScope {
 export function scopeFor(organisationId: string): TenantScope {
   return {
     organisationId,
-    db,
+    /**
+     * Queries run inside a transaction with SET LOCAL role `blakpath_app` and
+     * `app.org_id`, so Postgres RLS still filters a predicate that was forgotten.
+     */
+    db: tenantBoundDb(organisationId),
     where(orgColumn, ...extra) {
       const predicates = extra.filter((p): p is SQL => p !== undefined);
       return and(eq(orgColumn, organisationId), ...predicates) as SQL;

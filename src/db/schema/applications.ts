@@ -12,6 +12,7 @@ import { applicationPriority, applicationStatus, assignmentStatus } from './enum
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { clients } from './teams';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Application tables (Phase 2).
@@ -97,8 +98,9 @@ export const applications = pgTable(
       table.organisationId,
       table.applicantUserId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * A worker assignment on an application. History is append-mostly: assigning
@@ -139,8 +141,9 @@ export const applicationAssignments = pgTable(
       table.assigneeUserId,
       table.status,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Append-only workflow transition log. One row per status change, recording the
@@ -174,8 +177,9 @@ export const applicationStatusHistory = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * A note attached to an application. `visibility` gates whether a note is
@@ -206,8 +210,9 @@ export const applicationNotes = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const applicationsRelations = relations(applications, ({ one, many }) => ({
   organisation: one(organisations, {

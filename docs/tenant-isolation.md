@@ -89,9 +89,11 @@ tables, migrations and infrastructure — **not** for tenant-owned data.
 
 ### 6. Database constraints & indexes
 
-- `organisation_id` is `NOT NULL` on tenant tables and carries a foreign key to
-  `organisations.id` with `ON DELETE CASCADE`, so orphaned tenant rows cannot
-  exist and closing a tenant removes its data.
+- Tenant-owned `organisation_id` columns that reference `organisations.id`
+  use `ON DELETE CASCADE`, so closing a tenant removes those rows. `roles` and
+  `feature_flags` allow null for platform defaults. `audit_events` and
+  `audit_integrity_checkpoints` allow null for the platform chain and have no
+  organisation foreign key, so closing a tenant does not erase that chain.
 - Uniqueness that must be per-tenant is expressed as a **composite** unique index
   leading with `organisation_id` (e.g. `memberships_org_user_unique`,
   `organisation_settings_org_unique`, `roles_org_slug_unique`).
@@ -102,11 +104,33 @@ tables, migrations and infrastructure — **not** for tenant-owned data.
 
 ### 7. Row-Level Security (defence in depth)
 
-RLS policies on tenant tables restrict rows to the current tenant using a
-session variable (e.g. `app.current_organisation` set from the verified context).
-This is a **backstop**: even a query that somehow omitted the application
-predicate would still be filtered by the database. Application-layer scoping
-remains the primary control; RLS is the second wall.
+Every table with `organisation_id` has `ENABLE` and `FORCE ROW LEVEL SECURITY`.
+Policy `tenant_isolation` (`src/db/schema/_rls.ts`) is `FOR ALL`:
+
+```sql
+USING (organisation_id = current_setting('app.org_id')::uuid)
+WITH CHECK (organisation_id = current_setting('app.org_id')::uuid)
+```
+
+`roles` and `feature_flags` also have `tenant_shared_read`, so a tenant can
+`SELECT` platform defaults (`organisation_id IS NULL`). That policy is not on
+`audit_events` or `audit_integrity_checkpoints`: a null organisation there is
+the platform chain and stays invisible to tenants.
+
+Tenant queries run in a transaction as `blakpath_app` (`NOBYPASSRLS`) after
+`SET LOCAL app.org_id`. `TenantScope.db` (`src/db/bound-db.ts`) opens that
+transaction, so a forgotten `eq(organisationId)` is still filtered. An unset
+`app.org_id` makes the cast fail closed.
+
+`blakpath_platform` is `BYPASSRLS` and is only for vetted pre-tenant paths
+(membership resolution, token lookup, public verification). `src/db/migrate.ts`
+creates both roles before the SQL migrations, because `CREATE ROLE` cannot run
+inside the transaction drizzle wraps a migration in. The migrator needs to be a
+superuser or have `CREATEROLE`. `0020_rls-force-and-roles.sql` grants the roles
+to the migrator and forces RLS. Table owners are subject to the policies
+because RLS is forced. Superusers still bypass them, which is why application
+work must `SET ROLE` to `blakpath_app`. If the runtime role is not the
+migrator, grant both roles to that runtime role as well.
 
 ### 8. Object-storage namespace
 
@@ -142,26 +166,52 @@ These tests are treated as release gates. Any change that would let one fail mus
 not merge.
 
 1. **Row insert always stamps the tenant.** `scope.insertValues` sets
-   `organisation_id`; inserting without a scope is impossible for tenant tables.
-2. **Cross-tenant read returns nothing.** A query built with tenant A's scope
-   returns zero of tenant B's rows even when B's ids are supplied directly.
+   `organisation_id` and overwrites a caller-supplied one.
+   Test: `tests/unit/tenant-isolation-gates.test.ts` — `scope.insertValues stamps the organisation id`.
+2. **Cross-tenant read returns nothing.** Every exported domain read/write is
+   called as tenant A with tenant B's resource ids. The result is empty or an
+   error, it does not contain B's rows, and B's rows do not change. Worker and
+   audit-chain functions that take an organisation id as their scope keep A's
+   id, and B's resource ids are the other arguments.
+   Test: `tests/integration/cross-tenant.test.ts` — `calls every exported domain function as org A with org B ids`.
+   The case list is `tests/integration/cross-tenant-cases.json`, counted by
+   `tests/unit/cross-tenant-coverage.test.ts`.
 3. **`assertOwned` rejects foreign rows.** Handing a tenant-B row to tenant A's
    scope throws `TenantIsolationError`.
+   Test: `tests/unit/tenant-isolation-gates.test.ts` — `assertOwned rejects a foreign row`.
 4. **`assertTenant` mismatch throws.** Mismatched expected/actual org ids throw.
+   Test: `tests/unit/tenant-isolation-gates.test.ts` — `assertTenant throws on mismatch`.
 5. **Missing context throws.** Calling `currentScope()` /
    `requireTenantContext()` with no active context throws `TenantContextError`.
+   Test: `tests/unit/tenant-isolation-gates.test.ts` — `currentScope throws without a tenant context`.
 6. **Browser-supplied org id is ignored.** A request carrying an
    `organisation_id` for a tenant the user is not a member of is refused; the
    context is built only from the DB-verified membership.
-7. **RLS backstop blocks a predicate-less query.** With RLS enabled, a raw query
-   missing the tenant predicate still returns only the current tenant's rows.
+   Test: `tests/unit/tenancy-resolve.test.ts` — `rejects a user with no active membership of the supplied org`.
+7. **RLS backstop blocks a predicate-less query.** With org A set on
+   `blakpath_app`, a query with no tenant predicate returns none of org B.
+   Test: `tests/integration/tenant-rls.test.ts` — `predicate-less query as the app role returns none of org B`.
+   `tests/unit/tenant-rls-migration.test.ts` asserts `ENABLE`, `FORCE`, and
+   `tenant_isolation` in the migration SQL for every tenant table.
 8. **Object-key namespace enforced.** Presigning or reading an object key outside
    the caller's `{organisation_id}/` prefix is refused.
-9. **Queue payload with foreign/invalid org is rejected.** A job message whose
-   org id fails Zod validation or membership re-verification is not processed.
-10. **Cache keys are tenant-prefixed.** Cached/rate-limit entries created under
-    tenant A are not readable under tenant B.
-11. **Audit reads are tenant-scoped.** Tenant A cannot read tenant B's audit
-    events; platform-level (null-org) events are not exposed to tenants.
-12. **Cascade on tenant close.** Deleting an organisation cascades to all its
-    tenant-owned rows, leaving no orphans.
+   Test: `tests/unit/tenant-isolation-gates.test.ts` — `presignUpload refuses a foreign object key`.
+9. **Queue payload missing a tenant is rejected.** `assertTenantJob` refuses a
+   payload with no `organisationId` or `correlationId`, so it is not enqueued.
+   A well-formed organisation id is not proven at enqueue time. The worker
+   rebuilds the context from that id and the call fails closed when the actor
+   has no membership, covered by gate 6.
+   Test: `tests/unit/tenant-isolation-gates.test.ts` — `assertTenantJob rejects a payload without organisationId`.
+10. **Cache keys are tenant-prefixed.** `tenantKey` always starts with
+    `bp:org:{organisationId}:`, so a key built for tenant A is not the key
+    tenant B reads.
+    Test: `tests/unit/tenant-isolation-gates.test.ts` — `tenantKey prefixes the organisation id`.
+11. **Audit reads are tenant-scoped.** As the app role for tenant A, a
+    predicate-less read of `audit_events` returns none of tenant B's events and
+    none of the platform (null-org) chain.
+    Test: `tests/integration/tenant-rls.test.ts` — `predicate-less query as the app role returns none of org B`
+    (the audit tables are part of that sweep).
+12. **Cascade on tenant close.** Where `organisation_id` references
+    `organisations.id`, the foreign key is `ON DELETE CASCADE`. The append-only
+    audit chain is the exception: it has no organisation foreign key.
+    Test: `tests/unit/tenant-isolation-gates.test.ts` — `organisation foreign keys cascade, except the append-only audit chain`.

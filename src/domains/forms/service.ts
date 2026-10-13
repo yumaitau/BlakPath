@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';

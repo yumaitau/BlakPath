@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, isNull, lte, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { db, type Database } from '@/db/client';
+import { applyRlsRole, APP_ROLE, PLATFORM_ROLE } from '@/db/rls';
 import { auditEvents, auditIntegrityCheckpoints } from '@/db/schema';
 import type { AuditAction, AuditResult, ResourceType } from './events';
 import { computeEventHash, toIsoTimestamp, type HashableAuditEvent } from './hash';
@@ -130,6 +131,12 @@ export async function verifyChain(
   options: VerifyChainOptions = {},
   database: Database = db,
 ): Promise<VerifyChainResult> {
+  if (database === db) {
+    return db.transaction(async (tx) => {
+      await applyRlsRole(tx, organisationId ? APP_ROLE : PLATFORM_ROLE, organisationId);
+      return verifyChain(organisationId, options, tx as unknown as Database);
+    });
+  }
   const rows = (await database
     .select()
     .from(auditEvents)
@@ -231,6 +238,16 @@ export async function createCheckpoint(
   input: CreateCheckpointInput,
   database: Database = db,
 ): Promise<{ id: string; result: VerifyChainResult } | null> {
+  if (database === db) {
+    return db.transaction(async (tx) => {
+      await applyRlsRole(
+        tx,
+        input.organisationId ? APP_ROLE : PLATFORM_ROLE,
+        input.organisationId,
+      );
+      return createCheckpoint(input, tx as unknown as Database);
+    });
+  }
   const result = await verifyChain(
     input.organisationId,
     {

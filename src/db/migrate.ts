@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import 'dotenv/config';
+import { ensureRlsRoles } from './rls-roles';
 
 /**
  * Migration entrypoint used by the Docker migration init container and
@@ -15,6 +16,10 @@ async function main() {
   const sql = postgres(url, { max: 1 });
   try {
     const database = drizzle(sql, { casing: 'snake_case' });
+
+    // CREATE ROLE cannot run inside the transaction drizzle wraps migrations in.
+    console.log('[migrate] ensuring row-level security roles…');
+    await ensureRlsRoles(sql);
 
     console.log('[migrate] applying migrations…');
     await migrate(database, { migrationsFolder: './src/db/migrations' });

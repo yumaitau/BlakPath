@@ -1,5 +1,5 @@
 import { and, asc, eq } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import { memberships } from '@/db/schema/membership';
 import { organisations } from '@/db/schema/tenancy';
 import type { ServerSession } from '@/lib/auth/session';
@@ -9,7 +9,7 @@ import type { ServerSession } from '@/lib/auth/session';
  *
  * These run BEFORE any tenant context exists — the user is in the act of
  * choosing which organisation to act within, so there is nothing to scope to
- * yet. They therefore use the raw `db` client directly rather than the
+ * yet. They therefore use the BYPASSRLS platform handle rather than the
  * tenant-aware helpers. They read only the caller's own memberships, keyed by
  * the trusted session user id, and expose no other tenant's data.
  */

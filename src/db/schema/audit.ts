@@ -12,6 +12,7 @@ import { primaryId, refId, timestamps } from './_helpers';
 import { auditResult, breakGlassStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Audit & integrity tables.
@@ -64,8 +65,9 @@ export const auditEvents = pgTable(
   (table) => [
     // Tenant-leading time index for scoped audit queries.
     index('audit_events_org_timestamp_idx').on(table.organisationId, table.timestamp),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * A periodic anchor over a contiguous run of audit events. Verifying a period
@@ -92,8 +94,9 @@ export const auditIntegrityCheckpoints = pgTable(
       table.organisationId,
       table.periodStart,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Emergency ("break-glass") cross-tenant access request. Platform operators do
@@ -132,8 +135,9 @@ export const breakGlassRequests = pgTable(
   },
   (table) => [
     index('break_glass_requests_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const auditEventsRelations = relations(auditEvents, ({ one }) => ({
   organisation: one(organisations, {

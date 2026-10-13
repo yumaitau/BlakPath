@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { z } from 'zod';
 
-import { db } from '@/db/client';
+import { platformDb as db } from '@/db/platform-db';
 import {
   accounts,
   membershipInvitations,
