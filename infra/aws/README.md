@@ -7,6 +7,9 @@ with resources owned by the production environment.
 - `workload-roles.example.yaml` separates web, worker and ECS execution roles.
   The application roles have no Secrets Manager permission and no access keys;
   the execution role can inject one named runtime secret into the tasks.
+  Tenant keys are used only with encryption-context purpose `field` or
+  `platform` (plus `key_health` for the web role's key check). The matching
+  statement for a client's own key policy is in `docs/customer-held-keys.md`.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
 

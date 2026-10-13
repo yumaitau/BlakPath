@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Alert } from '@/components/ui/alert';
 
 export type LockedKeyStatus = 'disabled' | 'pending_deletion' | 'unavailable';
@@ -21,6 +22,16 @@ export function TenantKeyUnavailable({ status }: { status: LockedKeyStatus }) {
           BlakPath did not open this organisation&apos;s records, and it will not show
           them under a different key. A key custodian can restore access. Other
           organisations are unaffected.
+        </p>
+        <p className="mt-2">
+          Organisation administrators can see the key&apos;s status and check it on{' '}
+          <Link
+            href="/settings/encryption-keys"
+            className="text-primary underline underline-offset-4"
+          >
+            Encryption keys
+          </Link>
+          .
         </p>
       </Alert>
     </div>

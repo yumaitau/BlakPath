@@ -75,6 +75,7 @@ test('public support and certificate-verification journeys are usable', async ({
   const destinations = [
     ['Accessibility', '/accessibility', 'Accessibility'],
     ['Privacy', '/privacy', 'Privacy'],
+    ['Key custody', '/key-custody', 'Key custody'],
     ['Support', '/support', 'Support'],
     ['Find an organisation', '/organisations', 'Find an organisation'],
   ] as const;

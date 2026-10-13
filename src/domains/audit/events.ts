@@ -243,6 +243,8 @@ export type AuditAction =
   | 'key.rotated'
   | 'key.status_changed'
   | 'key.unavailable'
+  | 'key.health_checked'
+  | 'key.viewed'
   // Audit self-events (integrity).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'

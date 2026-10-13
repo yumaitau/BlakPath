@@ -63,6 +63,9 @@ Resources:
                     kms:EncryptionContext:purpose:
                       - field
                       - platform
+                      # Wrap-and-unwrap check from Settings → Encryption keys.
+                      # Web only; no record data is wrapped under it.
+                      - key_health
 
   WorkerTaskRole:
     Type: AWS::IAM::Role

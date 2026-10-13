@@ -1,32 +1,20 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { TenantKeyUnavailable } from '@/components/encryption/tenant-key-unavailable';
 import { StaffShell } from '@/components/staff/staff-shell';
 import { getOrganisationKey } from '@/domains/organisation-keys';
-import { getServerSession } from '@/lib/auth/session';
-import {
-  getActiveOrganisationId,
-  listMembershipsForUser,
-} from '@/lib/tenancy/memberships';
+import { loadStaffShell } from '@/lib/tenancy/staff-shell';
 
 /**
  * Authenticated staff shell. This is the UI guard as well as the navigation
  * surface: no staff route renders until the session and active membership have
  * been checked against the database.
+ *
+ * A tenant key that is not active locks every page here. The encryption-keys
+ * settings page lives in the `(key-custody)` group so an administrator can
+ * still see the key's status and check it while records are locked.
  */
 export default async function StaffLayout({ children }: { children: ReactNode }) {
-  const session = await getServerSession();
-  if (!session) redirect('/sign-in');
-
-  const activeOrganisationId = getActiveOrganisationId(session);
-  if (!activeOrganisationId) redirect('/select-organisation');
-
-  const organisations = await listMembershipsForUser(session.user.id);
-  // A stale session can name a membership that was revoked after sign-in. Treat
-  // it exactly like no selection, instead of rendering a misleading shell.
-  if (!organisations.some((org) => org.organisationId === activeOrganisationId)) {
-    redirect('/select-organisation');
-  }
+  const { organisations, activeOrganisationId } = await loadStaffShell();
 
   const key = await getOrganisationKey(activeOrganisationId);
   const locked = key && key.status !== 'active' ? key.status : null;
