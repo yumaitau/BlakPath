@@ -5,16 +5,30 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 ## Deploy
 
-1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
-2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
-   `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
-   `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`.
-3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
-   after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
-5. Run `pnpm release:check` inside the exact web and worker images before
-   promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
-6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+Pushes to `main` run `.github/workflows/cd.yml`. See `docs/cd.md`. The workflow
+assumes an IAM role with GitHub OIDC, pushes the web and worker images to ECR
+by digest, attests provenance and an SBOM, deploys staging, then waits for the
+protected `production` environment. The cluster order is release gate, migrate,
+digest-pinned rollout, smoke (`/api/ready` and sign-in), and workload rollback
+if smoke fails. Migrations are not reversed.
+
+One-time bootstrap, before that pipeline has a Deployment to update:
+
+1. Apply `infra/aws/github-oidc-cd.example.yaml` in `ap-southeast-2`. Set
+   GitHub variable `AWS_CD_ROLE_ARN` to the output. Do not create access keys.
+2. Create Secrets Manager JSON at `/blakpath/production/runtime` and
+   `/blakpath/staging/runtime` with `DATABASE_URL`, `REDIS_URL`,
+   `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`, `SMTP_USER`, `SMTP_PASSWORD`,
+   `EMAIL_WEBHOOK_SECRET`.
+3. Install External Secrets Operator and the cluster secret store.
+4. Create namespaces `blakpath` and `blakpath-staging`. Apply
+   `infra/k8s/overlays/production` and `infra/k8s/overlays/staging` once the
+   staging CMK placeholder has been replaced. After this, the pipeline changes
+   images by digest; do not re-apply the old mutable tags.
+5. `pnpm release:check` runs inside the worker image as the release-gate Job.
+   It rejects static S3 credentials. The SDK uses the workload role.
+6. Confirm `/api/ready`, sign-in, and a clean audit chain. Production also
+   records a git tag and the image digests on the GitHub Release.
 
 ## Secrets and keys
 

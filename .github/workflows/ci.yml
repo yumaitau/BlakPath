@@ -254,4 +254,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-kubectl@v4
       - name: Build kustomization
-        run: kubectl kustomize infra/k8s > /dev/null && echo "kustomize build OK"
+        run: |
+          kubectl kustomize infra/k8s > /dev/null
+          kubectl kustomize infra/k8s/overlays/staging > /dev/null
+          kubectl kustomize infra/k8s/overlays/production > /dev/null
+          echo "kustomize build OK"

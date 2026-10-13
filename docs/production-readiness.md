@@ -7,8 +7,10 @@ region.
 
 ## Release gate
 
-- [ ] Run `pnpm release:check` in the exact production web and worker runtime
-      environments; attach the successful key-only output to the release record.
+- [ ] Promote through `.github/workflows/cd.yml` (`docs/cd.md`): staging first,
+      then the protected production environment. The release-gate Job runs
+      `pnpm release:check` in the worker image before migrate. The GitHub Release
+      records the git tag and both image digests.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.
