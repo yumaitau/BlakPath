@@ -1,6 +1,7 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -34,6 +35,11 @@ import { organisations } from './tenancy';
  * `pending_validation` until the handshake passes. `canaryCiphertext` is the
  * wrapped data key from that handshake (never the plaintext) and is what the
  * health job decrypts.
+ *
+ * Escrow is opt-in. `escrow` may only be true with a signed consent reference
+ * and the digest of the deposited escrow package (see
+ * docs/key-escrow-runbook.md). A rotation clears the flag and the digest,
+ * because the package belongs to the replaced key material.
  */
 export const organisationKeys = pgTable(
   'organisation_keys',
@@ -67,6 +73,15 @@ export const organisationKeys = pgTable(
     /** True when an escrow copy of the key material is held under dual control. */
     escrow: boolean('escrow').notNull().default(false),
     /**
+     * Reference to the signed escrow consent held under the escrow agreement
+     * (contract or e-signature envelope id). Not the document itself.
+     */
+    escrowConsentReference: text('escrow_consent_reference'),
+    /** When the client's authorised signatories signed the escrow consent. */
+    escrowConsentedAt: timestamp('escrow_consented_at', { withTimezone: true }),
+    /** SHA-256 (hex) of the deposited `escrow-package.json` manifest. */
+    escrowPackageDigest: text('escrow_package_digest'),
+    /**
      * Wrapped HMAC key for reference and name lookup. Purpose `blind-index`.
      * Null until the first search or sealed write claims it.
      */
@@ -74,7 +89,13 @@ export const organisationKeys = pgTable(
     rotatedAt: timestamp('rotated_at', { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [uniqueIndex('organisation_keys_org_unique').on(table.organisationId)],
+  (table) => [
+    uniqueIndex('organisation_keys_org_unique').on(table.organisationId),
+    check(
+      'organisation_keys_escrow_consent',
+      sql`${table.escrow} = false OR (${table.escrowConsentReference} IS NOT NULL AND ${table.escrowConsentedAt} IS NOT NULL AND ${table.escrowPackageDigest} IS NOT NULL)`,
+    ),
+  ],
 );
 
 export const organisationKeysRelations = relations(organisationKeys, ({ one }) => ({

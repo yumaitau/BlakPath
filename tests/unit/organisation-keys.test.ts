@@ -30,6 +30,9 @@ const row = {
   keyVersion: 1,
   status: 'active' as const,
   escrow: false,
+  escrowConsentReference: null,
+  escrowConsentedAt: null,
+  escrowPackageDigest: null,
   createdAt: new Date('2026-10-13T00:00:00Z'),
   updatedAt: new Date('2026-10-13T00:00:00Z'),
   rotatedAt: null,
@@ -149,6 +152,134 @@ describe('organisation key changes', () => {
         action: 'key.replacement_started',
         resourceType: 'organisation_key_rewrap',
         resourceId: replaced.rewrapId,
+      }),
+    );
+  });
+});
+
+describe('escrow opt-in', () => {
+  const digest = 'a'.repeat(64);
+  const escrowRow = { ...row, custodyMode: 'client_owned_escrow' as const };
+  const optIn = {
+    organisationId: row.organisationId,
+    consentReference: 'ESCROW-2026-0007',
+    consentedAt: new Date('2026-10-01T00:00:00Z'),
+    packageDigest: digest,
+    recordedByUserId: '018f0000-0000-7000-8000-000000000009',
+  };
+
+  function currentKey(value: unknown): void {
+    select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi
+          .fn()
+          .mockReturnValue({ limit: vi.fn().mockResolvedValue(value ? [value] : []) }),
+      }),
+    });
+  }
+
+  function updateReturns(value: unknown): ReturnType<typeof vi.fn> {
+    const set = vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([value]) }),
+    });
+    update.mockReturnValue({ set });
+    return set;
+  }
+
+  beforeEach(() => {
+    update.mockReset();
+    select.mockReset();
+    recordPlatformAudit.mockReset();
+  });
+
+  it('records consent, package digest and the recording user', async () => {
+    currentKey(escrowRow);
+    const set = updateReturns({
+      ...escrowRow,
+      escrow: true,
+      escrowConsentReference: optIn.consentReference,
+      escrowConsentedAt: optIn.consentedAt,
+      escrowPackageDigest: digest,
+    });
+
+    const { recordEscrowOptIn } = await import('@/domains/organisation-keys');
+    const result = await recordEscrowOptIn(optIn);
+
+    expect(result.escrow).toBe(true);
+    expect(set).toHaveBeenCalledWith({
+      escrow: true,
+      escrowConsentReference: 'ESCROW-2026-0007',
+      escrowConsentedAt: optIn.consentedAt,
+      escrowPackageDigest: digest,
+    });
+    expect(recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'key.escrow_opted_in',
+        resourceType: 'organisation_key',
+        actorUserId: optIn.recordedByUserId,
+        after: expect.objectContaining({
+          data: expect.objectContaining({
+            escrow: true,
+            escrowConsentReference: 'ESCROW-2026-0007',
+            escrowPackageDigest: digest,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('refuses keys whose material AWS generated', async () => {
+    currentKey(row);
+    const { recordEscrowOptIn } = await import('@/domains/organisation-keys');
+    await expect(recordEscrowOptIn(optIn)).rejects.toThrow(/client_owned_escrow/);
+    expect(update).not.toHaveBeenCalled();
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('requires a consent reference and a SHA-256 package digest', async () => {
+    currentKey(escrowRow);
+    const { recordEscrowOptIn } = await import('@/domains/organisation-keys');
+    await expect(recordEscrowOptIn({ ...optIn, consentReference: '  ' })).rejects.toThrow(
+      /consent reference/,
+    );
+    await expect(recordEscrowOptIn({ ...optIn, packageDigest: 'abc' })).rejects.toThrow(
+      /SHA-256/,
+    );
+    await expect(
+      recordEscrowOptIn({ ...optIn, consentedAt: new Date('not a date') }),
+    ).rejects.toThrow(/signing date/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('audits a withdrawal and clears the package digest', async () => {
+    const set = updateReturns({
+      ...escrowRow,
+      escrowConsentReference: 'ESCROW-2026-0007',
+    });
+    const { withdrawEscrow } = await import('@/domains/organisation-keys');
+    await withdrawEscrow(row.organisationId, optIn.recordedByUserId, 'client request');
+
+    expect(set).toHaveBeenCalledWith({ escrow: false, escrowPackageDigest: null });
+    expect(recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'key.escrow_withdrawn',
+        reason: 'client request',
+        actorUserId: optIn.recordedByUserId,
+      }),
+    );
+  });
+
+  it('clears escrow when the key is rotated', async () => {
+    currentKey({ ...escrowRow, escrow: true, escrowPackageDigest: digest });
+    const set = updateReturns({ ...escrowRow, keyVersion: 2 });
+    const { rotateOrganisationKey } = await import('@/domains/organisation-keys');
+    await rotateOrganisationKey(row.organisationId, crossAccountArn);
+
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keyVersion: 2,
+        escrow: false,
+        escrowPackageDigest: null,
       }),
     );
   });
