@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { customAlphabet } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
 import {
@@ -39,7 +38,9 @@ import {
   canRevoke,
   canSign,
   eligibleDecision,
+  generateVerificationCode,
   isValid,
+  isValidOnVerification,
   makeCertificateReference,
   type CertificateStatus,
 } from './status';
@@ -64,12 +65,6 @@ const CERTIFICATE_READ = [
   'certificate:revoke',
   'application:read-any',
 ] as const;
-
-/** URL-safe verification code alphabet (matches isWellFormedVerificationCode). */
-const codeGen = customAlphabet(
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
-  32,
-);
 
 function must<T>(row: T | undefined, what: string): T {
   if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
@@ -161,7 +156,7 @@ export async function generateCertificate(
   const id = uuidv7();
   const now = new Date();
   const reference = makeCertificateReference(id, now.getUTCFullYear());
-  const verificationCode = codeGen();
+  const verificationCode = generateVerificationCode();
   const key = objectKey(scope.organisationId, 'certificates', `${id}.pdf`);
 
   const pdf = await renderCertificatePdf({
@@ -418,6 +413,11 @@ export interface CertificateVerification {
   signatureValid: boolean;
   /** Stored payload hash still matches the rebuilt canonical bytes. */
   payloadIntact: boolean;
+  /**
+   * Issued before BlakPath and migrated in by the organisation. Such a record
+   * has no BlakPath seal; `signedOn` is the original issue date.
+   */
+  issuedBeforeBlakpath: boolean;
 }
 
 export async function verifyCertificate(
@@ -437,6 +437,7 @@ export async function verifyCertificate(
       signingAlgorithm: certificates.signingAlgorithm,
       signingKeyId: certificates.signingKeyId,
       organisationId: certificates.organisationId,
+      issuedBeforeBlakpath: certificates.issuedBeforeBlakpath,
     })
     .from(certificates)
     .where(and(eq(certificates.verificationCode, code), isNull(certificates.deletedAt)))
@@ -457,6 +458,7 @@ export async function verifyCertificate(
   let payloadIntact = false;
   let signatureValid = false;
   if (
+    !cert.issuedBeforeBlakpath &&
     cert.signedAt &&
     cert.payloadHash &&
     cert.signature &&
@@ -492,15 +494,20 @@ export async function verifyCertificate(
     }
   }
 
-  const statusValid = isValid(cert.status as CertificateStatus);
   return {
     // A revoked certificate keeps a valid seal but is NOT a valid credential.
-    valid: statusValid && payloadIntact && signatureValid,
+    valid: isValidOnVerification({
+      status: cert.status as CertificateStatus,
+      issuedBeforeBlakpath: cert.issuedBeforeBlakpath,
+      payloadIntact,
+      signatureValid,
+    }),
     reference: cert.reference,
     organisationName: org?.tradingName ?? org?.legalName ?? 'Unknown organisation',
     status: cert.status as CertificateStatus,
     signedOn: cert.signedAt ? cert.signedAt.toISOString().slice(0, 10) : null,
     signatureValid,
     payloadIntact,
+    issuedBeforeBlakpath: cert.issuedBeforeBlakpath,
   };
 }

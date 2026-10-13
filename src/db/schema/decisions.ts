@@ -1,5 +1,12 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -52,6 +59,14 @@ export const decisions = pgTable(
     }),
     finalisedAt: timestamp('finalised_at', { withTimezone: true }),
     reversedAt: timestamp('reversed_at', { withTimezone: true }),
+    /**
+     * Provenance: true when this outcome was recorded by authorised humans
+     * BEFORE BlakPath and migrated in by a legacy import. The import copies the
+     * recorded human act; it never makes one.
+     */
+    recordedBeforeBlakpath: boolean('recorded_before_blakpath').notNull().default(false),
+    /** Who recorded the legacy outcome (e.g. the committee and meeting), as given. */
+    legacyRecordedBy: text('legacy_recorded_by'),
     ...timestamps,
     ...rowVersion,
     ...softDelete,

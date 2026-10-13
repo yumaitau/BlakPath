@@ -79,6 +79,18 @@ export const applications = pgTable(
     withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
     withdrawnReason: text('withdrawn_reason'),
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    /**
+     * The matter's identifier in the organisation's previous system, when it
+     * was migrated in. Unique per organisation, so re-running the same import
+     * file can never create a duplicate matter.
+     */
+    externalReference: text('external_reference'),
+    /**
+     * Provenance: the legacy import job that created this matter (null for
+     * matters started in BlakPath). Deliberately not a foreign key — import job
+     * records may be purged while the provenance marker stays on the matter.
+     */
+    importJobId: refId('import_job_id'),
     ...timestamps,
     ...rowVersion,
     ...softDelete,
@@ -87,6 +99,11 @@ export const applications = pgTable(
     uniqueIndex('applications_org_reference_unique').on(
       table.organisationId,
       table.reference,
+    ),
+    // NULLs are distinct, so matters without an external reference never clash.
+    uniqueIndex('applications_org_external_reference_unique').on(
+      table.organisationId,
+      table.externalReference,
     ),
     index('applications_org_status_idx').on(table.organisationId, table.status),
     index('applications_org_assignee_idx').on(

@@ -166,6 +166,11 @@ export default async function ApplicationDetailPage({
           status: certificate.status,
           decisionId: certificate.decisionId,
           revokedReason: certificate.revokedReason,
+          issuedBeforeBlakpath: certificate.issuedBeforeBlakpath,
+          // Legacy certificates have no PDF; staff share the verification link.
+          verificationCode: certificate.issuedBeforeBlakpath
+            ? certificate.verificationCode
+            : null,
         })),
       };
     });

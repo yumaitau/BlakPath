@@ -96,7 +96,7 @@ function must<T>(row: T | undefined, what: string): T {
 }
 
 /** Build a human-friendly per-organisation reference from a fresh id. */
-function makeReference(id: string): string {
+export function makeApplicationReference(id: string): string {
   // Year is presentational only; uniqueness is guaranteed by the id tail and
   // the (organisation_id, reference) unique index.
   const year = new Date().getUTCFullYear();
@@ -299,7 +299,7 @@ export async function createApplication(
   }
 
   const id = uuidv7();
-  const reference = makeReference(id);
+  const reference = makeApplicationReference(id);
 
   const inserted = await scope.db
     .insert(applications)

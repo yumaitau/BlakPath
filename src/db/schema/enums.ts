@@ -226,3 +226,15 @@ export const breakGlassStatus = pgEnum('break_glass_status', [
   'expired',
   'revoked',
 ]);
+
+/**
+ * Lifecycle of a legacy data import job. `completed` means every staged row
+ * was processed (individual rows may still have been skipped or failed — see
+ * the job's counts and issues); `failed` means the job stopped early.
+ */
+export const importStatus = pgEnum('import_status', [
+  'pending',
+  'processing',
+  'completed',
+  'failed',
+]);

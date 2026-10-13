@@ -8,7 +8,9 @@ import { verifyCertificate } from '@/domains/certificates';
  * non-personal confirmation of authenticity — whether a certificate with that
  * code exists and is currently valid, its reference, the issuing organisation,
  * the sign date, and whether its cryptographic seal checks out. No applicant
- * detail is exposed.
+ * detail is exposed. A certificate issued before BlakPath (migrated in by the
+ * organisation) is reported as exactly that: a legacy record with no BlakPath
+ * seal, never presented as sealed.
  */
 export const dynamic = 'force-dynamic';
 
@@ -35,11 +37,13 @@ export default async function VerifyCertificatePage({
       <Card>
         <CardHeader>
           <CardTitle>
-            {result?.valid
-              ? 'Valid certificate'
-              : result
-                ? 'This certificate is not valid'
-                : 'Certificate not found'}
+            {result?.valid && result.issuedBeforeBlakpath
+              ? 'Valid certificate — issued before BlakPath'
+              : result?.valid
+                ? 'Valid certificate'
+                : result
+                  ? 'This certificate is not valid'
+                  : 'Certificate not found'}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -53,15 +57,21 @@ export default async function VerifyCertificatePage({
               <dd className="font-medium">{result.status}</dd>
               {result.signedOn ? (
                 <>
-                  <dt className="text-muted-foreground">Signed on</dt>
+                  <dt className="text-muted-foreground">
+                    {result.issuedBeforeBlakpath ? 'Issued on' : 'Signed on'}
+                  </dt>
                   <dd className="font-medium">{result.signedOn}</dd>
                 </>
               ) : null}
-              <dt className="text-muted-foreground">Digital seal</dt>
+              <dt className="text-muted-foreground">
+                {result.issuedBeforeBlakpath ? 'Provenance' : 'Digital seal'}
+              </dt>
               <dd className="font-medium">
-                {result.signatureValid && result.payloadIntact
-                  ? 'Verified — sealed by the issuing organisation'
-                  : 'Not verified — treat with caution'}
+                {result.issuedBeforeBlakpath
+                  ? 'Issued before BlakPath. The issuing organisation migrated this record from its previous system; it has no BlakPath digital seal. Contact the organisation if you need the original.'
+                  : result.signatureValid && result.payloadIntact
+                    ? 'Verified — sealed by the issuing organisation'
+                    : 'Not verified — treat with caution'}
               </dd>
             </dl>
           ) : (

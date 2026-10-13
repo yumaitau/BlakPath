@@ -5,6 +5,7 @@ import { QueueName, type TenantJob } from '@/lib/queues';
 import { processEvidenceScan } from '@/domains/evidence';
 import { processWebhookDelivery } from '@/domains/webhooks';
 import { processExport } from '@/domains/reporting';
+import { processApplicationImport } from '@/domains/imports';
 import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
 import { scopeFor } from '@/db/tenant-db';
@@ -234,6 +235,30 @@ const reminderProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Legacy import processor. Imports the job's staged rows in chunks as the
+ * requesting person (re-verified), reporting progress. Idempotent and
+ * resumable, so BullMQ retries are safe; on the last attempt a transient fault
+ * marks the import failed rather than leaving it "processing" forever.
+ */
+const importProcessor: ProcessorFn = async (job, logger) => {
+  const { organisationId, correlationId } = job.data;
+  const importJobId = (job.data as { importJobId?: unknown }).importJobId;
+  if (typeof importJobId !== 'string' || importJobId.length === 0) {
+    logger.error({ jobId: job.id }, 'import job missing importJobId — dropping');
+    return;
+  }
+  const attempts = job.opts.attempts ?? 1;
+  await processApplicationImport({
+    organisationId,
+    correlationId,
+    importJobId,
+    finalAttempt: job.attemptsMade + 1 >= attempts,
+    onProgress: (percent) => job.updateProgress(percent),
+  });
+  logger.info({ jobId: job.id, organisationId, importJobId }, 'import job settled');
+};
+
+/**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
  * runs. Adding a real processor later is a one-line swap here.
@@ -247,6 +272,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Export]: exportProcessor,
   [QueueName.Webhook]: webhookProcessor,
   [QueueName.Reminder]: reminderProcessor,
+  [QueueName.Import]: importProcessor,
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

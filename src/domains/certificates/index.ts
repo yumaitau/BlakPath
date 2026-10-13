@@ -12,11 +12,14 @@ export {
   canRevoke,
   canSign,
   eligibleDecision,
+  generateVerificationCode,
   isValid,
+  isValidOnVerification,
   isWellFormedVerificationCode,
   makeCertificateReference,
   type CertificateStatus,
   type EligibleDecision,
+  type VerificationFacts,
 } from './status';
 
 export {
