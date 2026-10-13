@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { requestUploadSchema } from '@/domains/evidence/schemas';
 import { FormFieldsArraySchema } from '@/lib/forms/fields';
 
 /** Input validation for form authoring (zod v4). */
@@ -22,6 +23,29 @@ export const updateFormSchema = z
     { message: 'Provide at least one field to update.' },
   );
 export type UpdateFormInput = z.input<typeof updateFormSchema>;
+
+/** Presign a file-field upload on a public form. The field must be type `file`. */
+export const publicFileUploadSchema = requestUploadSchema
+  .omit({ fulfilsRequestId: true })
+  .extend({
+    fieldKey: z.string().regex(/^[a-z][a-z0-9_]{0,40}$/),
+  });
+export type PublicFileUploadInput = z.input<typeof publicFileUploadSchema>;
+
+/**
+ * Staff link a submitted response to a case. An empty body creates a new draft
+ * case. A reference (`APP-YYYY-XXXXXX`) or application id attaches to one that
+ * already exists.
+ */
+export const linkResponseSchema = z.object({
+  applicationId: z.uuid().optional(),
+  reference: z
+    .string()
+    .trim()
+    .regex(/^APP-\d{4}-[A-F0-9]{6}$/)
+    .optional(),
+});
+export type LinkResponseInput = z.input<typeof linkResponseSchema>;
 
 export const createInvitationSchema = z.object({
   recipientName: z.string().trim().min(1).max(200).optional(),
