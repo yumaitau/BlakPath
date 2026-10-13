@@ -58,6 +58,9 @@ ENV DATABASE_URL=${DATABASE_URL} \
     S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Plain JS release gate. Runtime images do not ship pnpm, tsx, or the source
+# tree, so the pre-deploy Job runs `node release-check.cjs`.
+RUN node scripts/build-release-check.mjs
 # Build the Next.js standalone server. `output: 'standalone'` is set in
 # next.config.ts, producing .next/standalone with a minimal node_modules.
 RUN pnpm build
@@ -95,6 +98,8 @@ RUN addgroup -S -g 1001 nodejs \
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
 
 USER nextjs
 EXPOSE 3000
@@ -133,6 +138,8 @@ COPY --chown=worker:nodejs tsconfig.json ./tsconfig.json
 COPY --from=build --chown=worker:nodejs /app/worker ./worker
 COPY --from=build --chown=worker:nodejs /app/src ./src
 COPY --from=build --chown=worker:nodejs /app/scripts ./scripts
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
 
 USER worker
 

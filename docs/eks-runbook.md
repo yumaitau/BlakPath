@@ -7,13 +7,20 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
-   `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
-   `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`.
+   `DATABASE_URL` (`sslmode=verify-full`, `verify-ca`, or `require`),
+   `REDIS_URL` (`rediss`), `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
+   `EMAIL_WEBHOOK_SECRET`, `PAPERBOY_API_KEY`, and `COA_SIGNING_KEY_ID`
+   (KMS key ARN in ap-southeast-2). Do not set `SMTP_USER`, `SMTP_PASSWORD`,
+   `PILOT_BOOTSTRAP_TOKEN`, `COA_SIGNING_LOCAL_KEY_PEM`, or static S3 keys.
 3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
-   after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
-5. Run `pnpm release:check` inside the exact web and worker images before
-   promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
+4. Build and push the web and worker images. Both contain `release-check.cjs`.
+   Roll out with the Deploy workflow or `scripts/eks-deploy.sh <tag>`.
+   The script applies namespace, config, and ExternalSecret, runs the
+   release-check Job in those images with the production ConfigMap and Secret,
+   and applies `infra/k8s` only after the Job exits 0. A failed gate does not
+   roll the workloads. `kubectl apply -k infra/k8s` alone skips that gate.
+5. The gate rejects static S3 and SMTP credentials. Object storage and the SES
+   API use the workload role.
 6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
 ## Secrets and keys
@@ -37,13 +44,13 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
   versioning on, AWS Backup coverage. MinIO exists for local dev only.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
-- PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:
-  create an API key there, store it as `PAPERBOY_API_KEY` in
-  `blakpath-eks-runtime`, and keep `PAPERBOY_URL` in the ConfigMap. Sender
-  contract: `POST {PAPERBOY_URL}/api/v1/emails` with
-  `Authorization: Bearer <key>` and a JSON body of
-  `{from, to, subject, text}`. Wiring the sender to PaperBoy is tracked work;
-  until then mail flows through the SES API under the workload role.
+- PaperBoy (`https://paperboy.yumait.au`) is configured with `PAPERBOY_URL`
+  in the ConfigMap. Because that URL is set, the release gate requires
+  `PAPERBOY_API_KEY` in the runtime secret. Sender contract:
+  `POST {PAPERBOY_URL}/api/v1/emails` with `Authorization: Bearer <key>` and a
+  JSON body of `{from, to, subject, text}`. Wiring the sender to PaperBoy is
+  tracked work; until then mail flows through the SES API under the workload
+  role. Do not put `SMTP_USER` or `SMTP_PASSWORD` in the runtime secret.
 
 ## CoA signing key (KMS)
 

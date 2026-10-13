@@ -42,6 +42,7 @@
     "test:e2e": "playwright test",
     "test:live": "bash scripts/verify-live-stack.sh",
     "release:check": "tsx scripts/check-production-readiness.ts",
+    "release:check:bundle": "node scripts/build-release-check.mjs",
     "test:restore": "bash scripts/verify-restore-drill.sh",
     "screenshot": "tsx scripts/capture-readme-screenshots.ts",
     "screenshot:landing": "tsx scripts/capture-readme-screenshot.ts",

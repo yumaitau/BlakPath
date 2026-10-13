@@ -28,3 +28,5 @@ data:
   CLAMAV_PORT: '3310'
   AI_FEATURES_ENABLED: 'false'
   OTEL_SERVICE_NAME: blakpath
+  # OTEL_EXPORTER_OTLP_ENDPOINT is optional. Leave it unset to keep tracing
+  # off. When set, the release gate requires https on a non-local host.

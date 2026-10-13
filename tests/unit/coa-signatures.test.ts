@@ -93,8 +93,13 @@ describe('coa signatures (local key)', () => {
   it('refuses local keys in production', async () => {
     vi.stubEnv('COA_SIGNING_LOCAL_KEY_PEM', pem);
     vi.stubEnv('NODE_ENV', 'production');
-    const { signCoaPayload, canonicalCoaPayload } = await freshSigning();
-    const PAYLOAD = payload(canonicalCoaPayload);
-    await expect(signCoaPayload(PAYLOAD)).rejects.toThrow(/refused in production/);
+    const { __resetEnvCache } = await import('@/lib/env');
+    __resetEnvCache();
+    await expect(
+      (async () => {
+        const { signCoaPayload, canonicalCoaPayload } = await signing();
+        await signCoaPayload(payload(canonicalCoaPayload));
+      })(),
+    ).rejects.toThrow(/COA_SIGNING_LOCAL_KEY_PEM/);
   });
 });

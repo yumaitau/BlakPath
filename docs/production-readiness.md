@@ -7,8 +7,22 @@ region.
 
 ## Release gate
 
-- [ ] Run `pnpm release:check` in the exact production web and worker runtime
-      environments; attach the successful key-only output to the release record.
+The gate checks the process environment and prints failing keys, never values.
+It requires production `NODE_ENV`, `ap-southeast-2`, HTTPS application URLs,
+TLS database and Redis URLs, customer-managed KMS keys for object storage and
+CoA signing, a non-local ClamAV host, `EMAIL_WEBHOOK_SECRET`, and a production
+mail sender. The sender is the SES API under the workload role, with no
+`SMTP_USER` or `SMTP_PASSWORD`. When `PAPERBOY_URL` or `PAPERBOY_API_KEY` is
+set, both must be set. `PILOT_BOOTSTRAP_TOKEN` and `COA_SIGNING_LOCAL_KEY_PEM`
+must be unset. `OTEL_EXPORTER_OTLP_ENDPOINT` may be unset; when set it must be
+HTTPS and non-local. The same rules run at process boot when
+`NODE_ENV=production`.
+
+- [ ] Roll out with `scripts/eks-deploy.sh <image-tag>` or the Deploy workflow.
+      That runs `node release-check.cjs` in the candidate web and worker images
+      against the production ConfigMap and Secret, and applies workloads only
+      after the Job exits 0. Attach the key-only output to the release record.
+      `pnpm release:check` is the same gate on a machine that has the source tree.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.

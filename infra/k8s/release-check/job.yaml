@@ -1,0 +1,69 @@
+# Pre-deploy gate. Not part of infra/k8s/kustomization.yaml.
+# scripts/eks-deploy.sh applies this Job and blocks the workload rollout
+# unless both containers exit 0.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blakpath-release-check
+  namespace: blakpath
+  labels:
+    app.kubernetes.io/name: blakpath-release-check
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blakpath-release-check
+    spec:
+      serviceAccountName: blakpath
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app:7350f7c
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ['node', 'release-check.cjs']
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']
+        - name: worker
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:7350f7c
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ['node', 'release-check.cjs']
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']

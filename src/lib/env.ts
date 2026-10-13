@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { validateProductionReadiness } from '@/lib/production-readiness';
 
 /**
  * Centralised, validated environment configuration.
@@ -7,6 +8,20 @@ import { z } from 'zod';
  * configuration. Secrets are never logged. Import `env` everywhere instead
  * of reading `process.env` directly so that every value is typed and checked.
  */
+
+/** Next sets this while `next build` imports modules. Runtime boots do not. */
+const NEXT_PRODUCTION_BUILD = 'phase-production-build';
+
+function readinessInput(
+  value: Record<string, unknown>,
+): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === 'string') environment[key] = raw;
+  }
+  return environment;
+}
+
 /**
  * Parse a string flag into a boolean. Zod v4 requires the `.default()` to sit
  * before `.transform()` so the default is a valid *input* to the enum.
@@ -114,12 +129,26 @@ const serverSchema = z
         message: 'S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together',
       });
     }
+    if (value.NODE_ENV !== 'production') return;
+    // The image build imports this module without runtime secrets. Boot still
+    // refuses a bad production configuration once that phase is over.
+    if (process.env.NEXT_PHASE === NEXT_PRODUCTION_BUILD) return;
+    for (const issue of validateProductionReadiness(readinessInput(value))) {
+      context.addIssue({
+        code: 'custom',
+        path: [issue.key],
+        message: issue.message,
+      });
+    }
   });
 
 export type ServerEnv = z.infer<typeof serverSchema>;
 
-function loadEnv(): ServerEnv {
-  const parsed = serverSchema.safeParse(process.env);
+/** Parse an environment mapping. Throws the same boot error as `env`. */
+export function parseEnv(
+  source: Readonly<Record<string, string | undefined>>,
+): ServerEnv {
+  const parsed = serverSchema.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
@@ -128,6 +157,10 @@ function loadEnv(): ServerEnv {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
   return parsed.data;
+}
+
+function loadEnv(): ServerEnv {
+  return parseEnv(process.env);
 }
 
 /**
