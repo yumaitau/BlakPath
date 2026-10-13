@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import { db } from '@/db/client';
 import { organisations } from '@/db/schema';
 import { env } from '@/lib/env';
+import { PLATFORM_AUDIT_CHAIN_KEY } from '@/domains/audit/chain-id';
 import { getQueue, QueueName, type TenantJob } from '@/lib/queues';
 
 /**
@@ -13,6 +14,7 @@ import { getQueue, QueueName, type TenantJob } from '@/lib/queues';
  * only emitted once even when multiple workers begin at the same time. We
  * reconcile the scheduler ids against the active-organisation list so a
  * suspended or closed organisation cannot keep receiving maintenance jobs.
+ * Audit verification also keeps one schedule for the platform (null-org) chain.
  */
 
 const SCHEDULER_PREFIX = 'bp:scheduled:';
@@ -119,11 +121,14 @@ export async function reconcileTenantSchedules(
   input: ReconcileSchedulesInput,
 ): Promise<ReconcileSchedulesResult> {
   const organisationIds = [...new Set(input.organisationIds)].filter(Boolean);
+  const auditTargets = organisationIds.includes(PLATFORM_AUDIT_CHAIN_KEY)
+    ? organisationIds
+    : [...organisationIds, PLATFORM_AUDIT_CHAIN_KEY];
   const [auditRemoved, retentionRemoved, reminderRemoved] = await Promise.all([
     reconcileQueue(
       input.auditQueue,
       QueueName.AuditVerify,
-      organisationIds,
+      auditTargets,
       input.intervals.auditVerifyMs,
     ),
     reconcileQueue(
@@ -143,7 +148,7 @@ export async function reconcileTenantSchedules(
   ]);
 
   return {
-    auditSchedulers: organisationIds.length,
+    auditSchedulers: auditTargets.length,
     retentionSchedulers: organisationIds.length,
     reminderSchedulers: input.reminderQueue ? organisationIds.length : 0,
     removedSchedulers: auditRemoved + retentionRemoved + reminderRemoved,

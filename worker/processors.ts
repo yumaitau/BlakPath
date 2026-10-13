@@ -11,7 +11,7 @@ import { scopeFor } from '@/db/tenant-db';
 import { notifications, users } from '@/db/schema';
 import { sendEmail } from '@/lib/email/mailer';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
-import { verifyChain } from '@/domains/audit';
+import { processAuditVerifyJob } from './audit-verify';
 
 /**
  * Processor registry for the BlakPath background worker.
@@ -153,35 +153,19 @@ const notificationProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Audit-verify processor. Re-walks the tenant's audit chain and reports any
- * divergence as a structured error. A clean chain is a NORMAL result and must
- * not throw (throwing would trigger pointless retries and alarm noise).
+ * Audit-verify processor. Pages the tenant or platform chain from the latest
+ * checkpoint. Divergence emits `audit_integrity_failure` (metric + alarm) and
+ * does not throw: the chain will not heal on retry.
  */
 const auditVerifyProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
-  const result = await verifyChain(organisationId);
-  if (!result.ok && result.divergence) {
-    // Integrity failure is a serious, actionable signal — log it loudly, but do
-    // not throw: the chain will not "heal" on retry.
-    logger.error(
-      {
-        signal: 'audit_integrity_failure',
-        alert: true,
-        jobId: job.id,
-        organisationId,
-        correlationId,
-        eventId: result.divergence.eventId,
-        index: result.divergence.index,
-        reason: result.divergence.reason,
-        eventCount: result.eventCount,
-      },
-      'audit chain verification FAILED — divergence detected',
-    );
-    return;
-  }
-  logger.info(
-    { jobId: job.id, organisationId, eventCount: result.eventCount },
-    'audit chain verified clean',
+  await processAuditVerifyJob(
+    {
+      organisationId,
+      correlationId,
+      ...(job.id !== undefined ? { jobId: job.id } : {}),
+    },
+    logger,
   );
 };
 

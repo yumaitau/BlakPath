@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { queueFailureSignal } from '../../worker/operational-signals';
+import {
+  auditIntegrityFailureSignal,
+  queueFailureSignal,
+} from '../../worker/operational-signals';
 
 describe('worker operational signals', () => {
   it('marks retryable failures without paging', () => {
@@ -8,6 +11,29 @@ describe('worker operational signals', () => {
       alert: false,
       attemptsMade: 2,
       maxAttempts: 5,
+    });
+  });
+
+  it('emits the audit-integrity metric signal without event content', () => {
+    expect(
+      auditIntegrityFailureSignal({
+        chain: 'platform',
+        organisationId: null,
+        eventId: 'evt-1',
+        index: 2,
+        reason: 'hash_mismatch',
+        eventCount: 3,
+      }),
+    ).toEqual({
+      signal: 'audit_integrity_failure',
+      alert: true,
+      metric: 'AuditIntegrityFailures',
+      chain: 'platform',
+      organisationId: null,
+      eventId: 'evt-1',
+      index: 2,
+      reason: 'hash_mismatch',
+      eventCount: 3,
     });
   });
 

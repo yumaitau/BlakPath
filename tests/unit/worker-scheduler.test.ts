@@ -13,6 +13,7 @@ vi.mock('@/lib/queues', () => ({
 
 vi.mock('@/db/client', () => ({ db: {} }));
 
+import { PLATFORM_AUDIT_CHAIN_KEY } from '@/domains/audit/chain-id';
 import { QueueName } from '@/lib/queues';
 import { reconcileTenantSchedules, tenantSchedulerId } from '@worker/scheduler';
 
@@ -58,8 +59,12 @@ describe('tenant maintenance scheduler', () => {
 
   it('schedules each active tenant once and removes only stale maintenance schedules', async () => {
     const staleAudit = tenantSchedulerId(QueueName.AuditVerify, 'suspended-org');
+    const platformAudit = tenantSchedulerId(
+      QueueName.AuditVerify,
+      PLATFORM_AUDIT_CHAIN_KEY,
+    );
     const staleRetention = tenantSchedulerId(QueueName.Retention, 'closed-org');
-    const auditQueue = fakeQueue([staleAudit, 'other-system-schedule']);
+    const auditQueue = fakeQueue([staleAudit, platformAudit, 'other-system-schedule']);
     const retentionQueue = fakeQueue([staleRetention]);
 
     const report = await reconcileTenantSchedules({
@@ -83,16 +88,47 @@ describe('tenant maintenance scheduler', () => {
         name: 'verify',
         organisationId: 'org-b',
       },
+      {
+        id: platformAudit,
+        every: 60_000,
+        name: 'verify',
+        organisationId: PLATFORM_AUDIT_CHAIN_KEY,
+      },
     ]);
     expect(retentionQueue.upserts.map((call) => call.every)).toEqual([120_000, 120_000]);
     expect(auditQueue.removed).toEqual([staleAudit]);
     expect(retentionQueue.removed).toEqual([staleRetention]);
+    expect(retentionQueue.upserts.map((call) => call.organisationId)).not.toContain(
+      PLATFORM_AUDIT_CHAIN_KEY,
+    );
     expect(report).toEqual({
-      auditSchedulers: 2,
+      auditSchedulers: 3,
       retentionSchedulers: 2,
       reminderSchedulers: 0,
       removedSchedulers: 2,
     });
+  });
+
+  it('schedules the platform audit chain when no tenant is active', async () => {
+    const auditQueue = fakeQueue();
+    const retentionQueue = fakeQueue();
+    const report = await reconcileTenantSchedules({
+      organisationIds: [],
+      auditQueue,
+      retentionQueue,
+      intervals: { auditVerifyMs: 86_400_000, retentionSweepMs: 86_400_000 },
+    });
+    expect(auditQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.AuditVerify, PLATFORM_AUDIT_CHAIN_KEY),
+        every: 86_400_000,
+        name: 'verify',
+        organisationId: PLATFORM_AUDIT_CHAIN_KEY,
+      },
+    ]);
+    expect(retentionQueue.upserts).toEqual([]);
+    expect(report.auditSchedulers).toBe(1);
+    expect(report.retentionSchedulers).toBe(0);
   });
 
   it('schedules reminder sweeps when a reminder queue is supplied', async () => {

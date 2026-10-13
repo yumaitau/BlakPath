@@ -22,7 +22,9 @@ incident ticket.
 
 1. Treat this as a security incident. Preserve database snapshots and relevant
    logs; do not edit, delete or “repair” audit rows.
-2. Restrict administrative changes for the affected opaque organisation id.
+2. Restrict administrative changes. `chain` is `tenant` or `platform`. A
+   platform failure has a null organisation id; a tenant failure carries an
+   opaque organisation id. Do not treat the platform chain as a tenant.
 3. Compare the last trusted checkpoint with a restored backup in an isolated
    account and determine the first divergent event.
 4. Escalate to the security owner and affected organisation under the incident

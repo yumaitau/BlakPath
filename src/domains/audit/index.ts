@@ -5,7 +5,7 @@
  *   - `events`  — the closed AuditAction / ResourceType / AuditResult vocabulary.
  *   - `hash`    — canonical serialisation, SHA-256 chaining and redaction.
  *   - `service` — `recordAudit` / `recordPlatformAudit` write path.
- *   - `verify`  — `verifyChain` / `createCheckpoint` integrity tooling.
+ *   - `verify`  — `verifyChain` / `verifyAndCheckpoint` integrity tooling.
  */
 export type { AuditAction, AuditResult, ResourceType } from './events';
 export { AUDIT_RESULTS, isAuditResult } from './events';
@@ -28,10 +28,27 @@ export {
 } from './service';
 
 export type {
+  AuditChainCursor,
+  AuditCheckpointAnchor,
+  AuditCheckpointInsert,
+  AuditPageQuery,
+  AuditVerificationReader,
   ChainDivergence,
   CreateCheckpointInput,
   DivergenceReason,
+  StoredAuditEvent,
+  VerifyAndCheckpointOptions,
+  VerifyAndCheckpointResult,
   VerifyChainOptions,
   VerifyChainResult,
 } from './verify';
-export { AuditChainDivergenceError, createCheckpoint, verifyChain } from './verify';
+export {
+  AUDIT_VERIFY_PAGE_SIZE,
+  AuditChainDivergenceError,
+  createCheckpoint,
+  verifyAndCheckpoint,
+  verifyChain,
+  verifyChainFromPages,
+} from './verify';
+
+export { PLATFORM_AUDIT_CHAIN_KEY, auditOrganisationIdFromJob } from './chain-id';

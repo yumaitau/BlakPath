@@ -75,14 +75,25 @@ chain link at that point.
 
 - Fields: `organisationId` (null = platform chain), `periodStart`, `periodEnd`,
   `eventCount`, `startHash`, `endHash`, and `verifiedAt` / `verifiedBy`.
-- **Verification** re-walks the chain from `startHash` to `endHash`, recomputes
-  each `hash`, confirms every `prevHash` links correctly, and checks
-  `eventCount`. If everything matches, no row was inserted, edited or removed in
-  that period.
-- A **worker job** runs verification periodically (`docs/architecture.md`),
-  recording `verifiedAt`/`verifiedBy` and raising an alert on any mismatch.
-  Authorised users can also trigger verification via `audit:verify`
-  (`docs/authorization-matrix.md`).
+- **Verification** reads the chain in keyset pages ordered by `(timestamp, id)`,
+  the same total order used when appending. Only one page is resident, so a
+  multi-million-event chain stays inside a fixed memory ceiling. Each `hash` is
+  recomputed and every `prevHash` must link to the previous event.
+- The scheduled job resumes after the latest checkpoint for that chain instead
+  of re-walking from genesis. It re-checks the anchored tip, then verifies only
+  events strictly after that tip. A clean run that advances the tip inserts the
+  next checkpoint. A divergent chain is not checkpointed. An unchanged tip keeps
+  the existing checkpoint as the next resume point (a zero-length anchor is not
+  inserted).
+- The worker schedules every active tenant **and** the platform chain
+  (`organisation_id` null). Divergence logs `signal=audit_integrity_failure`
+  with `alert=true`. `infra/aws/operational-alerts.example.yaml` turns that
+  signal into the `AuditIntegrityFailures` metric and the
+  `blakpath-audit-integrity-failure` alarm.
+- Authorised users can also trigger verification via `audit:verify`
+  (`docs/authorization-matrix.md`). `verifyChain` still walks a full chain, or
+  an explicit slice, for restore drills. The scheduled job is the incremental
+  path.
 
 ## Append-only guarantee
 

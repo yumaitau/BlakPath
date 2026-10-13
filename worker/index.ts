@@ -20,7 +20,9 @@ import { queueFailureSignal } from './operational-signals';
  *
  * Security posture: this process holds privileged infrastructure access. It
  * performs NO identity determination — see `worker/processors.ts`. Every job is
- * tenant-bound (`TenantJob.organisationId`). Full processors (malware scan,
+ * tenant-bound (`TenantJob.organisationId`). The platform audit schedule uses a
+ * non-tenant sentinel that the worker maps back to the null-organisation chain.
+ * Full processors (malware scan,
  * certificate/export rendering, email, audit verification, retention, webhooks)
  * land in later phases.
  */

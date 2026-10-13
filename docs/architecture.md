@@ -173,8 +173,9 @@ path:
 - **Evidence scanning** — pick up a quarantined upload, scan with ClamAV,
   promote clean files or hold/reject infected ones (`docs/evidence-scanning-design.md`).
 - **Notifications** — send email via SMTP.
-- **Audit integrity verification** — periodically re-walk the hash chain and
-  write/verify integrity checkpoints (`docs/audit-log-design.md`).
+- **Audit integrity verification** — page each active tenant chain and the
+  platform chain from the latest checkpoint, then alarm on divergence
+  (`docs/audit-log-design.md`).
 - **Retention & lifecycle** — apply retention/deletion policies where lawful,
   respecting official-record obligations (`docs/privacy-architecture.md`).
 

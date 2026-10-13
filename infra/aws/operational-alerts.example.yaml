@@ -89,7 +89,10 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: blakpath-audit-integrity-failure
-      AlarmDescription: Audit hash-chain divergence detected; preserve data and escalate immediately.
+      AlarmDescription: >-
+        Audit hash-chain divergence on a tenant or platform chain. Preserve data
+        and escalate immediately. Metric AuditIntegrityFailures is emitted from
+        worker logs with signal audit_integrity_failure.
       Namespace: BlakPath/Operations
       MetricName: AuditIntegrityFailures
       Statistic: Sum
