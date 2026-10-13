@@ -12,6 +12,7 @@ const config = [
     ignores: [
       '.next/**',
       'node_modules/**',
+      'coverage/**',
       'src/db/migrations/**',
       'playwright-report/**',
       'test-results/**',

@@ -122,8 +122,10 @@ jobs:
       - name: Seed development bootstrap
         run: pnpm db:seed
 
-      - name: Run tests
-        run: pnpm test
+      - name: Run tests with coverage
+        # pnpm 9 treats a bare `--coverage` as its own option and rejects it.
+        # The separator forwards the flag to `vitest run`.
+        run: pnpm test -- --coverage
 
   # ---------------------------------------------------------------------------
   # Production build. Ensures the Next.js standalone output compiles.
