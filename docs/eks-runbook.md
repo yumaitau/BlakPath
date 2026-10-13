@@ -9,7 +9,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
    `ENCRYPTION_MASTER_KEY`, `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
-   `AUDIT_ANCHOR_SIGNING_KEY_ID`. Do not store `SMTP_USER` or `SMTP_PASSWORD`.
+   `AUDIT_ANCHOR_SIGNING_KEY_ID`. `EMAIL_SNS_TOPIC_ARN` is not a secret; it
+   lives in the ConfigMap. Do not store `SMTP_USER` or `SMTP_PASSWORD`.
    Create a separate secret at `/blakpath/production/migrator` with only
    `DATABASE_MIGRATION_URL` (role `blakpath_migrator`). Do not put the
    migrator URL in the runtime secret.
@@ -154,8 +155,14 @@ Record who rotated, when, and which keys. Do not record the values.
   (see `infra/aws/audit-anchor-bucket.example.yaml`). The worker may put and
   read objects. It must not be granted delete or governance bypass. Web tasks
   do not use this bucket.
-- SES in ap-southeast-2 with SNS bounce/complaint topic wired to
-  `POST /api/email/events` (shared-secret gated, persisted suppressions).
+- SES in ap-southeast-2 publishes permanent bounces and complaints to an SNS
+  topic. Set `EMAIL_SNS_TOPIC_ARN` to that topic. Delivery target is
+  `POST /api/email/events`. The app checks the SNS signature and the pinned
+  topic, and accepts `EMAIL_WEBHOOK_SECRET` only as the
+  `x-email-webhook-secret` header. SNS cannot set that header; a forwarder
+  (API Gateway or Lambda) must add it from Secrets Manager. Transient bounces
+  are not suppressed. A platform operator clears a suppression with
+  `POST /api/admin/email-suppressions` (step-up, audited).
 - PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:
   create an API key there, store it as `PAPERBOY_API_KEY` in
   `blakpath-eks-runtime`, and keep `PAPERBOY_URL` in the ConfigMap. Sender
