@@ -15,6 +15,7 @@ import { createCheckpoint, verifyChain } from '@/domains/audit';
 import { settleAuditChain } from '@/domains/audit/anchor';
 import { createS3AuditAnchorStore } from '@/domains/audit/anchor-s3';
 import { loadAnchorSigner } from '@/domains/audit/anchor-sign';
+import { acceptTenantJob } from './tenant-job';
 
 /**
  * Processor registry for the BlakPath background worker.
@@ -29,8 +30,9 @@ import { loadAnchorSigner } from '@/domains/audit/anchor-sign';
  *      (ClamAV) is unavailable, the job MUST fail (and be retried) — it must
  *      never default to "clean".
  *
- * Every job carries `organisationId` (see `TenantJob`); real processors must
- * establish a verified TenantContext before touching any data.
+ * Every job carries `organisationId` (see `TenantJob`). The worker parses that
+ * payload and checks the organisation is active before a processor opens a
+ * tenant scope. A job that fails either check is dropped and audited.
  *
  * Phase-1: these are thin, REAL stubs. They log structured operational context
  * and acknowledge the job so queues drain and the system is observable end to
@@ -256,19 +258,33 @@ const reminderProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Parse the payload and require an active organisation before the processor
+ * opens a tenant scope. A rejected job returns normally so BullMQ does not
+ * retry it.
+ */
+function withActiveTenant(processor: ProcessorFn): ProcessorFn {
+  return async (job, logger) => {
+    const accepted = await acceptTenantJob(job, logger);
+    if (!accepted) return;
+    await processor(job, logger);
+  };
+}
+
+/**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
- * runs. Adding a real processor later is a one-line swap here.
+ * runs. Register processors through `withActiveTenant` — a raw processor would
+ * scope from the queue payload alone.
  */
 export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
-  [QueueName.MalwareScan]: malwareScanProcessor,
-  [QueueName.Email]: emailProcessor,
-  [QueueName.Notification]: notificationProcessor,
-  [QueueName.AuditVerify]: auditVerifyProcessor,
-  [QueueName.Retention]: retentionProcessor,
-  [QueueName.Export]: exportProcessor,
-  [QueueName.Webhook]: webhookProcessor,
-  [QueueName.Reminder]: reminderProcessor,
+  [QueueName.MalwareScan]: withActiveTenant(malwareScanProcessor),
+  [QueueName.Email]: withActiveTenant(emailProcessor),
+  [QueueName.Notification]: withActiveTenant(notificationProcessor),
+  [QueueName.AuditVerify]: withActiveTenant(auditVerifyProcessor),
+  [QueueName.Retention]: withActiveTenant(retentionProcessor),
+  [QueueName.Export]: withActiveTenant(exportProcessor),
+  [QueueName.Webhook]: withActiveTenant(webhookProcessor),
+  [QueueName.Reminder]: withActiveTenant(reminderProcessor),
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

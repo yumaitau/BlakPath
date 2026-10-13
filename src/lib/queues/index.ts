@@ -1,15 +1,17 @@
 import { Queue, type JobsOptions, type QueueOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
+import { tenantJobSchema } from './tenant-job';
 
 /**
  * BullMQ queue factory.
  *
  * Every background job operates on behalf of exactly one organisation. Its
- * payload MUST carry `organisationId` so the worker can establish a verified
- * TenantContext before touching data — a job with no tenant is rejected at
- * enqueue time. Job payloads must never embed applicant PII or evidence
- * content; pass opaque ids and let the worker fetch tenant-scoped rows.
+ * payload MUST carry `organisationId`. The shape is checked at enqueue and
+ * parsed again when the worker consumes the job, which also checks that the
+ * organisation is active before any tenant scope is opened. Job payloads must
+ * never embed applicant PII or evidence content; pass opaque ids and let the
+ * worker fetch tenant-scoped rows.
  */
 
 /** Phase-1 queues. Values are the concrete Redis queue names. */
@@ -67,14 +69,11 @@ export function getQueue<T extends TenantJob = TenantJob>(
  * mis-constructed job can never run without a tenant context.
  */
 export function assertTenantJob<T extends TenantJob>(payload: T): T {
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Job payload must be an object');
-  }
-  if (!payload.organisationId) {
-    throw new Error('Job payload is missing organisationId — refusing to enqueue');
-  }
-  if (!payload.correlationId) {
-    throw new Error('Job payload is missing correlationId — refusing to enqueue');
+  const parsed = tenantJobSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(
+      'Job payload is missing a valid organisationId or correlationId — refusing to enqueue',
+    );
   }
   return payload;
 }

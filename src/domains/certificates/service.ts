@@ -407,6 +407,25 @@ export async function listCertificates(applicationId: string): Promise<Certifica
     .orderBy(desc(certificates.createdAt));
 }
 
+/**
+ * Recorded final outcome for a decision in this organisation.
+ * Returns null when that organisation has no such decision.
+ * The value is a human record; this lookup never derives one.
+ */
+export async function findDecisionOutcome(
+  organisationId: string,
+  decisionId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ outcome: decisions.finalOutcome })
+    .from(decisions)
+    .where(
+      and(eq(decisions.id, decisionId), eq(decisions.organisationId, organisationId)),
+    )
+    .limit(1);
+  return rows[0]?.outcome ?? null;
+}
+
 /** Public, non-personal authenticity check by verification code. Unauthenticated. */
 export interface CertificateVerification {
   valid: boolean;
@@ -463,11 +482,7 @@ export async function verifyCertificate(
     cert.signingAlgorithm &&
     cert.signingKeyId
   ) {
-    const decisionRows = await db
-      .select({ outcome: decisions.finalOutcome })
-      .from(decisions)
-      .where(eq(decisions.id, cert.decisionId))
-      .limit(1);
+    const outcome = await findDecisionOutcome(cert.organisationId, cert.decisionId);
     const canonical = canonicalCoaPayload({
       v: 1,
       certificateId: cert.id,
@@ -475,7 +490,7 @@ export async function verifyCertificate(
       reference: cert.reference,
       applicationId: cert.applicationId,
       decisionId: cert.decisionId,
-      outcome: decisionRows[0]?.outcome ?? 'unknown',
+      outcome: outcome ?? 'unknown',
       verificationCode: cert.verificationCode,
       signedAt: cert.signedAt.toISOString(),
     });

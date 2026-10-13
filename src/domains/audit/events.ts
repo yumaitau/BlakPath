@@ -229,6 +229,8 @@ export type AuditAction =
   | 'break_glass.expired'
   | 'break_glass.tenant_notified'
   | 'break_glass.reviewed'
+  // Background jobs that were not run.
+  | 'job.rejected'
   // Integrations.
   | 'integration.connected'
   | 'integration.disconnected'
@@ -299,6 +301,7 @@ export type ResourceType =
   | 'retention_policy'
   | 'break_glass_request'
   | 'integration'
+  | 'job'
   | 'search'
   | 'audit_chain';
 
