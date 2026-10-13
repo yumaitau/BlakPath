@@ -1,12 +1,12 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { twoFactor } from 'better-auth/plugins';
-import { passkey } from '@better-auth/passkey';
 import { hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
 import { uuidv7 } from 'uuidv7';
 import { db, schema } from '@/db/client';
 import { env, isProduction } from '@/lib/env';
 import { sendVerificationEmail, sendPasswordResetEmail } from './emails';
+import { createAuthPlugins } from './plugins';
+import { assertAuthSchemaCoverage } from './schema-coverage';
 
 /**
  * Better Auth configuration for BlakPath.
@@ -23,11 +23,13 @@ import { sendVerificationEmail, sendPasswordResetEmail } from './emails';
  *   using OWASP-aligned parameters. Plaintext credentials never touch the DB.
  * - MFA is first-class: WebAuthn passkeys (phishing-resistant, preferred) and
  *   TOTP with recovery codes. Staff MFA is enforced by `staff-policy.ts`.
+ *   Enrolment and second-factor lockout are stored on the auth tables; see
+ *   `schema-coverage.ts`.
  * - Cookies are httpOnly + SameSite=Lax, and Secure in production. Sessions
  *   are short-lived with sliding renewal and an explicit "remember me" ceiling.
  * - Rate limiting is enabled to blunt credential-stuffing and brute force; the
- *   TOTP plugin enforces account lockout on repeated failed second-factor
- *   attempts.
+ *   TOTP plugin records repeated failed second-factor attempts on the factor
+ *   row and refuses verification until the lock window ends.
  * - IDs are application-generated UUIDv7 so they are known before insert and
  *   are time-ordered, matching the Drizzle schema's `uuid` primary keys.
  *
@@ -52,6 +54,13 @@ const ARGON2_OPTIONS = {
   parallelism: 1,
   outputLen: 32,
 } as const;
+
+/** Hash a credential password with the same Argon2id parameters sign-in uses. */
+export function hashCredentialPassword(password: string): Promise<string> {
+  return argon2Hash(password, ARGON2_OPTIONS);
+}
+
+assertAuthSchemaCoverage();
 
 export const auth = betterAuth({
   appName: 'BlakPath',
@@ -89,7 +98,7 @@ export const auth = betterAuth({
     maxPasswordLength: 256,
     autoSignIn: false,
     password: {
-      hash: (password) => argon2Hash(password, ARGON2_OPTIONS),
+      hash: (password) => hashCredentialPassword(password),
       verify: ({ hash, password }) => argon2Verify(hash, password),
     },
     sendResetPassword: async ({ user, url, token }) => {
@@ -198,34 +207,7 @@ export const auth = betterAuth({
     },
   },
 
-  plugins: [
-    /**
-     * TOTP two-factor with recovery codes. `skipVerificationOnEnable: false`
-     * forces the user to prove they can generate a valid code before 2FA is
-     * activated, so nobody locks themselves out with a mis-scanned secret.
-     * Account lockout on repeated failed second-factor attempts is handled by
-     * the plugin's built-in failure handling.
-     */
-    twoFactor({
-      issuer: 'BlakPath',
-      skipVerificationOnEnable: false,
-      backupCodes: {
-        amount: 10,
-        length: 10,
-      },
-    }),
-
-    /**
-     * WebAuthn passkeys — phishing-resistant, the preferred staff second
-     * factor. `rpID`/`origin` are derived from the configured app URL so
-     * credentials are bound to this origin only.
-     */
-    passkey({
-      rpID: new URL(env.BETTER_AUTH_URL).hostname,
-      rpName: 'BlakPath',
-      origin: env.BETTER_AUTH_URL,
-    }),
-  ],
+  plugins: createAuthPlugins(env.BETTER_AUTH_URL),
 });
 
 export type Auth = typeof auth;

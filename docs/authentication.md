@@ -11,14 +11,14 @@ data on its own — that comes from a DB-verified membership plus permissions
 
 ## Tables and what they hold
 
-| Table           | Better Auth model | Notes                                                                                          |
-| --------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
-| `users`         | `user`            | Account identity. `isPlatformOperator` marks BlakPath staff and grants **no** tenant access.   |
-| `accounts`      | `account`         | Credential/OAuth links. `password` is **Better-Auth-hashed** (argon2) — never plaintext.       |
-| `sessions`      | `session`         | Active sessions. `activeOrganisationId` is advisory; `lastAuthenticatedAt` drives step-up.     |
-| `verifications` | `verification`    | Single-use, expiring values for email verification, reset, OTP.                                |
-| `passkeys`      | passkey plugin    | WebAuthn credentials; **public key only**, no private material stored.                         |
-| `twoFactors`    | twoFactor plugin  | TOTP `secret` and `backupCodes` stored **envelope-encrypted (AES-256-GCM)** — ciphertext only. |
+| Table           | Better Auth model | Notes                                                                                                                                                                                |
+| --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `users`         | `user`            | Account identity. `isPlatformOperator` marks BlakPath staff and grants **no** tenant access. `twoFactorEnabled` is set only after a TOTP code is confirmed.                          |
+| `accounts`      | `account`         | Credential/OAuth links. `password` is **Better-Auth-hashed** (argon2) — never plaintext.                                                                                             |
+| `sessions`      | `session`         | Active sessions. `activeOrganisationId` is advisory; `lastAuthenticatedAt` drives step-up.                                                                                           |
+| `verifications` | `verification`    | Single-use, expiring values for email verification, reset, OTP.                                                                                                                      |
+| `passkeys`      | passkey plugin    | WebAuthn credentials; **public key only**, no private material stored. Includes the authenticator `aaguid`.                                                                          |
+| `twoFactors`    | twoFactor plugin  | TOTP `secret` and `backupCodes` stored **envelope-encrypted (AES-256-GCM)** — ciphertext only. `verified`, `failedVerificationCount` and `lockedUntil` record enrolment and lockout. |
 
 ## Better Auth setup
 
@@ -30,6 +30,9 @@ data on its own — that comes from a DB-verified membership plus permissions
   plaintext credential.
 - **Plugins enabled:** email/password, email verification, password reset,
   **passkey** (WebAuthn), **two-factor** (TOTP + recovery codes).
+- **Schema coverage:** startup and `pnpm test` compare those plugins' fields
+  with the Drizzle auth tables (`src/lib/auth/schema-coverage.ts`). A missing
+  field refuses to boot. The adapter would otherwise drop the write.
 - **Region:** all auth data resides in `ap-southeast-2` like the rest of the
   platform (`docs/privacy-architecture.md`).
 
@@ -137,6 +140,9 @@ sequenceDiagram
   is single-use. Using one is an audited event.
 - Repeated failed attempts are rate-limited (Redis-backed, tenant/identity
   prefixed) to slow credential-stuffing.
+- Failed TOTP verifications are also counted on the factor row. After 10
+  consecutive failures the factor stays locked for 15 minutes. A later success
+  clears the count. The deadline is stored in Postgres, not only in memory.
 - Account recovery that would reset a factor is treated as sensitive and audited;
   it never silently disables MFA for staff.
 
