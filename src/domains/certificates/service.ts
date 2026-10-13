@@ -11,7 +11,7 @@ import {
   organisationSettings,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -29,11 +29,18 @@ import {
   putObjectBytes,
 } from '@/lib/storage/s3';
 import {
+  createHolderBinding,
+  dateOfBirthFromIntake,
+  holderDetailsMatch,
+} from './holder-binding';
+import {
+  checkCertificateHolderSchema,
   generateCertificateSchema,
   revokeCertificateSchema,
   type GenerateCertificateInput,
   type RevokeCertificateInput,
 } from './schemas';
+import { allowCertificateLookup, allowHolderCheck } from './verify-limit';
 import { renderCertificatePdf } from './render';
 import {
   canRevoke,
@@ -52,7 +59,9 @@ import {
  * `requireRecentAuth` — the service cannot see the session); revoke if needed.
  * Only a signed, non-revoked certificate is downloadable or verifies as valid.
  * A public `verifyCertificate` needs no session — the code is the capability and
- * returns only non-personal confirmation of authenticity.
+ * returns only non-personal confirmation of authenticity. A separate holder
+ * check compares a name the verifier types with a salted hash; it never returns
+ * the recorded name.
  */
 
 export type CertificateRow = typeof certificates.$inferSelect;
@@ -128,7 +137,10 @@ export async function generateCertificate(
   }
 
   const appRows = await scope.db
-    .select({ applicantName: applications.applicantName })
+    .select({
+      applicantName: applications.applicantName,
+      intake: applications.intake,
+    })
     .from(applications)
     .where(
       scope.where(
@@ -138,6 +150,10 @@ export async function generateCertificate(
     )
     .limit(1);
   const application = must(appRows[0], 'application');
+  const holder = createHolderBinding({
+    name: application.applicantName,
+    dateOfBirth: dateOfBirthFromIntake(application.intake),
+  });
 
   const orgRows = await db
     .select({
@@ -193,6 +209,9 @@ export async function generateCertificate(
         status: 'draft',
         pdfObjectKey: key,
         sha256,
+        holderBindingSalt: holder.salt,
+        holderNameHash: holder.nameHash,
+        holderDobHash: holder.dobHash,
       }),
     )
     .returning();
@@ -212,13 +231,17 @@ export async function generateCertificate(
 }
 
 /**
- * Canonical CoA payload (v1).
+ * Canonical CoA payload.
  *
  * The exact bytes the organisation's signing key attests. Field order is
- * fixed and values are reprojections of the stored row — verification rebuilds
- * these same bytes from the database and checks the signature, so any
- * tampering with the recorded outcome, reference, or parties breaks the seal.
- * No personal data beyond what the certificate itself already discloses.
+ * fixed and verification rebuilds these same bytes from the database, so
+ * tampering with a sealed field breaks the seal.
+ *
+ * Version 1 seals the reference, parties and outcome only. Those bytes must
+ * stay unchanged so certificates already signed still verify.
+ * Version 2 adds a salted hash of the holder name printed on the PDF, an
+ * optional salted date-of-birth hash, and the PDF SHA-256. The name itself is
+ * not in the payload.
  */
 export interface CoaCanonicalPayload {
   v: 1;
@@ -244,6 +267,125 @@ export function canonicalCoaPayload(input: CoaCanonicalPayload): string {
     verificationCode: input.verificationCode,
     signedAt: input.signedAt,
   });
+}
+
+export interface CoaCanonicalPayloadV2 {
+  v: 2;
+  certificateId: string;
+  organisationId: string;
+  reference: string;
+  applicationId: string;
+  decisionId: string;
+  outcome: string;
+  verificationCode: string;
+  signedAt: string;
+  holderNameHash: string;
+  holderDobHash: string | null;
+  pdfSha256: string;
+}
+
+export function canonicalCoaPayloadV2(input: CoaCanonicalPayloadV2): string {
+  return JSON.stringify({
+    v: 2,
+    certificateId: input.certificateId,
+    organisationId: input.organisationId,
+    reference: input.reference,
+    applicationId: input.applicationId,
+    decisionId: input.decisionId,
+    outcome: input.outcome,
+    verificationCode: input.verificationCode,
+    signedAt: input.signedAt,
+    holderNameHash: input.holderNameHash,
+    holderDobHash: input.holderDobHash,
+    pdfSha256: input.pdfSha256,
+  });
+}
+
+interface StoredSealInput {
+  payloadVersion: string;
+  certificateId: string;
+  organisationId: string;
+  reference: string;
+  applicationId: string;
+  decisionId: string;
+  outcome: string;
+  verificationCode: string;
+  signedAt: string;
+  holderNameHash: string | null;
+  holderDobHash: string | null;
+  pdfSha256: string | null;
+}
+
+/** Rebuild the bytes that were signed, or null when the stored row cannot. */
+export function canonicalPayloadForVersion(input: StoredSealInput): string | null {
+  const common = {
+    certificateId: input.certificateId,
+    organisationId: input.organisationId,
+    reference: input.reference,
+    applicationId: input.applicationId,
+    decisionId: input.decisionId,
+    outcome: input.outcome,
+    verificationCode: input.verificationCode,
+    signedAt: input.signedAt,
+  };
+  if (input.payloadVersion === '1') {
+    return canonicalCoaPayload({ v: 1, ...common });
+  }
+  if (input.payloadVersion === '2' && input.holderNameHash && input.pdfSha256) {
+    return canonicalCoaPayloadV2({
+      v: 2,
+      ...common,
+      holderNameHash: input.holderNameHash,
+      holderDobHash: input.holderDobHash,
+      pdfSha256: input.pdfSha256,
+    });
+  }
+  return null;
+}
+
+/**
+ * Binding stored at generation matches the name rendered onto the PDF.
+ * Drafts created before that column existed are bound here from the application
+ * recorded at sign time.
+ */
+async function holderBindingForSign(existing: CertificateRow): Promise<{
+  salt: string;
+  nameHash: string;
+  dobHash: string | null;
+  pdfSha256: string;
+}> {
+  if (!existing.sha256) {
+    throw new AuthorizationError('POLICY_DENIED', 'This certificate has no PDF to seal.');
+  }
+  if (existing.holderBindingSalt && existing.holderNameHash) {
+    return {
+      salt: existing.holderBindingSalt,
+      nameHash: existing.holderNameHash,
+      dobHash: existing.holderDobHash,
+      pdfSha256: existing.sha256,
+    };
+  }
+  const scope = currentScope();
+  const [application] = await scope.db
+    .select({
+      applicantName: applications.applicantName,
+      intake: applications.intake,
+    })
+    .from(applications)
+    .where(
+      scope.where(
+        applications.organisationId,
+        eq(applications.id, existing.applicationId),
+        isNull(applications.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!application) throw new AuthorizationError('POLICY_DENIED');
+  const created = createHolderBinding({
+    name: application.applicantName,
+    dateOfBirth: dateOfBirthFromIntake(application.intake),
+  });
+  return { ...created, pdfSha256: existing.sha256 };
 }
 
 /**
@@ -272,8 +414,9 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
     .from(decisions)
     .where(scope.where(decisions.organisationId, eq(decisions.id, existing.decisionId)))
     .limit(1);
-  const canonical = canonicalCoaPayload({
-    v: 1,
+  const binding = await holderBindingForSign(existing);
+  const canonical = canonicalCoaPayloadV2({
+    v: 2,
     certificateId: id,
     organisationId: ctx.organisationId,
     reference: existing.reference,
@@ -282,6 +425,9 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
     outcome: decision?.outcome ?? 'unknown',
     verificationCode: existing.verificationCode,
     signedAt: signedAt.toISOString(),
+    holderNameHash: binding.nameHash,
+    holderDobHash: binding.dobHash,
+    pdfSha256: binding.pdfSha256,
   });
   const { signCoaPayload } = await import('@/lib/kms/sign');
   const seal = await signCoaPayload(canonical);
@@ -291,10 +437,14 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
       status: 'signed',
       signedByUserId: ctx.userId,
       signedAt,
+      payloadVersion: '2',
       payloadHash: seal.payloadHash,
       signature: seal.signatureB64,
       signingAlgorithm: seal.algorithm,
       signingKeyId: seal.keyId,
+      holderBindingSalt: binding.salt,
+      holderNameHash: binding.nameHash,
+      holderDobHash: binding.dobHash,
     })
     .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
     .returning();
@@ -437,11 +587,41 @@ export interface CertificateVerification {
   signatureValid: boolean;
   /** Stored payload hash still matches the rebuilt canonical bytes. */
   payloadIntact: boolean;
+  /** Version 2 seals a holder-name hash. The name itself is not returned. */
+  holderBound: boolean;
 }
 
-export async function verifyCertificate(
-  code: string,
-): Promise<CertificateVerification | null> {
+export interface CertificateLookupContext {
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
+export type CertificateLookup =
+  | { status: 'rate_limited' }
+  | { status: 'not_found' }
+  | { status: 'ok'; verification: CertificateVerification };
+
+interface CertificateByCode {
+  id: string;
+  reference: string;
+  status: CertificateStatus;
+  signedAt: Date | null;
+  applicationId: string;
+  decisionId: string;
+  verificationCode: string;
+  payloadHash: string | null;
+  payloadVersion: string;
+  signature: string | null;
+  signingAlgorithm: string | null;
+  signingKeyId: string | null;
+  organisationId: string;
+  sha256: string | null;
+  holderBindingSalt: string | null;
+  holderNameHash: string | null;
+  holderDobHash: string | null;
+}
+
+async function findCertificateByCode(code: string): Promise<CertificateByCode | null> {
   const rows = await db
     .select({
       id: certificates.id,
@@ -452,16 +632,135 @@ export async function verifyCertificate(
       decisionId: certificates.decisionId,
       verificationCode: certificates.verificationCode,
       payloadHash: certificates.payloadHash,
+      payloadVersion: certificates.payloadVersion,
       signature: certificates.signature,
       signingAlgorithm: certificates.signingAlgorithm,
       signingKeyId: certificates.signingKeyId,
       organisationId: certificates.organisationId,
+      sha256: certificates.sha256,
+      holderBindingSalt: certificates.holderBindingSalt,
+      holderNameHash: certificates.holderNameHash,
+      holderDobHash: certificates.holderDobHash,
     })
     .from(certificates)
     .where(and(eq(certificates.verificationCode, code), isNull(certificates.deletedAt)))
     .limit(1);
   const cert = rows[0];
   if (!cert) return null;
+  return { ...cert, status: cert.status as CertificateStatus };
+}
+
+function auditActor(ctx: CertificateLookupContext): {
+  ipAddress: string | null;
+  userAgent: string | null;
+} {
+  return {
+    ipAddress: ctx.ipAddress ?? null,
+    userAgent: ctx.userAgent ? ctx.userAgent.slice(0, 512) : null,
+  };
+}
+
+async function auditVerification(
+  ctx: CertificateLookupContext,
+  input: {
+    organisationId: string | null;
+    resourceId: string | null;
+    result: 'success' | 'failure';
+    reason: string;
+  },
+): Promise<void> {
+  const actor = auditActor(ctx);
+  const event = {
+    action: 'certificate.verified' as const,
+    resourceType: 'certificate' as const,
+    resourceId: input.resourceId,
+    result: input.result,
+    reason: input.reason,
+    ...actor,
+  };
+  if (input.organisationId) {
+    await recordAudit({ ...event, organisationId: input.organisationId });
+  } else {
+    await recordPlatformAudit(event);
+  }
+}
+
+interface SealCheck {
+  payloadIntact: boolean;
+  signatureValid: boolean;
+  canonical: string | null;
+}
+
+async function checkSeal(cert: CertificateByCode): Promise<SealCheck> {
+  if (
+    !cert.signedAt ||
+    !cert.payloadHash ||
+    !cert.signature ||
+    !cert.signingAlgorithm ||
+    !cert.signingKeyId
+  ) {
+    return { payloadIntact: false, signatureValid: false, canonical: null };
+  }
+  const decisionRows = await db
+    .select({ outcome: decisions.finalOutcome })
+    .from(decisions)
+    .where(eq(decisions.id, cert.decisionId))
+    .limit(1);
+  const canonical = canonicalPayloadForVersion({
+    payloadVersion: cert.payloadVersion,
+    certificateId: cert.id,
+    organisationId: cert.organisationId,
+    reference: cert.reference,
+    applicationId: cert.applicationId,
+    decisionId: cert.decisionId,
+    outcome: decisionRows[0]?.outcome ?? 'unknown',
+    verificationCode: cert.verificationCode,
+    signedAt: cert.signedAt.toISOString(),
+    holderNameHash: cert.holderNameHash,
+    holderDobHash: cert.holderDobHash,
+    pdfSha256: cert.sha256,
+  });
+  if (!canonical) return { payloadIntact: false, signatureValid: false, canonical: null };
+  const { coaPayloadHash, verifyCoaSignature } = await import('@/lib/kms/sign');
+  const payloadIntact = coaPayloadHash(canonical) === cert.payloadHash;
+  if (!payloadIntact) return { payloadIntact: false, signatureValid: false, canonical };
+  const result = await verifyCoaSignature({
+    canonical,
+    signatureB64: cert.signature,
+    algorithm: cert.signingAlgorithm,
+    keyId: cert.signingKeyId,
+  });
+  return { payloadIntact: true, signatureValid: result.signatureValid, canonical };
+}
+
+export async function verifyCertificate(
+  code: string,
+  ctx: CertificateLookupContext = {},
+): Promise<CertificateLookup> {
+  const trimmed = code.trim();
+  if (!(await allowCertificateLookup(ctx.ipAddress ?? null))) {
+    return { status: 'rate_limited' };
+  }
+  if (!trimmed || trimmed.length > 64) {
+    await auditVerification(ctx, {
+      organisationId: null,
+      resourceId: null,
+      result: 'failure',
+      reason: 'not_found',
+    });
+    return { status: 'not_found' };
+  }
+
+  const cert = await findCertificateByCode(trimmed);
+  if (!cert) {
+    await auditVerification(ctx, {
+      organisationId: null,
+      resourceId: null,
+      result: 'failure',
+      reason: 'not_found',
+    });
+    return { status: 'not_found' };
+  }
 
   const orgRows = await db
     .select({
@@ -472,50 +771,107 @@ export async function verifyCertificate(
     .where(eq(organisations.id, cert.organisationId))
     .limit(1);
   const org = orgRows[0];
+  const seal = await checkSeal(cert);
+  const statusValid = isValid(cert.status);
 
-  let payloadIntact = false;
-  let signatureValid = false;
-  if (
-    cert.signedAt &&
-    cert.payloadHash &&
-    cert.signature &&
-    cert.signingAlgorithm &&
-    cert.signingKeyId
-  ) {
-    const outcome = await findDecisionOutcome(cert.organisationId, cert.decisionId);
-    const canonical = canonicalCoaPayload({
-      v: 1,
-      certificateId: cert.id,
-      organisationId: cert.organisationId,
+  await auditVerification(ctx, {
+    organisationId: cert.organisationId,
+    resourceId: cert.id,
+    result: 'success',
+    reason: 'lookup',
+  });
+
+  return {
+    status: 'ok',
+    verification: {
+      // A revoked certificate keeps a valid seal but is NOT a valid credential.
+      valid: statusValid && seal.payloadIntact && seal.signatureValid,
       reference: cert.reference,
-      applicationId: cert.applicationId,
-      decisionId: cert.decisionId,
-      outcome: outcome ?? 'unknown',
-      verificationCode: cert.verificationCode,
-      signedAt: cert.signedAt.toISOString(),
-    });
-    const { coaPayloadHash, verifyCoaSignature } = await import('@/lib/kms/sign');
-    payloadIntact = coaPayloadHash(canonical) === cert.payloadHash;
-    if (payloadIntact) {
-      const result = await verifyCoaSignature({
-        canonical,
-        signatureB64: cert.signature,
-        algorithm: cert.signingAlgorithm,
-        keyId: cert.signingKeyId,
-      });
-      signatureValid = result.signatureValid;
-    }
+      organisationName: org?.tradingName ?? org?.legalName ?? 'Unknown organisation',
+      status: cert.status,
+      signedOn: cert.signedAt ? cert.signedAt.toISOString().slice(0, 10) : null,
+      signatureValid: seal.signatureValid,
+      payloadIntact: seal.payloadIntact,
+      holderBound: cert.payloadVersion === '2',
+    },
+  };
+}
+
+export type HolderCheckStatus =
+  | 'match'
+  | 'no_match'
+  | 'unbound'
+  | 'not_found'
+  | 'rate_limited'
+  | 'invalid';
+
+/**
+ * Compare details a verifier typed with the sealed holder hashes.
+ * Match and no-match are the only outcomes when a version-2 seal checks out.
+ * The typed name and date of birth are never stored or returned.
+ */
+export async function checkCertificateHolder(input: {
+  code: string;
+  body: unknown;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}): Promise<HolderCheckStatus> {
+  const ctx: CertificateLookupContext = {
+    ipAddress: input.ipAddress ?? null,
+    userAgent: input.userAgent ?? null,
+  };
+  const trimmed = input.code.trim();
+  if (!(await allowHolderCheck(ctx.ipAddress ?? null, trimmed || 'unknown'))) {
+    return 'rate_limited';
+  }
+  const parsed = checkCertificateHolderSchema.safeParse(input.body);
+  if (!parsed.success || !trimmed || trimmed.length > 64) {
+    return 'invalid';
   }
 
-  const statusValid = isValid(cert.status as CertificateStatus);
-  return {
-    // A revoked certificate keeps a valid seal but is NOT a valid credential.
-    valid: statusValid && payloadIntact && signatureValid,
-    reference: cert.reference,
-    organisationName: org?.tradingName ?? org?.legalName ?? 'Unknown organisation',
-    status: cert.status as CertificateStatus,
-    signedOn: cert.signedAt ? cert.signedAt.toISOString().slice(0, 10) : null,
-    signatureValid,
-    payloadIntact,
-  };
+  const cert = await findCertificateByCode(trimmed);
+  if (!cert) {
+    await auditVerification(ctx, {
+      organisationId: null,
+      resourceId: null,
+      result: 'failure',
+      reason: 'not_found',
+    });
+    return 'not_found';
+  }
+
+  const sealed =
+    cert.payloadVersion === '2' &&
+    Boolean(cert.holderBindingSalt && cert.holderNameHash) &&
+    (cert.status === 'signed' || cert.status === 'revoked');
+  if (!sealed || !cert.holderBindingSalt || !cert.holderNameHash) {
+    await auditVerification(ctx, {
+      organisationId: cert.organisationId,
+      resourceId: cert.id,
+      result: 'success',
+      reason: 'holder_unbound',
+    });
+    return 'unbound';
+  }
+
+  const seal = await checkSeal(cert);
+  const suppliedDob = parsed.data.dateOfBirth?.trim() ? parsed.data.dateOfBirth : null;
+  const matched =
+    seal.payloadIntact &&
+    seal.signatureValid &&
+    holderDetailsMatch({
+      salt: cert.holderBindingSalt,
+      nameHash: cert.holderNameHash,
+      dobHash: cert.holderDobHash,
+      name: parsed.data.name,
+      dateOfBirth: suppliedDob,
+    });
+
+  await auditVerification(ctx, {
+    organisationId: cert.organisationId,
+    resourceId: cert.id,
+    result: 'success',
+    reason: matched ? 'holder_match' : 'holder_no_match',
+  });
+  return matched ? 'match' : 'no_match';
 }

@@ -204,6 +204,7 @@ export type AuditAction =
   | 'certificate.generated'
   | 'certificate.signed'
   | 'certificate.viewed'
+  | 'certificate.verified'
   | 'certificate.downloaded'
   | 'certificate.reissued'
   | 'certificate.revoked'

@@ -176,6 +176,13 @@
       "when": 1791942544561,
       "tag": "0024_mushy_rocket_racer",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791942947457,
+      "tag": "0025_mixed_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

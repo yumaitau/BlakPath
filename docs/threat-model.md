@@ -113,7 +113,8 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
     (Cloudflare Full (strict) to an HTTPS origin listener; HTTP only redirects);
     audit redaction (secrets/payloads never written to audit); least-privilege
     RBAC; **no standing operator access** (break-glass only); runtime secrets
-    sync only into the `blakpath` namespace
+    sync only into the `blakpath` namespace; public certificate checks return
+    no holder name and compare a typed name with a salted hash
     (`docs/tenant-isolation.md`, `docs/privacy-architecture.md`,
     `docs/eks-runbook.md`).
 
@@ -121,7 +122,8 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
 
 - **Threat:** overwhelming the app, the scanner, or the queues.
 - **Mitigations:** Redis-backed rate limiting keyed by the trusted client
-  address; regional WAFv2 managed rules on the origin load balancer; bounded upload
+  address, including public certificate lookups and holder-name checks;
+  regional WAFv2 managed rules on the origin load balancer; bounded upload
   sizes/types; presigned uploads keep large transfers off the app tier; BullMQ
   retries with backoff and dead-lettering; a stalled scanner **holds** files in
   quarantine rather than failing open (fail-secure, below).

@@ -67,6 +67,24 @@ Consent is treated as a first-class, recorded fact, not an implicit assumption:
   whom, when, the wording shown, and any withdrawal — as an append-only history
   so consent state is always explainable and auditable.
 
+## Public certificate checks
+
+The public `/verify` page confirms a code, the issuing organisation, the status
+and the seal. It does not display the holder's name or date of birth.
+
+Certificates sealed with payload version 2 commit to a salted hash of the name
+printed on the PDF, the PDF's SHA-256, and — when intake recorded one — a salted
+hash of the date of birth. A verifier may type the name (and optionally the date
+of birth) printed on the document and is told only whether those details match.
+That comparison does not determine Aboriginality. It checks the printed details
+against what authorised humans recorded.
+
+Version 1 seals stay valid. They confirm the reference, organisation and date,
+and the page says they do not confirm a printed name.
+
+Lookups are written to the audit trail without the typed name or date of birth,
+and both lookups and name checks are rate-limited.
+
 ## Retention & deletion vs official records
 
 - **Tenant-set defaults.** Retention periods are organisation-configured
