@@ -23,6 +23,20 @@ describe('production readiness configuration', () => {
     expect(validateProductionReadiness(valid)).toEqual([]);
   });
 
+  it('rejects the migrator credential on the application', () => {
+    const issues = validateProductionReadiness({
+      ...valid,
+      DATABASE_URL:
+        'postgres://blakpath_migrator:secret@db.internal/blakpath?sslmode=verify-full',
+      DATABASE_MIGRATOR_URL:
+        'postgres://blakpath_migrator:secret@db.internal/blakpath?sslmode=verify-full',
+    });
+
+    expect(issues.map(({ key }) => key)).toEqual(
+      expect.arrayContaining(['DATABASE_URL', 'DATABASE_MIGRATOR_URL']),
+    );
+  });
+
   it('rejects local services, static object credentials and missing transport security', () => {
     const issues = validateProductionReadiness({
       ...valid,

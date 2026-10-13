@@ -1,27 +1,50 @@
-# One-shot operational jobs. NOT in kustomization.yaml — apply manually:
-#   kubectl apply -f infra/k8s/jobs/migrate.yaml
-#   kubectl apply -f infra/k8s/jobs/seed.yaml
+# Rendered by scripts/cd-release.sh. Do not kubectl apply this file directly.
+# Not in kustomization.yaml: a Job is immutable and is named per release.
+# __IMAGE__ is the app image digest. __RELEASE_ID__ is the git sha.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: blakpath-migrate
+  name: blakpath-migrate-__RELEASE_ID__
   namespace: blakpath
+  labels:
+    app.kubernetes.io/name: blakpath-migrate
+    app.kubernetes.io/part-of: blakpath
+    blakpath.yumait.au/release: __RELEASE_ID__
 spec:
-  backoffLimit: 2
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blakpath-migrate
+        blakpath.yumait.au/release: __RELEASE_ID__
     spec:
       serviceAccountName: blakpath
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: migrate
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          image: __IMAGE__
           imagePullPolicy: IfNotPresent
-          command: [pnpm, exec, tsx, src/db/migrate.ts]
-          envFrom:
-            - configMapRef:
-                name: blakpath-config
-            - secretRef:
-                name: blakpath-runtime
+          command: ['node', '/app/migrate.cjs']
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: MIGRATIONS_FOLDER
+              value: /app/migrations
+            - name: MIGRATION_LOCK_TIMEOUT_MS
+              value: '4000'
+            - name: MIGRATION_STATEMENT_TIMEOUT_MS
+              value: '600000'
+            - name: DATABASE_MIGRATOR_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-migrator
+                  key: DATABASE_MIGRATOR_URL
           resources:
             requests:
               cpu: 250m
@@ -29,3 +52,7 @@ spec:
             limits:
               cpu: 1000m
               memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']

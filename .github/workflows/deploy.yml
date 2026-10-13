@@ -1,0 +1,62 @@
+name: Deploy
+
+# Operator-triggered. The script migrates with the app image digest and
+# applies Deployments only after the Job succeeds. Cluster credentials are
+# supplied by the runner environment; this workflow does not mint them.
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: 'App image digest (sha256 hex, without the sha256: prefix)'
+        required: true
+        type: string
+      worker_image_digest:
+        description: 'Worker image digest (sha256 hex, without the sha256: prefix)'
+        required: true
+        type: string
+      release_id:
+        description: Git commit SHA
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9.12.0'
+  IMAGE_REPOSITORY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath
+
+jobs:
+  deploy:
+    name: Migrate then roll out
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Migrate, then roll web and worker
+        run: ./scripts/cd-release.sh
+        env:
+          IMAGE: ${{ env.IMAGE_REPOSITORY }}/app@sha256:${{ inputs.image_digest }}
+          WORKER_IMAGE: ${{ env.IMAGE_REPOSITORY }}/worker@sha256:${{ inputs.worker_image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}

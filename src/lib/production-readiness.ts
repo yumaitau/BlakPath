@@ -66,6 +66,19 @@ export function validateProductionReadiness(
   ) {
     issues.push({ key: 'DATABASE_URL', message: 'must enforce TLS with sslmode' });
   }
+  if (database?.username === 'blakpath_migrator') {
+    issues.push({
+      key: 'DATABASE_URL',
+      message: 'must use the application role, not the migrator role',
+    });
+  }
+  if (environment.DATABASE_MIGRATOR_URL) {
+    issues.push({
+      key: 'DATABASE_MIGRATOR_URL',
+      message:
+        'must be unset on the app and worker; only the migrate job gets the migrator secret',
+    });
+  }
   addRequiredUrl(issues, environment, 'REDIS_URL', 'rediss:');
 
   if (environment.S3_ENDPOINT) {

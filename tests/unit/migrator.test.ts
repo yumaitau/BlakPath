@@ -1,0 +1,165 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { assertLocalDatabasePush } from '@/db/db-push-guard';
+import {
+  GRANDFATHERED_MIGRATION_TAGS,
+  lintMigrationDirectory,
+  lintMigrationSql,
+  MAX_LOCK_TIMEOUT_MS,
+  resolveMigrationTimeouts,
+  resolveMigratorUrl,
+  splitMigrationStatements,
+  statementRunsOutsideTransaction,
+} from '@/db/migrator';
+import {
+  APP_IMAGE_REPOSITORY,
+  pinKustomizationImages,
+  renderMigrateJob,
+  WORKER_IMAGE_REPOSITORY,
+} from '@/db/release-job';
+
+const migrationsDir = path.resolve('src/db/migrations');
+const appDigest = 'a'.repeat(64);
+const workerDigest = 'b'.repeat(64);
+const appImage = `${APP_IMAGE_REPOSITORY}@sha256:${appDigest}`;
+const workerImage = `${WORKER_IMAGE_REPOSITORY}@sha256:${workerDigest}`;
+const release = { appImage, workerImage, releaseId: 'abc1234' };
+
+describe('migration policy', () => {
+  it('grandfathers only migrations 0000-0018', () => {
+    expect(GRANDFATHERED_MIGRATION_TAGS.size).toBe(19);
+    for (const tag of GRANDFATHERED_MIGRATION_TAGS) {
+      expect(tag).toMatch(/^00(0[0-9]|1[0-8])_/);
+    }
+  });
+
+  it('accepts the committed journal', () => {
+    expect(lintMigrationDirectory(migrationsDir)).toEqual([]);
+  });
+
+  it('rejects a copied 0016 foreign key in a new file', () => {
+    const sql = fs.readFileSync(
+      path.join(migrationsDir, '0016_invitation-teams.sql'),
+      'utf8',
+    );
+    const issues = lintMigrationSql('0019_existing_fk', sql);
+    expect(issues.map((issue) => issue.message).join('\n')).toMatch(/NOT VALID/);
+  });
+
+  it('accepts NOT VALID then VALIDATE, and a concurrent index', () => {
+    const sql = `
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS applications_status_idx ON applications (status);--> statement-breakpoint
+      ALTER TABLE "applications" ADD CONSTRAINT "applications_client_id_fkey" FOREIGN KEY ("client_id") REFERENCES "public"."clients"("id") NOT VALID;--> statement-breakpoint
+      ALTER TABLE "applications" VALIDATE CONSTRAINT "applications_client_id_fkey";
+    `;
+    expect(lintMigrationSql('0019_expand', sql)).toEqual([]);
+    const statements = splitMigrationStatements(sql);
+    expect(statementRunsOutsideTransaction(statements[0] ?? '')).toBe(true);
+    expect(statementRunsOutsideTransaction(statements[1] ?? '')).toBe(false);
+    expect(statementRunsOutsideTransaction(statements[2] ?? '')).toBe(true);
+  });
+
+  it('rejects drops, renames, and a blocking index on an existing table', () => {
+    const sql = `
+      ALTER TABLE "applications" DROP COLUMN "legacy";
+      ALTER TABLE "applications" RENAME COLUMN "status" TO "state";
+      CREATE INDEX applications_status_idx ON applications (status);
+    `;
+    const messages = lintMigrationSql('0019_contract', sql)
+      .map((issue) => issue.message)
+      .join('\n');
+    expect(messages).toMatch(/DROP COLUMN/);
+    expect(messages).toMatch(/RENAME COLUMN/);
+    expect(messages).toMatch(/CONCURRENTLY/);
+  });
+
+  it('treats an explicit no-transaction marker as autocommit', () => {
+    expect(statementRunsOutsideTransaction('-- @no-transaction\nSELECT 1')).toBe(true);
+  });
+});
+
+describe('migration timeouts and role', () => {
+  it('caps lock_timeout under 5 seconds', () => {
+    expect(MAX_LOCK_TIMEOUT_MS).toBeLessThan(5_000);
+    expect(resolveMigrationTimeouts({})).toMatchObject({ lockTimeoutMs: 4_000 });
+    expect(() => resolveMigrationTimeouts({ MIGRATION_LOCK_TIMEOUT_MS: '5000' })).toThrow(
+      /1 to 4000/,
+    );
+  });
+
+  it('requires a distinct migrator role outside local development', () => {
+    expect(
+      resolveMigratorUrl({
+        NODE_ENV: 'development',
+        DATABASE_URL: 'postgres://blakpath:blakpath@localhost:5432/blakpath',
+      }),
+    ).toMatch(/localhost/);
+
+    expect(
+      resolveMigratorUrl({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgres://blakpath_app:secret@db.internal/blakpath',
+        DATABASE_MIGRATOR_URL: 'postgres://blakpath_migrator:secret@db.internal/blakpath',
+      }),
+    ).toMatch(/blakpath_migrator/);
+
+    expect(() =>
+      resolveMigratorUrl({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgres://blakpath_app:secret@db.internal/blakpath',
+      }),
+    ).toThrow(/DATABASE_MIGRATOR_URL is required/);
+
+    expect(() =>
+      resolveMigratorUrl({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgres://blakpath_migrator:secret@db.internal/blakpath',
+        DATABASE_MIGRATOR_URL: 'postgres://blakpath_migrator:other@db.internal/blakpath',
+      }),
+    ).toThrow(/different role/);
+  });
+});
+
+describe('db:push guard', () => {
+  it('allows loopback and refuses other hosts', () => {
+    expect(() =>
+      assertLocalDatabasePush('postgres://blakpath:blakpath@localhost:5432/blakpath'),
+    ).not.toThrow();
+    expect(() =>
+      assertLocalDatabasePush('postgres://blakpath:secret@db.internal:5432/blakpath'),
+    ).toThrow(/refused for host db.internal/);
+  });
+});
+
+describe('release migrate job', () => {
+  const template = fs.readFileSync('infra/k8s/jobs/migrate.yaml', 'utf8');
+  const kustomization = fs.readFileSync('infra/k8s/kustomization.yaml', 'utf8');
+
+  it('pins the job to the app digest, a per-release name and a TTL', () => {
+    const rendered = renderMigrateJob(template, release);
+    expect(rendered).toContain('name: blakpath-migrate-abc1234');
+    expect(rendered).toContain(`image: ${appImage}`);
+    expect(rendered).toContain('ttlSecondsAfterFinished: 86400');
+    expect(rendered).toContain('name: blakpath-migrator');
+    expect(rendered).not.toContain('blakpath-runtime');
+    expect(rendered).not.toContain('__IMAGE__');
+    expect(rendered).not.toContain('__RELEASE_ID__');
+  });
+
+  it('rejects a floating tag', () => {
+    expect(() =>
+      renderMigrateJob(template, {
+        ...release,
+        appImage: `${APP_IMAGE_REPOSITORY}:latest`,
+      }),
+    ).toThrow(/digest/);
+  });
+
+  it('replaces kustomize tags with the release digests', () => {
+    const pinned = pinKustomizationImages(kustomization, release);
+    expect(pinned).toContain(`digest: sha256:${appDigest}`);
+    expect(pinned).toContain(`digest: sha256:${workerDigest}`);
+    expect(pinned).not.toMatch(/newTag/);
+  });
+});

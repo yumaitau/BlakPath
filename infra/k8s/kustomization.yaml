@@ -6,6 +6,7 @@ resources:
   - configmap.yaml
   - serviceaccounts.yaml
   - externalsecret.yaml
+  - migrator-externalsecret.yaml
   - web-deployment.yaml
   - worker-deployment.yaml
   - service-ingress.yaml
