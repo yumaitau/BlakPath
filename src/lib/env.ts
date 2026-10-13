@@ -102,6 +102,9 @@ const serverSchema = z
     RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     REMINDER_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    // Liveness file refreshed only after a successful Redis ping. The probe
+    // (scripts/worker-liveness.sh) reads the same path from the environment.
+    WORKER_HEARTBEAT_PATH: z.string().min(1).default('/tmp/blakpath-worker-heartbeat'),
 
     // Feature toggles
     AI_FEATURES_ENABLED: booleanish('false'),

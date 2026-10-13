@@ -1,0 +1,115 @@
+# Scale the worker on BullMQ wait-list depth.
+#
+# Requires KEDA (https://keda.sh) to be installed before apply. Each trigger
+# reads one Redis LIST at `${QUEUE_PREFIX}:<queue>:wait` (prefix `bp:queue`).
+# Desired replicas are the busiest queue, bounded by min/max.
+#
+# REDIS_ADDRESS is `host:port` (not a URL) and must be added to
+# /blakpath/production/runtime so ExternalSecret projects it into
+# blakpath-runtime. ElastiCache in this cluster uses TLS.
+#
+# If Redis AUTH is enabled, add a secretTargetRef for parameter `password`
+# (key REDIS_PASSWORD). Do not set an empty password: the scaler would send
+# AUTH and fail. fallback keeps the current replica count if the scaler
+# cannot read Redis, so a missing key does not scale the worker to zero.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: blakpath-worker-redis
+  namespace: blakpath
+spec:
+  secretTargetRef:
+    - parameter: address
+      name: blakpath-runtime
+      key: REDIS_ADDRESS
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: blakpath-worker
+  namespace: blakpath
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: blakpath-worker
+  pollingInterval: 15
+  cooldownPeriod: 120
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  fallback:
+    failureThreshold: 3
+    replicas: 2
+  triggers:
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:malware-scan:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:email:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:notification:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:audit-verify:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:retention:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:export:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:webhook:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'
+    - type: redis
+      authenticationRef:
+        name: blakpath-worker-redis
+      metadata:
+        listName: bp:queue:reminder:wait
+        listLength: '10'
+        activationListLength: '1'
+        enableTLS: 'true'
+        databaseIndex: '0'

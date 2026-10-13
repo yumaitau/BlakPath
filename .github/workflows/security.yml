@@ -100,7 +100,7 @@ jobs:
   container:
     name: Container scan & SBOM
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     permissions:
       contents: read
       security-events: write
@@ -140,13 +140,45 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
-      - name: Upload Trivy results to code scanning
+      - name: Upload web Trivy results to code scanning
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: trivy-results.sarif
+          category: trivy-web
 
-      - name: Trivy scan (gate — fail on CRITICAL,HIGH)
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: worker
+          push: false
+          load: true
+          tags: blakpath-worker:ci
+          cache-from: type=gha,scope=blakpath-worker
+          cache-to: type=gha,mode=max,scope=blakpath-worker
+
+      - name: Trivy worker vulnerability scan (SARIF)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: blakpath-worker:ci
+          format: sarif
+          output: trivy-worker-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          skip-setup-trivy: true
+
+      - name: Upload worker Trivy results to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-worker-results.sarif
+          category: trivy-worker
+
+      - name: Trivy scan web (gate — fail on CRITICAL,HIGH)
+        id: trivy-web
+        continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: blakpath:ci
@@ -158,16 +190,46 @@ jobs:
           # keep this gate independent of setup-action availability.
           skip-setup-trivy: true
 
-      - name: Generate SBOM (Syft, SPDX JSON)
+      - name: Trivy scan worker (gate — fail on CRITICAL,HIGH)
+        id: trivy-worker
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: blakpath-worker:ci
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          skip-setup-trivy: true
+
+      - name: Generate web SBOM (Syft, SPDX JSON)
         uses: anchore/sbom-action@v0.17.7
         with:
           image: blakpath:ci
           format: spdx-json
           output-file: sbom.spdx.json
 
-      - name: Upload SBOM artifact
+      - name: Upload web SBOM artifact
         uses: actions/upload-artifact@v4
         with:
           name: sbom-spdx-json
           path: sbom.spdx.json
           retention-days: 90
+
+      - name: Generate worker SBOM (Syft, SPDX JSON)
+        uses: anchore/sbom-action@v0.17.7
+        with:
+          image: blakpath-worker:ci
+          format: spdx-json
+          output-file: sbom-worker.spdx.json
+
+      - name: Upload worker SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-worker-spdx-json
+          path: sbom-worker.spdx.json
+          retention-days: 90
+
+      - name: Fail if an image scan failed
+        if: ${{ steps.trivy-web.outcome == 'failure' || steps.trivy-worker.outcome == 'failure' }}
+        run: exit 1

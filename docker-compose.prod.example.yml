@@ -95,15 +95,15 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # SIGTERM triggers a graceful drain of in-flight jobs before exit; the
-    # worker enforces a hard deadline internally. Give it room to finish.
-    stop_grace_period: 40s
+    # Must stay equal to worker TERMINATION_GRACE_SECONDS so the runtime does
+    # not SIGKILL the drain. Idle workers still exit as soon as they finish.
+    stop_grace_period: 630s
     healthcheck:
-      test: ['CMD-SHELL', 'pgrep -f "worker/index.ts" > /dev/null || exit 1']
+      test: ['CMD', '/app/scripts/worker-liveness.sh']
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 25s
     logging: *default-logging
     deploy:
       replicas: 2

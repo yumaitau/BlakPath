@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/name: blakpath-worker
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: blakpath-worker
@@ -16,21 +21,43 @@ spec:
         app.kubernetes.io/name: blakpath-worker
     spec:
       serviceAccountName: blakpath
+      # Must stay equal to worker TERMINATION_GRACE_SECONDS (630). That is
+      # longer than the in-process drain, which is longer than the longest job.
+      terminationGracePeriodSeconds: 630
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: worker
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
           imagePullPolicy: IfNotPresent
-          command: [pnpm, exec, tsx, worker/index.ts]
+          # No command override. The image ENTRYPOINT is tini, so SIGTERM
+          # reaches node and the drain can log "shutdown complete".
           envFrom:
             - configMapRef:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            exec:
+              command: ['/app/scripts/worker-liveness.sh']
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          livenessProbe:
+            exec:
+              command: ['/app/scripts/worker-liveness.sh']
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 500m

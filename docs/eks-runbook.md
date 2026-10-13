@@ -7,14 +7,34 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
-   `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
-   `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`.
+   `DATABASE_URL`, `REDIS_URL`, `REDIS_ADDRESS` (`host:port`, not a URL),
+   `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`, `SMTP_USER`, `SMTP_PASSWORD`,
+   `EMAIL_WEBHOOK_SECRET`.
 3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
+4. Install KEDA if the cluster does not already have it. The worker
+   ScaledObject is applied with the rest of the manifests.
+5. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
-5. Run `pnpm release:check` inside the exact web and worker images before
+   Do not set a worker container `command`; tini must stay PID 1.
+6. Run `pnpm release:check` inside the exact web and worker images before
    promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
-6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+7. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+
+## Worker
+
+- Image command is `node dist/worker.js` under tini, with production
+  dependencies only. Do not set a pod `command`.
+- Liveness is `/app/scripts/worker-liveness.sh`. The process rewrites
+  `/tmp/blakpath-worker-heartbeat` after a Redis ping and deletes it when
+  Redis does not answer, so kubelet restarts the pod.
+- `terminationGracePeriodSeconds` is 630. That outlasts the in-process drain,
+  which outlasts the longest in-flight job. `kubectl delete pod` should log
+  `shutdown complete` inside that window. An idle worker exits immediately.
+- PDB `blakpath-worker` keeps one pod during voluntary disruption.
+- The KEDA ScaledObject scales on BullMQ wait lists
+  `bp:queue:<queue>:wait`. If the scaler cannot read Redis it falls back to
+  2 replicas. When Redis AUTH is on, add secret key `REDIS_PASSWORD` and a
+  matching `password` secretTargetRef. Do not set an empty password.
 
 ## Secrets and keys
 

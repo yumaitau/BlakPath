@@ -31,6 +31,9 @@ export interface TenantJob {
   correlationId: string;
 }
 
+/** BullMQ key prefix. Wait lists are `${QUEUE_PREFIX}:<queue>:wait`. */
+export const QUEUE_PREFIX = 'bp:queue';
+
 const connection = redis;
 
 const defaultJobOptions: JobsOptions = {
@@ -43,7 +46,7 @@ const defaultJobOptions: JobsOptions = {
 
 const queueOptions: QueueOptions = {
   connection,
-  prefix: 'bp:queue',
+  prefix: QUEUE_PREFIX,
   defaultJobOptions,
 };
 
