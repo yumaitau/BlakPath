@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
@@ -17,11 +17,12 @@ import { decisions } from './decisions';
 /**
  * Certificate tables (Phase 6).
  *
- * A certificate is generated from a FINALISED, confirmed committee decision,
- * signed by an authorised human (with step-up), and can later be revoked. The
- * PDF bytes live in object storage (tenant-namespaced key); this row carries
- * metadata, the content hash and the public verification code. Tenant-owned and
- * org-leading indexed.
+ * A certificate is generated from a FINALISED, confirmed committee decision on
+ * a case that has reached `decided`, signed by an authorised human (with
+ * step-up), and can later be revoked. One live certificate (not revoked, not
+ * soft-deleted) may exist per decision. The PDF bytes live in object storage
+ * (tenant-namespaced key); this row carries metadata, the content hash and the
+ * public verification code. Tenant-owned and org-leading indexed.
  *
  * PRODUCT INVARIANT: the certificate attests a decision authorised humans made
  * and recorded. Nothing here computes, scores or determines Aboriginality.
@@ -88,6 +89,10 @@ export const certificates = pgTable(
       table.reference,
     ),
     uniqueIndex('certificates_verification_code_unique').on(table.verificationCode),
+    // Revoked and soft-deleted rows remain, so a replacement can be issued.
+    uniqueIndex('certificates_live_decision_unique')
+      .on(table.decisionId)
+      .where(sql`${table.deletedAt} is null and ${table.status} <> 'revoked'`),
     index('certificates_org_status_idx').on(table.organisationId, table.status),
     index('certificates_org_application_idx').on(
       table.organisationId,

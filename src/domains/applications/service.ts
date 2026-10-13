@@ -1,5 +1,6 @@
 import { and, desc, eq, exists, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
+import type { Database } from '@/db/client';
 import {
   applications,
   applicationAssignments,
@@ -75,6 +76,18 @@ export type ApplicationStatusHistoryRow = typeof applicationStatusHistory.$infer
 /** Columns that may be patched on an application update. */
 type ApplicationPatch = Partial<typeof applications.$inferInsert>;
 
+/** The transaction handle drizzle passes to a `db.transaction(...)` callback. */
+type DbTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+type DbExecutor = Database | DbTransaction;
+
+/** A workflow write applied on a caller-supplied executor, before its audit. */
+export interface AppliedApplicationTransition {
+  readonly row: ApplicationRow;
+  readonly from: ApplicationStatus;
+  readonly to: ApplicationStatus;
+  readonly note: string | null;
+}
+
 /** An application together with its active assignee ids (for read policy). */
 export interface ApplicationDetail {
   readonly application: ApplicationRow;
@@ -117,9 +130,12 @@ function liveApplication(where: SQL): SQL {
 }
 
 /** Load a single application within scope, or return null. */
-async function loadApplication(id: string): Promise<ApplicationRow | null> {
+async function loadApplicationOn(
+  executor: DbExecutor,
+  id: string,
+): Promise<ApplicationRow | null> {
   const scope = currentScope();
-  const rows = await scope.db
+  const rows = await executor
     .select()
     .from(applications)
     .where(
@@ -130,6 +146,10 @@ async function loadApplication(id: string): Promise<ApplicationRow | null> {
   if (!row) return null;
   const [opened] = await openApplicationRows(scope.organisationId, [row]);
   return opened ?? null;
+}
+
+async function loadApplication(id: string): Promise<ApplicationRow | null> {
+  return loadApplicationOn(currentScope().db, id);
 }
 
 /** Load the user ids with an ACTIVE assignment on an application. */
@@ -509,25 +529,28 @@ export async function assignApplication(
 }
 
 /**
- * Apply a workflow transition. The action is authorised by ANY of the
- * permissions the workflow declares for it, and the move must be legal from the
- * application's current status (else the workflow throws).
+ * Write a workflow transition on `executor` without auditing.
+ *
+ * Callers that already hold a transaction (finalising a decision) pass that
+ * transaction so the case move commits or rolls back with their own write.
+ * Throws {@link ApplicationWorkflowError} when the move is illegal from the
+ * status read inside this call.
  */
-export async function transitionApplication(
+export async function applyApplicationTransition(
+  executor: DbExecutor,
   id: string,
   action: ApplicationAction,
   rawInput: TransitionApplicationInput = {},
-): Promise<ApplicationRow> {
+): Promise<AppliedApplicationTransition> {
   const ctx = requireTenantContext();
   const subject: Subject = subjectFromContext(ctx);
   requireAny(subject, permissionsForAction(action));
 
   const input = transitionApplicationSchema.parse(rawInput);
-  const existing = await loadApplication(id);
+  const existing = await loadApplicationOn(executor, id);
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const from = existing.status as ApplicationStatus;
-  // Throws ApplicationWorkflowError if the move is illegal from `from`.
   const to = nextStatus(action, from);
 
   const scope = currentScope();
@@ -541,41 +564,59 @@ export async function transitionApplication(
   }
   if (action === 'close') patch.closedAt = now;
 
-  const updatedRows = await scope.db.transaction(async (tx) => {
-    const updated = await tx
-      .update(applications)
-      .set(patch)
-      .where(scope.where(applications.organisationId, eq(applications.id, id)))
-      .returning();
+  const note = input.note ?? null;
+  const updated = await executor
+    .update(applications)
+    .set(patch)
+    .where(scope.where(applications.organisationId, eq(applications.id, id)))
+    .returning();
 
-    await tx.insert(applicationStatusHistory).values(
-      scope.insertValues({
-        applicationId: id,
-        fromStatus: from,
-        toStatus: to,
-        action,
-        actorUserId: ctx.userId,
-        note: input.note ?? null,
-      }),
-    );
+  await executor.insert(applicationStatusHistory).values(
+    scope.insertValues({
+      applicationId: id,
+      fromStatus: from,
+      toStatus: to,
+      action,
+      actorUserId: ctx.userId,
+      note,
+    }),
+  );
 
-    return updated;
-  });
-  const stored = must(updatedRows[0], 'application');
-  const [row] = await openApplicationRows(scope.organisationId, [stored]);
-  const opened = must(row, 'application');
+  return { row: must(updated[0], 'application'), from, to, note };
+}
 
+/** Audit a transition that has already committed. */
+export async function recordApplicationTransitionAudit(
+  action: ApplicationAction,
+  applied: AppliedApplicationTransition,
+): Promise<void> {
   await recordAudit({
     action: TRANSITIONS[action].audit,
     resourceType: 'application',
-    resourceId: id,
+    resourceId: applied.row.id,
     result: 'success',
-    reason: input.note ?? null,
-    before: { data: { status: from }, allow: ['status'] },
-    after: { data: { status: to, action }, allow: ['status', 'action'] },
+    reason: applied.note,
+    before: { data: { status: applied.from }, allow: ['status'] },
+    after: { data: { status: applied.to, action }, allow: ['status', 'action'] },
   });
+}
 
-  return opened;
+/**
+ * Apply a workflow transition. The action is authorised by ANY of the
+ * permissions the workflow declares for it, and the move must be legal from the
+ * application's current status (else the workflow throws).
+ */
+export async function transitionApplication(
+  id: string,
+  action: ApplicationAction,
+  rawInput: TransitionApplicationInput = {},
+): Promise<ApplicationRow> {
+  const applied = await currentScope().db.transaction((tx) =>
+    applyApplicationTransition(tx, id, action, rawInput),
+  );
+  await recordApplicationTransitionAudit(action, applied);
+  const [opened] = await openApplicationRows(applied.row.organisationId, [applied.row]);
+  return must(opened, 'application');
 }
 
 /**

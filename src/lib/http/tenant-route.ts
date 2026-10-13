@@ -14,6 +14,8 @@ import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { clientIp } from '@/lib/http/client-ip';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { CertificateConflictError } from '@/domains/certificates/errors';
+import { DecisionWorkflowError } from '@/domains/decisions/errors';
 import {
   OrganisationActivationError,
   OrganisationKeyInputError,
@@ -113,6 +115,18 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
+  }
+  if (error instanceof DecisionWorkflowError) {
+    return NextResponse.json(
+      { error: 'Case is not ready for a committee decision' },
+      { status: 409 },
+    );
+  }
+  if (error instanceof CertificateConflictError) {
+    return NextResponse.json(
+      { error: 'A live certificate already exists for this decision' },
+      { status: 409 },
+    );
   }
   if (error instanceof AuthorizationError || error instanceof TenantContextError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
