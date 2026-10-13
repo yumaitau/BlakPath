@@ -75,6 +75,7 @@ describe('permission catalogue', () => {
       'report:export',
       'audit:view',
       'retention:manage',
+      'privacy:manage',
       'tenant:configure',
       'membership:manage',
       'break-glass:request',

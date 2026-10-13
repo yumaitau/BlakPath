@@ -202,7 +202,7 @@ export const SYSTEM_ROLES = Object.freeze({
     slug: 'records-officer',
     name: 'Records Officer',
     description:
-      'Custodian of records. Generates certificates from finalised decisions and manages retention. Does not vote or sign.',
+      'Custodian of records. Generates certificates from finalised decisions, manages retention and handles individual-rights requests. Does not vote or sign.',
     permissions: [
       'application:read-any',
       'evidence:read-assigned',
@@ -212,6 +212,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'report:view',
       'report:export',
       'retention:manage',
+      'privacy:manage',
       'client:read-any',
       'calendar:read-any',
     ],

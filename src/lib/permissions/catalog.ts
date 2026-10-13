@@ -30,6 +30,7 @@ export const PERMISSION_CATEGORIES = [
   'reporting',
   'audit',
   'retention',
+  'privacy',
   'administration',
   'break-glass',
 ] as const;
@@ -205,6 +206,12 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'retention:manage',
     category: 'retention',
     description: 'Manage data-retention settings and act on retention schedules.',
+  },
+  'privacy:manage': {
+    key: 'privacy:manage',
+    category: 'privacy',
+    description:
+      'Log and handle individual-rights requests: access bundles, corrections, associated statements and erasure.',
   },
   'tenant:configure': {
     key: 'tenant:configure',

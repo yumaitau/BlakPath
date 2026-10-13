@@ -234,6 +234,56 @@ const reminderProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Privacy processor. `erase` anonymises a rights request's subject and deletes
+ * their stored files; `offboarding-export` writes a tenant export;
+ * `offboarding-purge` deletes the tenant's objects and rows — and only once a
+ * human confirmed the purge after downloading the export (the domain re-checks
+ * that on every run). Malformed payloads are dropped, not retried.
+ */
+const privacyProcessor: ProcessorFn = async (job, logger) => {
+  const { organisationId, correlationId } = job.data;
+  const data = job.data as {
+    requestId?: unknown;
+    requestedByUserId?: unknown;
+    offboardingId?: unknown;
+  };
+  if (job.name === 'erase') {
+    if (
+      typeof data.requestId !== 'string' ||
+      typeof data.requestedByUserId !== 'string'
+    ) {
+      logger.error({ jobId: job.id }, 'erase job payload invalid — dropping');
+      return;
+    }
+    const { processErasure } = await import('@/domains/privacy/erasure');
+    await processErasure({
+      organisationId,
+      correlationId,
+      requestId: data.requestId,
+      requestedByUserId: data.requestedByUserId,
+    });
+    return;
+  }
+  if (typeof data.offboardingId !== 'string' || data.offboardingId.length === 0) {
+    logger.error(
+      { jobId: job.id, jobName: job.name },
+      'privacy job payload invalid — dropping',
+    );
+    return;
+  }
+  const { processOffboardingExport, processOffboardingPurge } =
+    await import('@/domains/privacy/offboarding');
+  const input = { organisationId, correlationId, offboardingId: data.offboardingId };
+  if (job.name === 'offboarding-export') {
+    await processOffboardingExport(input);
+  } else if (job.name === 'offboarding-purge') {
+    await processOffboardingPurge(input);
+  } else {
+    logger.error({ jobId: job.id, jobName: job.name }, 'unknown privacy job — dropping');
+  }
+};
+
+/**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
  * runs. Adding a real processor later is a one-line swap here.
@@ -247,6 +297,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Export]: exportProcessor,
   [QueueName.Webhook]: webhookProcessor,
   [QueueName.Reminder]: reminderProcessor,
+  [QueueName.Privacy]: privacyProcessor,
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

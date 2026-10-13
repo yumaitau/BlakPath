@@ -226,3 +226,33 @@ export const breakGlassStatus = pgEnum('break_glass_status', [
   'expired',
   'revoked',
 ]);
+
+/**
+ * The kind of individual-rights request a person made to the organisation
+ * (Australian Privacy Principles 12 and 13, consent withdrawal, complaints and
+ * erasure requests). Process categories only — never a judgement about a person.
+ */
+export const rightsRequestType = pgEnum('rights_request_type', [
+  'access',
+  'correction',
+  'complaint',
+  'withdrawal',
+  'erasure',
+]);
+
+/** Where an individual-rights request sits in the organisation's handling. */
+export const rightsRequestStatus = pgEnum('rights_request_status', [
+  'received',
+  'in_progress',
+  'completed',
+  'refused',
+  'withdrawn',
+]);
+
+/** Lifecycle of a tenant offboarding (export, then human-confirmed purge). */
+export const tenantOffboardingStatus = pgEnum('tenant_offboarding_status', [
+  'export_queued',
+  'exported',
+  'purge_queued',
+  'purged',
+]);

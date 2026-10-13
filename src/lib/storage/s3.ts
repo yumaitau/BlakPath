@@ -5,6 +5,9 @@ import {
   HeadBucketCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectVersionsCommand,
+  type ObjectIdentifier,
   type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -237,6 +240,62 @@ export async function deleteObject(params: {
   key: string;
 }): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: params.bucket, Key: params.key }));
+}
+
+/**
+ * Permanently delete every version and delete marker of the objects under
+ * `prefix` (or of exactly `prefix` when `exactKey` is set). A plain
+ * DeleteObject on a versioned bucket only adds a delete marker, so erasure and
+ * tenant purge use this instead. Throws when any deletion fails so the caller
+ * can record the failure and retry. Returns how many versions were removed.
+ */
+export async function deleteAllObjectVersions(params: {
+  bucket: string;
+  prefix: string;
+  exactKey?: boolean;
+}): Promise<number> {
+  const { bucket, prefix, exactKey = false } = params;
+  // Never let an empty or root-level prefix address a whole bucket.
+  const firstSegment = prefix.split('/')[0] ?? '';
+  if (!KEY_SEGMENT.test(firstSegment) || (!exactKey && !prefix.endsWith('/'))) {
+    throw new Error('deleteAllObjectVersions needs a tenant-namespaced prefix');
+  }
+
+  let deleted = 0;
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+  do {
+    const page = await s3.send(
+      new ListObjectVersionsCommand({
+        Bucket: bucket,
+        Prefix: prefix,
+        KeyMarker: keyMarker,
+        VersionIdMarker: versionIdMarker,
+      }),
+    );
+    const targets: ObjectIdentifier[] = [
+      ...(page.Versions ?? []),
+      ...(page.DeleteMarkers ?? []),
+    ]
+      .filter((v) => v.Key !== undefined && (!exactKey || v.Key === prefix))
+      .map((v) => ({ Key: v.Key!, VersionId: v.VersionId }));
+    for (let i = 0; i < targets.length; i += 1000) {
+      const batch = targets.slice(i, i + 1000);
+      const result = await s3.send(
+        new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: { Objects: batch, Quiet: true },
+        }),
+      );
+      if (result.Errors && result.Errors.length > 0) {
+        throw new Error(`Failed to delete ${result.Errors.length} object version(s)`);
+      }
+      deleted += batch.length;
+    }
+    keyMarker = page.IsTruncated ? page.NextKeyMarker : undefined;
+    versionIdMarker = page.IsTruncated ? page.NextVersionIdMarker : undefined;
+  } while (keyMarker !== undefined);
+  return deleted;
 }
 
 /** Reachability probe for readiness checks — verifies the evidence bucket. */

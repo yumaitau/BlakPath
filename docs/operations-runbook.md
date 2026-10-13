@@ -53,3 +53,19 @@ restore. Confirm the source recovery point is immutable, open an incident, and
 repeat into a new isolated target after correcting the fault. A restore is usable
 only after sign-in, tenant records, evidence authorisation and every audit chain
 have been verified.
+
+## Tenant offboarding
+
+1. The organisation's administrator requests the export from the app (step-up,
+   typing the organisation slug). The `privacy` queue writes it to
+   `<organisationId>/offboarding/<id>.json` in the evidence bucket.
+2. The export holds database rows only (credentials omitted). Evidence files and
+   certificate PDFs stay in object storage under the tenant prefix; if the
+   organisation wants the files, copy that prefix to storage it controls
+   **before** the purge is confirmed, and record the hand-over.
+3. The administrator downloads the export, then confirms the purge (step-up and
+   slug again). The organisation is closed and the worker deletes every object
+   version under the tenant prefix in both buckets, then the organisation row.
+4. Check `tenant_offboardings.status` reaches `purged` and that a platform audit
+   event `offboarding.purged` exists. Backups age out under the backup retention
+   policy; note the final expiry date in the hand-over record.
