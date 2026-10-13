@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import { logger } from '@/lib/observability/logger';
 import {
   signPayload,
@@ -33,15 +33,19 @@ function systemAudit(
   organisationId: string,
   correlationId: string,
   fields: Parameters<typeof recordAudit>[0],
+  tx?: AuditTransaction,
 ) {
-  return recordAudit({
-    ...fields,
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-  });
+  return recordAudit(
+    {
+      ...fields,
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+    },
+    tx,
+  );
 }
 
 export async function processWebhookDelivery(input: DeliverInput): Promise<void> {
@@ -114,35 +118,65 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
     });
 
     if (res.ok) {
-      await settle({
-        status: 'delivered',
-        attempts,
-        lastResponseCode: res.status,
-        deliveredAt: new Date(),
-      });
-      await systemAudit(organisationId, correlationId, {
-        action: 'integration.call_succeeded',
-        resourceType: 'integration',
-        resourceId: endpoint.id,
-        result: 'success',
+      await scope.db.transaction(async (tx) => {
+        await tx
+          .update(webhookDeliveries)
+          .set({
+            status: 'delivered',
+            attempts,
+            lastResponseCode: res.status,
+            deliveredAt: new Date(),
+          })
+          .where(
+            and(
+              eq(webhookDeliveries.organisationId, organisationId),
+              eq(webhookDeliveries.id, deliveryId),
+            ),
+          );
+        await systemAudit(
+          organisationId,
+          correlationId,
+          {
+            action: 'integration.call_succeeded',
+            resourceType: 'integration',
+            resourceId: endpoint.id,
+            result: 'success',
+          },
+          tx,
+        );
       });
       return;
     }
 
     // Non-2xx: retry until the cap, then give up (marked failed).
     const giveUp = attempts >= MAX_ATTEMPTS;
-    await settle({
-      status: giveUp ? 'failed' : 'pending',
-      attempts,
-      lastResponseCode: res.status,
-      lastError: `HTTP ${res.status}`,
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'integration.call_failed',
-      resourceType: 'integration',
-      resourceId: endpoint.id,
-      result: 'failure',
-      reason: `HTTP ${res.status}`,
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(webhookDeliveries)
+        .set({
+          status: giveUp ? 'failed' : 'pending',
+          attempts,
+          lastResponseCode: res.status,
+          lastError: `HTTP ${res.status}`,
+        })
+        .where(
+          and(
+            eq(webhookDeliveries.organisationId, organisationId),
+            eq(webhookDeliveries.id, deliveryId),
+          ),
+        );
+      await systemAudit(
+        organisationId,
+        correlationId,
+        {
+          action: 'integration.call_failed',
+          resourceType: 'integration',
+          resourceId: endpoint.id,
+          result: 'failure',
+          reason: `HTTP ${res.status}`,
+        },
+        tx,
+      );
     });
     if (!giveUp) throw new Error(`webhook delivery failed: HTTP ${res.status}`);
   } catch (err) {
@@ -150,17 +184,32 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
       throw err; // already recorded above; rethrow so BullMQ retries.
     }
     const giveUp = attempts >= MAX_ATTEMPTS;
-    await settle({
-      status: giveUp ? 'failed' : 'pending',
-      attempts,
-      lastError: err instanceof Error ? err.message : 'network error',
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'integration.call_failed',
-      resourceType: 'integration',
-      resourceId: endpoint.id,
-      result: 'failure',
-      reason: 'network error',
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(webhookDeliveries)
+        .set({
+          status: giveUp ? 'failed' : 'pending',
+          attempts,
+          lastError: err instanceof Error ? err.message : 'network error',
+        })
+        .where(
+          and(
+            eq(webhookDeliveries.organisationId, organisationId),
+            eq(webhookDeliveries.id, deliveryId),
+          ),
+        );
+      await systemAudit(
+        organisationId,
+        correlationId,
+        {
+          action: 'integration.call_failed',
+          resourceType: 'integration',
+          resourceId: endpoint.id,
+          result: 'failure',
+          reason: 'network error',
+        },
+        tx,
+      );
     });
     logger.warn({ organisationId, deliveryId, attempts }, 'webhook delivery error');
     if (!giveUp) throw err instanceof Error ? err : new Error('webhook delivery error');

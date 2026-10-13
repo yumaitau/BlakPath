@@ -7,7 +7,7 @@ import {
   retentionPolicies,
 } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import type { AuditAction, ResourceType } from '@/domains/audit/events';
 import { logger } from '@/lib/observability/logger';
 import { deleteObject, EVIDENCE_BUCKET, QUARANTINE_BUCKET } from '@/lib/storage/s3';
@@ -38,19 +38,22 @@ function sysAudit(
   action: AuditAction,
   resourceType: ResourceType,
   resourceId: string,
-  result: 'success' | 'failure' = 'success',
+  tx?: AuditTransaction,
 ) {
-  return recordAudit({
-    action,
-    resourceType,
-    resourceId,
-    result,
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-  });
+  return recordAudit(
+    {
+      action,
+      resourceType,
+      resourceId,
+      result: 'success',
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+    },
+    tx,
+  );
 }
 
 /** Active (unreleased) legal-hold resource ids for a type. */
@@ -111,43 +114,49 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
       for (const r of rows) {
         if (!due(r.createdAt, r.id)) continue;
         if (policy.action === 'anonymise') {
-          await scope.db
-            .update(applications)
-            .set({
-              applicantName: '[retained-anonymised]',
-              applicantUserId: null,
-              intake: null,
-            })
-            .where(
-              and(
-                eq(applications.organisationId, organisationId),
-                eq(applications.id, r.id),
-              ),
+          await scope.db.transaction(async (tx) => {
+            await tx
+              .update(applications)
+              .set({
+                applicantName: '[retained-anonymised]',
+                applicantUserId: null,
+                intake: null,
+              })
+              .where(
+                and(
+                  eq(applications.organisationId, organisationId),
+                  eq(applications.id, r.id),
+                ),
+              );
+            await sysAudit(
+              organisationId,
+              correlationId,
+              'retention.record_anonymised',
+              'application',
+              r.id,
+              tx,
             );
-          await sysAudit(
-            organisationId,
-            correlationId,
-            'retention.record_anonymised',
-            'application',
-            r.id,
-          );
+          });
         } else {
-          await scope.db
-            .update(applications)
-            .set({ deletedAt: now })
-            .where(
-              and(
-                eq(applications.organisationId, organisationId),
-                eq(applications.id, r.id),
-              ),
+          await scope.db.transaction(async (tx) => {
+            await tx
+              .update(applications)
+              .set({ deletedAt: now })
+              .where(
+                and(
+                  eq(applications.organisationId, organisationId),
+                  eq(applications.id, r.id),
+                ),
+              );
+            await sysAudit(
+              organisationId,
+              correlationId,
+              'retention.record_purged',
+              'application',
+              r.id,
+              tx,
             );
-          await sysAudit(
-            organisationId,
-            correlationId,
-            'retention.record_purged',
-            'application',
-            r.id,
-          );
+          });
         }
         actioned += 1;
       }
@@ -179,17 +188,22 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
             }
           }
         }
-        await scope.db
-          .update(evidence)
-          .set({ deletedAt: now })
-          .where(and(eq(evidence.organisationId, organisationId), eq(evidence.id, r.id)));
-        await sysAudit(
-          organisationId,
-          correlationId,
-          'retention.record_purged',
-          'evidence',
-          r.id,
-        );
+        await scope.db.transaction(async (tx) => {
+          await tx
+            .update(evidence)
+            .set({ deletedAt: now })
+            .where(
+              and(eq(evidence.organisationId, organisationId), eq(evidence.id, r.id)),
+            );
+          await sysAudit(
+            organisationId,
+            correlationId,
+            'retention.record_purged',
+            'evidence',
+            r.id,
+            tx,
+          );
+        });
         actioned += 1;
       }
     } else {
@@ -201,32 +215,38 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
         .limit(BATCH);
       for (const r of rows) {
         if (!due(r.submittedAt, r.id)) continue;
-        await scope.db
-          .delete(formResponses)
-          .where(
-            and(
-              eq(formResponses.organisationId, organisationId),
-              eq(formResponses.id, r.id),
-            ),
+        await scope.db.transaction(async (tx) => {
+          await tx
+            .delete(formResponses)
+            .where(
+              and(
+                eq(formResponses.organisationId, organisationId),
+                eq(formResponses.id, r.id),
+              ),
+            );
+          await sysAudit(
+            organisationId,
+            correlationId,
+            'retention.record_purged',
+            'form_response',
+            r.id,
+            tx,
           );
-        await sysAudit(
-          organisationId,
-          correlationId,
-          'retention.record_purged',
-          'form_response',
-          r.id,
-        );
+        });
         actioned += 1;
       }
     }
 
-    await sysAudit(
-      organisationId,
-      correlationId,
-      'retention.policy_applied',
-      'retention_policy',
-      policy.id,
-    );
+    await scope.db.transaction(async (tx) => {
+      await sysAudit(
+        organisationId,
+        correlationId,
+        'retention.policy_applied',
+        'retention_policy',
+        policy.id,
+        tx,
+      );
+    });
     if (actioned > 0) {
       logger.info(
         {

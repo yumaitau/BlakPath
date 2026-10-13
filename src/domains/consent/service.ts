@@ -44,50 +44,60 @@ export async function recordConsent(
   requireAny(subjectFromContext(ctx), CONSENT_WRITE);
   const input = recordSchema.parse(raw);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(consentRecords)
-    .values(
-      scope.insertValues({
-        subjectUserId: input.subjectUserId,
-        recordedByUserId: ctx.userId,
-        purpose: input.purpose,
-        status: 'granted',
-        expiresAt: input.expiresAt ?? null,
-        notes: input.notes ?? null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'consent record');
-  await recordAudit({
-    action: 'consent.recorded',
-    resourceType: 'consent',
-    resourceId: row.id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(consentRecords)
+      .values(
+        scope.insertValues({
+          subjectUserId: input.subjectUserId,
+          recordedByUserId: ctx.userId,
+          purpose: input.purpose,
+          status: 'granted',
+          expiresAt: input.expiresAt ?? null,
+          notes: input.notes ?? null,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'consent record');
+    await recordAudit(
+      {
+        action: 'consent.recorded',
+        resourceType: 'consent',
+        resourceId: row.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function withdrawConsent(id: string): Promise<ConsentRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_WRITE);
   const scope = currentScope();
-  const updated = await scope.db
-    .update(consentRecords)
-    .set({ status: 'withdrawn', revokedAt: new Date() })
-    .where(scope.where(consentRecords.organisationId, eq(consentRecords.id, id)))
-    .returning();
-  const row = updated[0];
-  if (!row) {
-    const { AuthorizationError } = await import('@/lib/permissions/errors');
-    throw new AuthorizationError('POLICY_DENIED');
-  }
-  await recordAudit({
-    action: 'consent.withdrawn',
-    resourceType: 'consent',
-    resourceId: id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(consentRecords)
+      .set({ status: 'withdrawn', revokedAt: new Date() })
+      .where(scope.where(consentRecords.organisationId, eq(consentRecords.id, id)))
+      .returning();
+    const row = updated[0];
+    if (!row) {
+      const { AuthorizationError } = await import('@/lib/permissions/errors');
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+    await recordAudit(
+      {
+        action: 'consent.withdrawn',
+        resourceType: 'consent',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listConsents(subjectUserId: string): Promise<ConsentRow[]> {

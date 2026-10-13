@@ -301,46 +301,51 @@ export async function createApplication(
   const id = uuidv7();
   const reference = makeReference(id);
 
-  const inserted = await scope.db
-    .insert(applications)
-    .values(
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(applications)
+      .values(
+        scope.insertValues({
+          id,
+          reference,
+          applicantName: input.applicantName,
+          applicantUserId: input.applicantUserId ?? null,
+          clientId,
+          priority: input.priority,
+          intake: input.intake ?? null,
+          createdByUserId: ctx.userId,
+          status: 'draft',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'application');
+
+    await tx.insert(applicationStatusHistory).values(
       scope.insertValues({
-        id,
-        reference,
-        applicantName: input.applicantName,
-        applicantUserId: input.applicantUserId ?? null,
-        clientId,
-        priority: input.priority,
-        intake: input.intake ?? null,
-        createdByUserId: ctx.userId,
-        status: 'draft',
+        applicationId: id,
+        fromStatus: null,
+        toStatus: 'draft',
+        action: 'create',
+        actorUserId: ctx.userId,
       }),
-    )
-    .returning();
-  const row = must(inserted[0], 'application');
+    );
 
-  await scope.db.insert(applicationStatusHistory).values(
-    scope.insertValues({
-      applicationId: id,
-      fromStatus: null,
-      toStatus: 'draft',
-      action: 'create',
-      actorUserId: ctx.userId,
-    }),
-  );
+    await recordAudit(
+      {
+        action: 'application.created',
+        resourceType: 'application',
+        resourceId: id,
+        result: 'success',
+        after: {
+          data: { reference, status: 'draft', priority: input.priority },
+          allow: ['reference', 'status', 'priority'],
+        },
+      },
+      tx,
+    );
 
-  await recordAudit({
-    action: 'application.created',
-    resourceType: 'application',
-    resourceId: id,
-    result: 'success',
-    after: {
-      data: { reference, status: 'draft', priority: input.priority },
-      allow: ['reference', 'status', 'priority'],
-    },
+    return row;
   });
-
-  return row;
 }
 
 /** Update intake details. Requires `application:update-intake`. */
@@ -361,32 +366,37 @@ export async function updateIntake(
   if (input.priority !== undefined) patch.priority = input.priority;
   if (input.intake !== undefined) patch.intake = input.intake;
 
-  const updated = await scope.db
-    .update(applications)
-    .set(patch)
-    .where(scope.where(applications.organisationId, eq(applications.id, id)))
-    .returning();
-  const row = must(updated[0], 'application');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(applications)
+      .set(patch)
+      .where(scope.where(applications.organisationId, eq(applications.id, id)))
+      .returning();
+    const row = must(updated[0], 'application');
 
-  await recordAudit({
-    action: 'application.updated',
-    resourceType: 'application',
-    resourceId: id,
-    result: 'success',
-    before: {
-      data: {
-        applicantName: existing.applicantName,
-        priority: existing.priority,
+    await recordAudit(
+      {
+        action: 'application.updated',
+        resourceType: 'application',
+        resourceId: id,
+        result: 'success',
+        before: {
+          data: {
+            applicantName: existing.applicantName,
+            priority: existing.priority,
+          },
+          allow: ['applicantName', 'priority'],
+        },
+        after: {
+          data: { applicantName: row.applicantName, priority: row.priority },
+          allow: ['applicantName', 'priority'],
+        },
       },
-      allow: ['applicantName', 'priority'],
-    },
-    after: {
-      data: { applicantName: row.applicantName, priority: row.priority },
-      allow: ['applicantName', 'priority'],
-    },
-  });
+      tx,
+    );
 
-  return row;
+    return row;
+  });
 }
 
 /** Assign (or reassign) an application to a worker. Requires `application:assign`. */
@@ -442,16 +452,19 @@ export async function assignApplication(
         ),
       );
 
-    await recordAudit({
-      action: isReassignment ? 'assignment.reassigned' : 'assignment.assigned',
-      resourceType: 'assignment',
-      resourceId: assignment.id,
-      result: 'success',
-      after: {
-        data: { applicationId: id, assigneeUserId: input.assigneeUserId },
-        allow: ['applicationId', 'assigneeUserId'],
+    await recordAudit(
+      {
+        action: isReassignment ? 'assignment.reassigned' : 'assignment.assigned',
+        resourceType: 'assignment',
+        resourceId: assignment.id,
+        result: 'success',
+        after: {
+          data: { applicationId: id, assigneeUserId: input.assigneeUserId },
+          allow: ['applicationId', 'assigneeUserId'],
+        },
       },
-    });
+      tx,
+    );
 
     return assignment;
   });
@@ -490,7 +503,7 @@ export async function transitionApplication(
   }
   if (action === 'close') patch.closedAt = now;
 
-  const updatedRows = await scope.db.transaction(async (tx) => {
+  return scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(applications)
       .set(patch)
@@ -508,21 +521,21 @@ export async function transitionApplication(
       }),
     );
 
-    return updated;
+    const row = must(updated[0], 'application');
+    await recordAudit(
+      {
+        action: TRANSITIONS[action].audit,
+        resourceType: 'application',
+        resourceId: id,
+        result: 'success',
+        reason: input.note ?? null,
+        before: { data: { status: from }, allow: ['status'] },
+        after: { data: { status: to, action }, allow: ['status', 'action'] },
+      },
+      tx,
+    );
+    return row;
   });
-  const row = must(updatedRows[0], 'application');
-
-  await recordAudit({
-    action: TRANSITIONS[action].audit,
-    resourceType: 'application',
-    resourceId: id,
-    result: 'success',
-    reason: input.note ?? null,
-    before: { data: { status: from }, allow: ['status'] },
-    after: { data: { status: to, action }, allow: ['status', 'action'] },
-  });
-
-  return row;
 }
 
 /**
@@ -608,31 +621,36 @@ export async function addNote(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const insertedNote = await scope.db
-    .insert(applicationNotes)
-    .values(
-      scope.insertValues({
-        applicationId: id,
-        authorUserId: ctx.userId,
-        body: input.body,
-        visibility: input.visibility,
-      }),
-    )
-    .returning();
-  const note = must(insertedNote[0], 'note');
+  return scope.db.transaction(async (tx) => {
+    const insertedNote = await tx
+      .insert(applicationNotes)
+      .values(
+        scope.insertValues({
+          applicationId: id,
+          authorUserId: ctx.userId,
+          body: input.body,
+          visibility: input.visibility,
+        }),
+      )
+      .returning();
+    const note = must(insertedNote[0], 'note');
 
-  await recordAudit({
-    action: 'record.created',
-    resourceType: 'record',
-    resourceId: note.id,
-    result: 'success',
-    after: {
-      data: { applicationId: id, visibility: input.visibility },
-      allow: ['applicationId', 'visibility'],
-    },
+    await recordAudit(
+      {
+        action: 'record.created',
+        resourceType: 'record',
+        resourceId: note.id,
+        result: 'success',
+        after: {
+          data: { applicationId: id, visibility: input.visibility },
+          allow: ['applicationId', 'visibility'],
+        },
+      },
+      tx,
+    );
+
+    return note;
   });
-
-  return note;
 }
 
 /** Re-export the context type for callers that thread it explicitly. */

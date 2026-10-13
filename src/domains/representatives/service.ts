@@ -95,27 +95,32 @@ export async function requestRepresentativeAccess(
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
-  const inserted = await scope.db
-    .insert(representativeAuthorisations)
-    .values(
-      scope.insertValues({
-        subjectUserId: input.subjectUserId,
-        representativeUserId: input.representativeUserId,
-        purpose: input.purpose,
-        status: 'pending',
-        expiresAt: input.expiresAt ?? null,
-        consentRecordId: input.consentRecordId,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'representative authorisation');
-  await recordAudit({
-    action: 'representative.requested',
-    resourceType: 'representative_authorisation',
-    resourceId: row.id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(representativeAuthorisations)
+      .values(
+        scope.insertValues({
+          subjectUserId: input.subjectUserId,
+          representativeUserId: input.representativeUserId,
+          purpose: input.purpose,
+          status: 'pending',
+          expiresAt: input.expiresAt ?? null,
+          consentRecordId: input.consentRecordId,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'representative authorisation');
+    await recordAudit(
+      {
+        action: 'representative.requested',
+        resourceType: 'representative_authorisation',
+        resourceId: row.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function activateRepresentativeAccess(
@@ -150,47 +155,57 @@ export async function activateRepresentativeAccess(
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
-  const updated = await scope.db
-    .update(representativeAuthorisations)
-    .set({ status: 'active', grantedAt: new Date() })
-    .where(
-      scope.where(
-        representativeAuthorisations.organisationId,
-        eq(representativeAuthorisations.id, id),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'representative authorisation');
-  await recordAudit({
-    action: 'representative.activated',
-    resourceType: 'representative_authorisation',
-    resourceId: id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(representativeAuthorisations)
+      .set({ status: 'active', grantedAt: new Date() })
+      .where(
+        scope.where(
+          representativeAuthorisations.organisationId,
+          eq(representativeAuthorisations.id, id),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'representative authorisation');
+    await recordAudit(
+      {
+        action: 'representative.activated',
+        resourceType: 'representative_authorisation',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function revokeRepresentativeAccess(id: string): Promise<RepresentativeRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), REP_WRITE);
   const scope = currentScope();
-  const updated = await scope.db
-    .update(representativeAuthorisations)
-    .set({ status: 'revoked', revokedAt: new Date() })
-    .where(
-      scope.where(
-        representativeAuthorisations.organisationId,
-        eq(representativeAuthorisations.id, id),
-      ),
-    )
-    .returning();
-  const row = updated[0];
-  if (!row) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({
-    action: 'representative.revoked',
-    resourceType: 'representative_authorisation',
-    resourceId: id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(representativeAuthorisations)
+      .set({ status: 'revoked', revokedAt: new Date() })
+      .where(
+        scope.where(
+          representativeAuthorisations.organisationId,
+          eq(representativeAuthorisations.id, id),
+        ),
+      )
+      .returning();
+    const row = updated[0];
+    if (!row) throw new AuthorizationError('POLICY_DENIED');
+    await recordAudit(
+      {
+        action: 'representative.revoked',
+        resourceType: 'representative_authorisation',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }

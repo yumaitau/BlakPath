@@ -19,7 +19,12 @@ export {
   toIsoTimestamp,
 } from './hash';
 
-export type { AuditMetaInput, RecordAuditInput, RecordedAuditEvent } from './service';
+export type {
+  AuditMetaInput,
+  AuditTransaction,
+  RecordAuditInput,
+  RecordedAuditEvent,
+} from './service';
 export {
   auditChainLockKey,
   auditChainWhere,

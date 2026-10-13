@@ -43,28 +43,33 @@ export async function createEndpoint(
 
   const input = createEndpointSchema.parse(rawInput);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(webhookEndpoints)
-    .values(
-      scope.insertValues({
-        url: input.url,
-        secret: secretGen(),
-        events: input.events,
-        active: true,
-        createdByUserId: ctx.userId,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'webhook endpoint');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(webhookEndpoints)
+      .values(
+        scope.insertValues({
+          url: input.url,
+          secret: secretGen(),
+          events: input.events,
+          active: true,
+          createdByUserId: ctx.userId,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'webhook endpoint');
 
-  await recordAudit({
-    action: 'integration.connected',
-    resourceType: 'integration',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { url: input.url }, allow: ['url'] },
+    await recordAudit(
+      {
+        action: 'integration.connected',
+        resourceType: 'integration',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { url: input.url }, allow: ['url'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listEndpoints(): Promise<WebhookEndpointRow[]> {
@@ -84,16 +89,21 @@ export async function deleteEndpoint(id: string): Promise<void> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const scope = currentScope();
-  await scope.db
-    .update(webhookEndpoints)
-    .set({ active: false, deletedAt: new Date() })
-    .where(scope.where(webhookEndpoints.organisationId, eq(webhookEndpoints.id, id)));
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .update(webhookEndpoints)
+      .set({ active: false, deletedAt: new Date() })
+      .where(scope.where(webhookEndpoints.organisationId, eq(webhookEndpoints.id, id)));
 
-  await recordAudit({
-    action: 'integration.disconnected',
-    resourceType: 'integration',
-    resourceId: id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'integration.disconnected',
+        resourceType: 'integration',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }
 

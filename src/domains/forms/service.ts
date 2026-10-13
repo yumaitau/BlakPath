@@ -73,29 +73,34 @@ export async function createForm(rawInput: CreateFormInput): Promise<FormRow> {
 
   const input = createFormSchema.parse(rawInput);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(forms)
-    .values(
-      scope.insertValues({
-        title: input.title,
-        description: input.description ?? null,
-        applicationId: input.applicationId ?? null,
-        createdByUserId: ctx.userId,
-        fields: [],
-        status: 'draft',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(forms)
+      .values(
+        scope.insertValues({
+          title: input.title,
+          description: input.description ?? null,
+          applicationId: input.applicationId ?? null,
+          createdByUserId: ctx.userId,
+          fields: [],
+          status: 'draft',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'form');
 
-  await recordAudit({
-    action: 'form.created',
-    resourceType: 'form',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { title: row.title }, allow: ['title'] },
+    await recordAudit(
+      {
+        action: 'form.created',
+        resourceType: 'form',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { title: row.title }, allow: ['title'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function updateForm(
@@ -115,20 +120,25 @@ export async function updateForm(
   if (input.fields !== undefined) patch.fields = input.fields;
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(forms)
-    .set(patch)
-    .where(scope.where(forms.organisationId, eq(forms.id, formId)))
-    .returning();
-  const row = must(updated[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(forms)
+      .set(patch)
+      .where(scope.where(forms.organisationId, eq(forms.id, formId)))
+      .returning();
+    const row = must(updated[0], 'form');
 
-  await recordAudit({
-    action: 'form.updated',
-    resourceType: 'form',
-    resourceId: formId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'form.updated',
+        resourceType: 'form',
+        resourceId: formId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Publish or close a form (status transition). */
@@ -144,20 +154,25 @@ async function setFormStatus(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(forms)
-    .set({ status })
-    .where(scope.where(forms.organisationId, eq(forms.id, formId)))
-    .returning();
-  const row = must(updated[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(forms)
+      .set({ status })
+      .where(scope.where(forms.organisationId, eq(forms.id, formId)))
+      .returning();
+    const row = must(updated[0], 'form');
 
-  await recordAudit({
-    action,
-    resourceType: 'form',
-    resourceId: formId,
-    result: 'success',
+    await recordAudit(
+      {
+        action,
+        resourceType: 'form',
+        resourceId: formId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export function publishForm(formId: string): Promise<FormRow> {
@@ -205,28 +220,34 @@ export async function createInvitation(
   const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(formInvitations)
-    .values(
-      scope.insertValues({
-        formId,
-        tokenHash: hashToken(token),
-        recipientName: input.recipientName ?? null,
-        recipientEmail: input.recipientEmail ?? null,
-        sentByUserId: ctx.userId,
-        status: 'pending',
-        expiresAt,
-      }),
-    )
-    .returning();
-  const invitation = must(inserted[0], 'invitation');
+  const invitation = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(formInvitations)
+      .values(
+        scope.insertValues({
+          formId,
+          tokenHash: hashToken(token),
+          recipientName: input.recipientName ?? null,
+          recipientEmail: input.recipientEmail ?? null,
+          sentByUserId: ctx.userId,
+          status: 'pending',
+          expiresAt,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'invitation');
 
-  await recordAudit({
-    action: 'form.invitation_sent',
-    resourceType: 'form_invitation',
-    resourceId: invitation.id,
-    result: 'success',
-    after: { data: { formId }, allow: ['formId'] },
+    await recordAudit(
+      {
+        action: 'form.invitation_sent',
+        resourceType: 'form_invitation',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { formId }, allow: ['formId'] },
+      },
+      tx,
+    );
+    return row;
   });
 
   // Email the recipient their completion link. This is the one place the raw
@@ -271,22 +292,27 @@ export async function revokeInvitation(invitationId: string): Promise<FormInvita
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(formInvitations)
-    .set({ status: 'revoked' })
-    .where(
-      scope.where(formInvitations.organisationId, eq(formInvitations.id, invitationId)),
-    )
-    .returning();
-  const row = must(updated[0], 'invitation');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(formInvitations)
+      .set({ status: 'revoked' })
+      .where(
+        scope.where(formInvitations.organisationId, eq(formInvitations.id, invitationId)),
+      )
+      .returning();
+    const row = must(updated[0], 'invitation');
 
-  await recordAudit({
-    action: 'form.invitation_revoked',
-    resourceType: 'form_invitation',
-    resourceId: invitationId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'form.invitation_revoked',
+        resourceType: 'form_invitation',
+        resourceId: invitationId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listInvitations(formId: string): Promise<FormInvitationRow[]> {
@@ -380,19 +406,24 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
   const { invitation, form } = await resolveUsableInvitation(token);
 
   if (invitation.status === 'pending') {
-    await db
-      .update(formInvitations)
-      .set({ status: 'opened', openedAt: new Date() })
-      .where(eq(formInvitations.id, invitation.id));
-    await recordAudit({
-      action: 'form.invitation_opened',
-      resourceType: 'form_invitation',
-      resourceId: invitation.id,
-      result: 'success',
-      organisationId: invitation.organisationId,
-      actorUserId: null,
-      actingRole: 'public',
-      sessionId: null,
+    await db.transaction(async (tx) => {
+      await tx
+        .update(formInvitations)
+        .set({ status: 'opened', openedAt: new Date() })
+        .where(eq(formInvitations.id, invitation.id));
+      await recordAudit(
+        {
+          action: 'form.invitation_opened',
+          resourceType: 'form_invitation',
+          resourceId: invitation.id,
+          result: 'success',
+          organisationId: invitation.organisationId,
+          actorUserId: null,
+          actingRole: 'public',
+          sessionId: null,
+        },
+        tx,
+      );
     });
   }
 
@@ -423,32 +454,37 @@ export async function submitPublicResponse(
   }
 
   const scope = scopeFor(invitation.organisationId);
-  await scope.db.insert(formResponses).values(
-    scope.insertValues({
-      formId: form.id,
-      invitationId: invitation.id,
-      answers: parsed.data,
-      respondentName: invitation.recipientName,
-      respondentEmail: invitation.recipientEmail,
-      ipAddress: ipAddress ?? null,
-    }),
-  );
+  await db.transaction(async (tx) => {
+    await tx.insert(formResponses).values(
+      scope.insertValues({
+        formId: form.id,
+        invitationId: invitation.id,
+        answers: parsed.data,
+        respondentName: invitation.recipientName,
+        respondentEmail: invitation.recipientEmail,
+        ipAddress: ipAddress ?? null,
+      }),
+    );
 
-  await db
-    .update(formInvitations)
-    .set({ status: 'completed', completedAt: new Date() })
-    .where(eq(formInvitations.id, invitation.id));
+    await tx
+      .update(formInvitations)
+      .set({ status: 'completed', completedAt: new Date() })
+      .where(eq(formInvitations.id, invitation.id));
 
-  await recordAudit({
-    action: 'form.response_submitted',
-    resourceType: 'form_response',
-    resourceId: invitation.id,
-    result: 'success',
-    organisationId: invitation.organisationId,
-    actorUserId: null,
-    actingRole: 'public',
-    sessionId: null,
-    ...(ipAddress ? { ipAddress } : {}),
+    await recordAudit(
+      {
+        action: 'form.response_submitted',
+        resourceType: 'form_response',
+        resourceId: invitation.id,
+        result: 'success',
+        organisationId: invitation.organisationId,
+        actorUserId: null,
+        actingRole: 'public',
+        sessionId: null,
+        ...(ipAddress ? { ipAddress } : {}),
+      },
+      tx,
+    );
   });
 
   return { ok: true };

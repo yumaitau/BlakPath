@@ -181,34 +181,39 @@ export async function generateCertificate(
   });
   const sha256 = createHash('sha256').update(pdf).digest('hex');
 
-  const inserted = await scope.db
-    .insert(certificates)
-    .values(
-      scope.insertValues({
-        id,
-        applicationId: decision.applicationId,
-        decisionId: decision.id,
-        reference,
-        verificationCode,
-        status: 'draft',
-        pdfObjectKey: key,
-        sha256,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'certificate');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(certificates)
+      .values(
+        scope.insertValues({
+          id,
+          applicationId: decision.applicationId,
+          decisionId: decision.id,
+          reference,
+          verificationCode,
+          status: 'draft',
+          pdfObjectKey: key,
+          sha256,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'certificate');
 
-  await recordAudit({
-    action: 'certificate.generated',
-    resourceType: 'certificate',
-    resourceId: id,
-    result: 'success',
-    after: {
-      data: { reference, decisionId: decision.id },
-      allow: ['reference', 'decisionId'],
-    },
+    await recordAudit(
+      {
+        action: 'certificate.generated',
+        resourceType: 'certificate',
+        resourceId: id,
+        result: 'success',
+        after: {
+          data: { reference, decisionId: decision.id },
+          allow: ['reference', 'decisionId'],
+        },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /**
@@ -285,29 +290,35 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   });
   const { signCoaPayload } = await import('@/lib/kms/sign');
   const seal = await signCoaPayload(canonical);
-  const updated = await scope.db
-    .update(certificates)
-    .set({
-      status: 'signed',
-      signedByUserId: ctx.userId,
-      signedAt,
-      payloadHash: seal.payloadHash,
-      signature: seal.signatureB64,
-      signingAlgorithm: seal.algorithm,
-      signingKeyId: seal.keyId,
-    })
-    .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
-    .returning();
-  const row = must(updated[0], 'certificate');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(certificates)
+      .set({
+        status: 'signed',
+        signedByUserId: ctx.userId,
+        signedAt,
+        payloadHash: seal.payloadHash,
+        signature: seal.signatureB64,
+        signingAlgorithm: seal.algorithm,
+        signingKeyId: seal.keyId,
+      })
+      .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
+      .returning();
+    const updatedRow = must(updated[0], 'certificate');
 
-  await recordAudit({
-    action: 'certificate.signed',
-    resourceType: 'certificate',
-    resourceId: id,
-    result: 'success',
-    reason: `sealed with ${seal.algorithm}`,
-    before: { data: { status: 'draft' }, allow: ['status'] },
-    after: { data: { status: 'signed' }, allow: ['status'] },
+    await recordAudit(
+      {
+        action: 'certificate.signed',
+        resourceType: 'certificate',
+        resourceId: id,
+        result: 'success',
+        reason: `sealed with ${seal.algorithm}`,
+        before: { data: { status: 'draft' }, allow: ['status'] },
+        after: { data: { status: 'signed' }, allow: ['status'] },
+      },
+      tx,
+    );
+    return updatedRow;
   });
 
   await emitWebhookEventSafe({
@@ -342,26 +353,31 @@ export async function revokeCertificate(
   }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(certificates)
-    .set({
-      status: 'revoked',
-      revokedByUserId: ctx.userId,
-      revokedAt: new Date(),
-      revokedReason: input.reason,
-    })
-    .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
-    .returning();
-  const row = must(updated[0], 'certificate');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(certificates)
+      .set({
+        status: 'revoked',
+        revokedByUserId: ctx.userId,
+        revokedAt: new Date(),
+        revokedReason: input.reason,
+      })
+      .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
+      .returning();
+    const row = must(updated[0], 'certificate');
 
-  await recordAudit({
-    action: 'certificate.revoked',
-    resourceType: 'certificate',
-    resourceId: id,
-    result: 'success',
-    reason: input.reason,
+    await recordAudit(
+      {
+        action: 'certificate.revoked',
+        resourceType: 'certificate',
+        resourceId: id,
+        result: 'success',
+        reason: input.reason,
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Mint a short-lived download URL for a signed, non-revoked certificate. */

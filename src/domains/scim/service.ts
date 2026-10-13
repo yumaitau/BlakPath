@@ -100,76 +100,83 @@ export async function provisionScimUser(
     .limit(1);
   if (!org || org.status !== 'active') throw new AuthorizationError('POLICY_DENIED');
 
-  let userId: string;
-  const [existingUser] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
-  if (existingUser) {
-    userId = existingUser.id;
-  } else {
-    userId = uuidv7();
-    await db.insert(users).values({
-      id: userId,
-      name: displayName(input),
-      email,
-      emailVerified: true,
-    });
-  }
-
-  const [existing] = await db
-    .select({ id: memberships.id })
-    .from(memberships)
-    .where(
-      and(eq(memberships.organisationId, organisationId), eq(memberships.userId, userId)),
-    )
-    .limit(1);
-  let membershipId = existing?.id;
-  if (existing) {
-    await db
-      .update(memberships)
-      .set({ status: input.active === false ? 'suspended' : 'active' })
-      .where(eq(memberships.id, existing.id));
-    membershipId = existing.id;
-  } else {
-    membershipId = uuidv7();
-    await db.insert(memberships).values({
-      id: membershipId,
-      organisationId,
-      userId,
-      status: input.active === false ? 'suspended' : 'active',
-    });
-  }
-
+  const status = input.active === false ? 'suspended' : 'active';
   const slugs = mapGroupsToRoles(input);
-  if (slugs.length > 0 && membershipId) {
-    const tenantRoles = await db
-      .select({ id: roles.id, slug: roles.slug })
-      .from(roles)
-      .where(eq(roles.organisationId, organisationId));
-    const bySlug = new Map(tenantRoles.map((r) => [r.slug, r.id]));
-    for (const slug of slugs) {
-      const roleId = bySlug.get(slug);
-      if (!roleId) continue;
-      await db
-        .insert(membershipRoles)
-        .values({ id: uuidv7(), membershipId, roleId })
-        .onConflictDoNothing({
-          target: [membershipRoles.membershipId, membershipRoles.roleId],
-        });
-    }
-  }
+  const name = displayName(input);
 
-  await recordAudit({
-    action: 'membership.invitation_accepted',
-    resourceType: 'membership',
-    resourceId: membershipId ?? null,
-    result: 'success',
-    reason: 'scim provision',
-    organisationId,
+  const membershipId = await db.transaction(async (tx) => {
+    let userId: string;
+    const [existingUser] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    if (existingUser) {
+      userId = existingUser.id;
+    } else {
+      userId = uuidv7();
+      await tx.insert(users).values({
+        id: userId,
+        name,
+        email,
+        emailVerified: true,
+      });
+    }
+
+    const [existing] = await tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(
+        and(
+          eq(memberships.organisationId, organisationId),
+          eq(memberships.userId, userId),
+        ),
+      )
+      .limit(1);
+    const id = existing?.id ?? uuidv7();
+    if (existing) {
+      await tx.update(memberships).set({ status }).where(eq(memberships.id, existing.id));
+    } else {
+      await tx.insert(memberships).values({
+        id,
+        organisationId,
+        userId,
+        status,
+      });
+    }
+
+    if (slugs.length > 0) {
+      const tenantRoles = await tx
+        .select({ id: roles.id, slug: roles.slug })
+        .from(roles)
+        .where(eq(roles.organisationId, organisationId));
+      const bySlug = new Map(tenantRoles.map((r) => [r.slug, r.id]));
+      for (const slug of slugs) {
+        const roleId = bySlug.get(slug);
+        if (!roleId) continue;
+        await tx
+          .insert(membershipRoles)
+          .values({ id: uuidv7(), membershipId: id, roleId })
+          .onConflictDoNothing({
+            target: [membershipRoles.membershipId, membershipRoles.roleId],
+          });
+      }
+    }
+
+    await recordAudit(
+      {
+        action: 'membership.invitation_accepted',
+        resourceType: 'membership',
+        resourceId: id,
+        result: 'success',
+        reason: 'scim provision',
+        organisationId,
+      },
+      tx,
+    );
+    return id;
   });
-  return { id: membershipId ?? userId, userName: email };
+  return { id: membershipId, userName: email };
 }
 
 /** Deactivate (suspend) or revoke a provisioned membership by email. */
@@ -184,23 +191,28 @@ export async function setScimUserActive(
     .where(eq(users.email, email.trim().toLowerCase()))
     .limit(1);
   if (!user) throw new AuthorizationError('POLICY_DENIED');
-  const updated = await db
-    .update(memberships)
-    .set({ status: active ? 'active' : 'suspended' })
-    .where(
-      and(
-        eq(memberships.organisationId, organisationId),
-        eq(memberships.userId, user.id),
-      ),
-    )
-    .returning({ id: memberships.id });
-  if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({
-    action: active ? 'membership.reinstated' : 'membership.suspended',
-    resourceType: 'membership',
-    resourceId: updated[0].id,
-    result: 'success',
-    reason: 'scim',
-    organisationId,
+  await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(memberships)
+      .set({ status: active ? 'active' : 'suspended' })
+      .where(
+        and(
+          eq(memberships.organisationId, organisationId),
+          eq(memberships.userId, user.id),
+        ),
+      )
+      .returning({ id: memberships.id });
+    if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
+    await recordAudit(
+      {
+        action: active ? 'membership.reinstated' : 'membership.suspended',
+        resourceType: 'membership',
+        resourceId: updated[0].id,
+        result: 'success',
+        reason: 'scim',
+        organisationId,
+      },
+      tx,
+    );
   });
 }

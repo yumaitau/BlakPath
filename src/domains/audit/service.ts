@@ -23,7 +23,10 @@ import {
  *      raw contents never reach the database;
  *   3. serialises appenders for a given chain with a transaction-scoped
  *      Postgres advisory lock, reads the current chain tip inside the same
- *      transaction, computes the chained SHA-256 hash, and inserts.
+ *      transaction, computes the chained SHA-256 hash, and inserts. When the
+ *      caller passes an open transaction, the lock and insert join it: the
+ *      audit commits or rolls back with the business change, and the append
+ *      does not take a second pool connection.
  *
  * There is deliberately no update or delete path. The trail is immutable; even
  * corrections are expressed as new events.
@@ -84,12 +87,12 @@ function chainLockKey(organisationId: string | null): bigint {
   return digest.readBigInt64BE(0);
 }
 
-/** Resolve the current tip hash of a chain inside an open transaction. */
 /** The transaction handle drizzle passes to a `db.transaction(...)` callback. */
-type DbTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+export type AuditTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
+/** Resolve the current tip hash of a chain inside an open transaction. */
 async function currentTip(
-  tx: Database | DbTransaction,
+  tx: AuditTransaction,
   organisationId: string | null,
 ): Promise<{ hash: string; timestamp: Date } | null> {
   const whereChain =
@@ -108,8 +111,14 @@ async function currentTip(
 /**
  * Core append. Resolves attribution, redacts metadata, then within a single
  * transaction takes the chain advisory lock, reads the tip, hashes and inserts.
+ *
+ * Pass `tx` to join the caller's transaction. Omitting it opens a transaction
+ * for standalone events (a view, a denial) that have no business write to join.
  */
-export async function recordAudit(input: RecordAuditInput): Promise<RecordedAuditEvent> {
+export async function recordAudit(
+  input: RecordAuditInput,
+  tx?: AuditTransaction,
+): Promise<RecordedAuditEvent> {
   const ctx = getTenantContext();
 
   const organisationId =
@@ -144,16 +153,16 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
 
   const lockKey = chainLockKey(organisationId);
 
-  return db.transaction(async (tx) => {
+  const append = async (writer: AuditTransaction): Promise<RecordedAuditEvent> => {
     // Serialise concurrent appenders on THIS chain only. The lock is released
     // automatically when the transaction commits or rolls back.
-    await tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`);
+    await writer.execute(sql`select pg_advisory_xact_lock(${lockKey})`);
 
     // Event ordering fields must be created AFTER acquiring the chain lock.
     // Generating them before the wait lets a later request commit first while
     // retaining a later timestamp, which makes the persisted link order differ
     // from the verifier's (timestamp, id) order under concurrent appends.
-    const clockRows = await tx.execute(
+    const clockRows = await writer.execute(
       sql<{ timestamp: Date }>`select clock_timestamp() as timestamp`,
     );
     const rawTimestamp = clockRows[0]?.timestamp as Date | string | undefined;
@@ -166,7 +175,7 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
     if (!databaseTimestamp || Number.isNaN(databaseTimestamp.getTime())) {
       throw new Error('Database clock did not return an audit timestamp');
     }
-    const tip = await currentTip(tx, organisationId);
+    const tip = await currentTip(writer, organisationId);
     // postgres-js represents timestamps as millisecond JavaScript Dates. Two
     // processes can therefore observe different microseconds that collapse to
     // the same millisecond. Make the stored ordering key strictly monotonic for
@@ -201,7 +210,7 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
 
     const hash = computeEventHash(prevHash, hashable);
 
-    await tx.insert(auditEvents).values({
+    await writer.insert(auditEvents).values({
       id,
       organisationId,
       timestamp,
@@ -224,7 +233,10 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
     });
 
     return { id, organisationId, hash, prevHash, timestamp };
-  });
+  };
+
+  if (tx) return append(tx);
+  return db.transaction(append);
 }
 
 /**
@@ -235,8 +247,9 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
  */
 export async function recordPlatformAudit(
   input: Omit<RecordAuditInput, 'organisationId'>,
+  tx?: AuditTransaction,
 ): Promise<RecordedAuditEvent> {
-  return recordAudit({ ...input, organisationId: null });
+  return recordAudit({ ...input, organisationId: null }, tx);
 }
 
 /** Re-export the chain-lock key derivation for verification tooling/tests. */

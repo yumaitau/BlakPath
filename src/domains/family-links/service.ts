@@ -67,34 +67,39 @@ export async function requestFamilyLink(
   await getApplication(applicationId);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(familyLinks)
-    .values(
-      scope.insertValues({
-        applicationId,
-        requestedByUserId: ctx.userId,
-        relationship: input.relationship,
-        relativeName: input.relativeName,
-        community: input.community ?? null,
-        notes: input.notes ?? null,
-        status: 'requested',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'family link');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(familyLinks)
+      .values(
+        scope.insertValues({
+          applicationId,
+          requestedByUserId: ctx.userId,
+          relationship: input.relationship,
+          relativeName: input.relativeName,
+          community: input.community ?? null,
+          notes: input.notes ?? null,
+          status: 'requested',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'family link');
 
-  await recordAudit({
-    action: 'family_link.created',
-    resourceType: 'family_link',
-    resourceId: row.id,
-    result: 'success',
-    after: {
-      data: { applicationId, relationship: input.relationship },
-      allow: ['applicationId', 'relationship'],
-    },
+    await recordAudit(
+      {
+        action: 'family_link.created',
+        resourceType: 'family_link',
+        resourceId: row.id,
+        result: 'success',
+        after: {
+          data: { applicationId, relationship: input.relationship },
+          allow: ['applicationId', 'relationship'],
+        },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Shared approve/dispute path. `next` is the resulting decided status. */
@@ -116,29 +121,34 @@ async function decideLink(
   assertDifferentActor(ctx.userId, link.requestedByUserId);
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(familyLinks)
-    .set({
-      status: next,
-      decidedByUserId: ctx.userId,
-      decidedAt: new Date(),
-      decisionNote: input.note ?? null,
-    })
-    .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
-    .returning();
-  const row = must(updated[0], 'family link');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(familyLinks)
+      .set({
+        status: next,
+        decidedByUserId: ctx.userId,
+        decidedAt: new Date(),
+        decisionNote: input.note ?? null,
+      })
+      .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
+      .returning();
+    const row = must(updated[0], 'family link');
 
-  await recordAudit({
-    action: next === 'approved' ? 'family_link.confirmed' : 'family_link.disputed',
-    resourceType: 'family_link',
-    resourceId: linkId,
-    result: 'success',
-    reason: input.note ?? null,
-    before: { data: { status: 'requested' }, allow: ['status'] },
-    after: { data: { status: next }, allow: ['status'] },
+    await recordAudit(
+      {
+        action: next === 'approved' ? 'family_link.confirmed' : 'family_link.disputed',
+        resourceType: 'family_link',
+        resourceId: linkId,
+        result: 'success',
+        reason: input.note ?? null,
+        before: { data: { status: 'requested' }, allow: ['status'] },
+        after: { data: { status: next }, allow: ['status'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Approve a requested family link (approver must differ from the requester). */
@@ -172,21 +182,26 @@ export async function withdrawFamilyLink(linkId: string): Promise<FamilyLinkRow>
   }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(familyLinks)
-    .set({ status: 'withdrawn' })
-    .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
-    .returning();
-  const row = must(updated[0], 'family link');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(familyLinks)
+      .set({ status: 'withdrawn' })
+      .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
+      .returning();
+    const row = must(updated[0], 'family link');
 
-  await recordAudit({
-    action: 'family_link.removed',
-    resourceType: 'family_link',
-    resourceId: linkId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'family_link.removed',
+        resourceType: 'family_link',
+        resourceId: linkId,
+        result: 'success',
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** List family links for an application the actor may read. */

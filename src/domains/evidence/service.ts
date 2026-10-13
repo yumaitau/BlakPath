@@ -4,7 +4,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { uuidv7 } from 'uuidv7';
 import { evidence, evidenceRequests } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -47,7 +47,6 @@ import { contentTypeAcceptable, isServable } from './status';
 
 export type EvidenceRow = typeof evidence.$inferSelect;
 export type EvidenceRequestRow = typeof evidenceRequests.$inferSelect;
-type EvidencePatch = Partial<typeof evidence.$inferInsert>;
 
 function must<T>(row: T | undefined, what: string): T {
   if (row === undefined) {
@@ -151,12 +150,38 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
   }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(evidence)
-    .set({ status: 'quarantined' })
-    .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
-    .returning();
-  const row = must(updated[0], 'evidence');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({ status: 'quarantined' })
+      .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
+      .returning();
+    const saved = must(updated[0], 'evidence');
+
+    await recordAudit(
+      {
+        action: 'evidence.uploaded',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+        after: {
+          data: { applicationId: saved.applicationId, fileName: saved.fileName },
+          allow: ['applicationId', 'fileName'],
+        },
+      },
+      tx,
+    );
+    await recordAudit(
+      {
+        action: 'evidence.scan_started',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+      },
+      tx,
+    );
+    return saved;
+  });
 
   await addJob(
     QueueName.MalwareScan,
@@ -168,23 +193,6 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     },
     { jobId: evidenceId },
   );
-
-  await recordAudit({
-    action: 'evidence.uploaded',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-    after: {
-      data: { applicationId: row.applicationId, fileName: row.fileName },
-      allow: ['applicationId', 'fileName'],
-    },
-  });
-  await recordAudit({
-    action: 'evidence.scan_started',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-  });
 
   return row;
 }
@@ -284,30 +292,38 @@ export async function classifyEvidence(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(evidence)
-    .set({
-      classification: input.classification,
-      classifiedByUserId: ctx.userId,
-      classifiedAt: new Date(),
-    })
-    .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
-    .returning();
-  const row = must(updated[0], 'evidence');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({
+        classification: input.classification,
+        classifiedByUserId: ctx.userId,
+        classifiedAt: new Date(),
+      })
+      .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
+      .returning();
+    const row = must(updated[0], 'evidence');
 
-  await recordAudit({
-    action: 'evidence.classified',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-    before: {
-      data: { classification: existing.classification },
-      allow: ['classification'],
-    },
-    after: { data: { classification: row.classification }, allow: ['classification'] },
+    await recordAudit(
+      {
+        action: 'evidence.classified',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+        before: {
+          data: { classification: existing.classification },
+          allow: ['classification'],
+        },
+        after: {
+          data: { classification: row.classification },
+          allow: ['classification'],
+        },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Ask an applicant to supply further evidence on an application. */
@@ -323,29 +339,34 @@ export async function requestFurtherEvidence(
   await getApplication(applicationId);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(evidenceRequests)
-    .values(
-      scope.insertValues({
-        applicationId,
-        requestedByUserId: ctx.userId,
-        description: input.description,
-        dueAt: input.dueAt ?? null,
-        status: 'open',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'evidence request');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(evidenceRequests)
+      .values(
+        scope.insertValues({
+          applicationId,
+          requestedByUserId: ctx.userId,
+          description: input.description,
+          dueAt: input.dueAt ?? null,
+          status: 'open',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'evidence request');
 
-  await recordAudit({
-    action: 'evidence.requested',
-    resourceType: 'evidence',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { applicationId }, allow: ['applicationId'] },
+    await recordAudit(
+      {
+        action: 'evidence.requested',
+        resourceType: 'evidence',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { applicationId }, allow: ['applicationId'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /* ---------------------------------------------------------------------------
@@ -363,15 +384,28 @@ function systemAudit(
   organisationId: string,
   correlationId: string,
   fields: Parameters<typeof recordAudit>[0],
+  tx?: AuditTransaction,
 ) {
-  return recordAudit({
-    ...fields,
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-  });
+  return recordAudit(
+    {
+      ...fields,
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+    },
+    tx,
+  );
+}
+
+/** Scan notes that do not accompany a row change. Kept out of the settle transaction. */
+function noteScanEvent(
+  organisationId: string,
+  correlationId: string,
+  fields: Parameters<typeof recordAudit>[0],
+) {
+  return systemAudit(organisationId, correlationId, fields);
 }
 
 /**
@@ -416,21 +450,17 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   const key = row.quarantineKey;
 
-  await systemAudit(organisationId, correlationId, {
+  await noteScanEvent(organisationId, correlationId, {
     action: 'evidence.scan_started',
     resourceType: 'evidence',
     resourceId: evidenceId,
     result: 'success',
   });
 
-  const settle = async (patch: EvidencePatch) => {
-    await scope.db
-      .update(evidence)
-      .set(patch)
-      .where(
-        and(eq(evidence.organisationId, organisationId), eq(evidence.id, evidenceId)),
-      );
-  };
+  const whereRow = and(
+    eq(evidence.organisationId, organisationId),
+    eq(evidence.id, evidenceId),
+  );
 
   // Read the bytes; a storage error here should retry, so let it throw.
   const buffer = await getObjectBytes({ bucket: QUARANTINE_BUCKET, key });
@@ -439,18 +469,28 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
   const detected = (await fileTypeFromBuffer(buffer))?.mime;
   if (!contentTypeAcceptable(row.declaredContentType, detected)) {
     await deleteObject({ bucket: QUARANTINE_BUCKET, key });
-    await settle({
-      status: 'rejected',
-      detectedContentType: detected ?? null,
-      scanResult: 'rejected:content-type',
-      scannedAt: new Date(),
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.rejected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: `declared ${row.declaredContentType}, detected ${detected ?? 'unknown'}`,
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(evidence)
+        .set({
+          status: 'rejected',
+          detectedContentType: detected ?? null,
+          scanResult: 'rejected:content-type',
+          scannedAt: new Date(),
+        })
+        .where(whereRow);
+      await systemAudit(
+        organisationId,
+        correlationId,
+        {
+          action: 'evidence.rejected',
+          resourceType: 'evidence',
+          resourceId: evidenceId,
+          result: 'failure',
+          reason: `declared ${row.declaredContentType}, detected ${detected ?? 'unknown'}`,
+        },
+        tx,
+      );
     });
     return;
   }
@@ -460,7 +500,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
   try {
     verdict = await scanBuffer(buffer);
   } catch (err) {
-    await systemAudit(organisationId, correlationId, {
+    await noteScanEvent(organisationId, correlationId, {
       action: 'evidence.scan_failed',
       resourceType: 'evidence',
       resourceId: evidenceId,
@@ -473,19 +513,29 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   if (!verdict.clean) {
     await deleteObject({ bucket: QUARANTINE_BUCKET, key });
-    await settle({
-      status: 'infected',
-      detectedContentType: detected ?? null,
-      scanSignature: verdict.signature ?? 'unknown',
-      scanResult: 'infected',
-      scannedAt: new Date(),
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.scan_infected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: verdict.signature ?? 'malware detected',
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(evidence)
+        .set({
+          status: 'infected',
+          detectedContentType: detected ?? null,
+          scanSignature: verdict.signature ?? 'unknown',
+          scanResult: 'infected',
+          scannedAt: new Date(),
+        })
+        .where(whereRow);
+      await systemAudit(
+        organisationId,
+        correlationId,
+        {
+          action: 'evidence.scan_infected',
+          resourceType: 'evidence',
+          resourceId: evidenceId,
+          result: 'failure',
+          reason: verdict.signature ?? 'malware detected',
+        },
+        tx,
+      );
     });
 
     // Let the uploader know, calmly and without file details. Best-effort: a
@@ -517,19 +567,29 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
   // Clean: hash, promote to the evidence bucket, mark servable.
   const sha256 = createHash('sha256').update(buffer).digest('hex');
   await moveQuarantineToEvidence({ organisationId, key });
-  await settle({
-    status: 'clean',
-    evidenceKey: key,
-    detectedContentType: detected ?? null,
-    sha256,
-    scanResult: 'clean',
-    scannedAt: new Date(),
-  });
-  await systemAudit(organisationId, correlationId, {
-    action: 'evidence.scan_clean',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .update(evidence)
+      .set({
+        status: 'clean',
+        evidenceKey: key,
+        detectedContentType: detected ?? null,
+        sha256,
+        scanResult: 'clean',
+        scannedAt: new Date(),
+      })
+      .where(whereRow);
+    await systemAudit(
+      organisationId,
+      correlationId,
+      {
+        action: 'evidence.scan_clean',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+      },
+      tx,
+    );
   });
   logger.debug(
     { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },

@@ -57,20 +57,25 @@ export async function recordSuppression(raw: {
     )
     .limit(1);
   if (existing.length > 0) return { suppressed: true };
-  const inserted = await db
-    .insert(emailSuppressions)
-    .values({
-      addressHash,
-      kind: input.kind ?? 'bounce',
-      sourceMessageId: input.sourceMessageId ?? null,
-    })
-    .returning({ id: emailSuppressions.id });
-  await recordAudit({
-    action: 'email.suppressed',
-    resourceType: 'email_suppression',
-    resourceId: inserted[0]?.id ?? null,
-    result: 'success',
-    organisationId: null,
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(emailSuppressions)
+      .values({
+        addressHash,
+        kind: input.kind ?? 'bounce',
+        sourceMessageId: input.sourceMessageId ?? null,
+      })
+      .returning({ id: emailSuppressions.id });
+    await recordAudit(
+      {
+        action: 'email.suppressed',
+        resourceType: 'email_suppression',
+        resourceId: inserted[0]?.id ?? null,
+        result: 'success',
+        organisationId: null,
+      },
+      tx,
+    );
   });
   return { suppressed: true };
 }
