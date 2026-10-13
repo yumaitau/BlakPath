@@ -3,10 +3,14 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
-import { recordSuppression } from '@/domains/email';
+import { parseSesEvent, recordSuppression } from '@/domains/email';
 
 /**
  * POST /api/email/events — SES bounce/complaint events via SNS.
+ *
+ * Production source: the SES configuration set (SES_CONFIGURATION_SET) event
+ * destination → SNS topic → HTTPS subscription to this route. Only permanent
+ * bounces and complaints suppress (see `parseSesEvent`).
  *
  * Gated by shared secret (`?secret=` or `x-email-webhook-secret`), matching
  * EMAIL_WEBHOOK_SECRET. SubscriptionConfirmation URLs are only fetched when
@@ -19,21 +23,6 @@ const snsEnvelope = z.object({
   Message: z.string().optional(),
   SubscribeURL: z.string().url().optional(),
   TopicArn: z.string().optional(),
-});
-
-const sesMessage = z.object({
-  notificationType: z.string(),
-  mail: z.object({ messageId: z.string().optional() }).optional(),
-  bounce: z
-    .object({
-      bouncedRecipients: z.array(z.object({ emailAddress: z.string() })).optional(),
-    })
-    .optional(),
-  complaint: z
-    .object({
-      complainedRecipients: z.array(z.object({ emailAddress: z.string() })).optional(),
-    })
-    .optional(),
 });
 
 function snsHostOk(url: string): boolean {
@@ -75,37 +64,20 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ received: true });
   }
 
-  let message: z.infer<typeof sesMessage>;
-  try {
-    message = sesMessage.parse(JSON.parse(envelope.Message));
-  } catch {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
+  const parsed = parseSesEvent(envelope.Message);
+  if (!parsed) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
 
-  const targets: { address: string; kind: 'bounce' | 'complaint' }[] = [];
-  if (message.notificationType === 'Bounce') {
-    for (const r of message.bounce?.bouncedRecipients ?? []) {
-      targets.push({ address: r.emailAddress, kind: 'bounce' });
-    }
-  } else if (message.notificationType === 'Complaint') {
-    for (const r of message.complaint?.complainedRecipients ?? []) {
-      targets.push({ address: r.emailAddress, kind: 'complaint' });
-    }
-  } else {
-    return NextResponse.json({ received: true });
-  }
-
-  for (const t of targets) {
+  for (const t of parsed.targets) {
     try {
       await recordSuppression({
         address: t.address,
         kind: t.kind,
-        ...(message.mail?.messageId ? { sourceMessageId: message.mail.messageId } : {}),
+        ...(parsed.messageId ? { sourceMessageId: parsed.messageId } : {}),
       });
     } catch (error) {
       logger.error({ err: error }, 'failed to record email suppression');
     }
   }
-  logger.info({ count: targets.length }, 'email suppressions recorded');
-  return NextResponse.json({ suppressed: targets.length });
+  logger.info({ count: parsed.targets.length }, 'email suppressions recorded');
+  return NextResponse.json({ suppressed: parsed.targets.length });
 }

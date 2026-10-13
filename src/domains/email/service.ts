@@ -8,8 +8,8 @@ import { recordAudit } from '@/domains/audit/service';
 /**
  * Email suppression service — SES bounce/complaint handling.
  *
- * Prod mail goes through SES (SMTP interface); SES posts bounce/complaint
- * events via SNS to POST /api/email/events. Suppressed addresses are skipped
+ * Prod mail goes through the SES v2 API; the SES configuration set publishes
+ * bounce/complaint events via SNS to POST /api/email/events. Suppressed addresses are skipped
  * in `sendEmail` until explicitly cleared. Only address hashes persist.
  */
 
