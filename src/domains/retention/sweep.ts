@@ -9,6 +9,10 @@ import {
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import type { AuditAction, ResourceType } from '@/domains/audit/events';
+import {
+  clearApplicationSearchTokens,
+  writeApplicationSearchTokens,
+} from '@/domains/applications';
 import { logger } from '@/lib/observability/logger';
 import { deleteObject, EVIDENCE_BUCKET, QUARANTINE_BUCKET } from '@/lib/storage/s3';
 import { dueForRetention, isRetentionResourceType } from './rules';
@@ -99,7 +103,11 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
 
     if (policy.resourceType === 'application') {
       const rows = await scope.db
-        .select({ id: applications.id, createdAt: applications.createdAt })
+        .select({
+          id: applications.id,
+          createdAt: applications.createdAt,
+          reference: applications.reference,
+        })
         .from(applications)
         .where(
           and(
@@ -124,6 +132,13 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
                 eq(applications.id, r.id),
               ),
             );
+          // Drop the old name from the blind index, or a search for it would
+          // still land on this anonymised row.
+          await writeApplicationSearchTokens(scope.db, organisationId, {
+            id: r.id,
+            reference: r.reference,
+            applicantName: '[retained-anonymised]',
+          });
           await sysAudit(
             organisationId,
             correlationId,
@@ -141,6 +156,7 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
                 eq(applications.id, r.id),
               ),
             );
+          await clearApplicationSearchTokens(scope.db, organisationId, r.id);
           await sysAudit(
             organisationId,
             correlationId,

@@ -19,6 +19,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     // inside listApplications, so the cast is safe.
     const query = {
       ...(searchParams.get('status') ? { status: searchParams.get('status') } : {}),
+      ...(searchParams.get('assigneeUserId')
+        ? { assigneeUserId: searchParams.get('assigneeUserId') }
+        : {}),
+      ...(searchParams.get('q') ? { q: searchParams.get('q') } : {}),
+      ...(searchParams.get('cursor') ? { cursor: searchParams.get('cursor') } : {}),
       ...(searchParams.get('limit') ? { limit: searchParams.get('limit') } : {}),
       ...(searchParams.get('offset') ? { offset: searchParams.get('offset') } : {}),
     } as ListApplicationsInput;
@@ -33,6 +38,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       })),
       limit: result.limit,
       offset: result.offset,
+      nextCursor: result.nextCursor,
     });
   } catch (error) {
     return apiErrorResponse(error);

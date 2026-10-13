@@ -1,9 +1,22 @@
-import { and, desc, eq, exists, isNull, or, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  lt,
+  notExists,
+  notInArray,
+  or,
+  type SQL,
+} from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import {
   applications,
   applicationAssignments,
   applicationNotes,
+  applicationSearchTokens,
   applicationStatusHistory,
   clients,
   membershipRoles,
@@ -22,7 +35,10 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { queryTokens } from '@/lib/search/blind-index';
+import { decodeApplicationCursor, encodeApplicationCursor } from './cursor';
 import { canReadApplication, readsAllApplications } from './policies';
+import { blindTokensForPrefix, writeApplicationSearchTokens } from './search-index';
 import {
   addNoteSchema,
   assignApplicationSchema,
@@ -85,6 +101,65 @@ export interface ApplicationParticipant {
   readonly userId: string;
   readonly name: string;
   readonly email: string;
+}
+
+/** A staff member the register may offer in the assignee filter. */
+export interface RegisterAssignee {
+  readonly userId: string;
+  readonly name: string;
+}
+
+export interface ApplicationListResult {
+  readonly items: ApplicationRow[];
+  readonly limit: number;
+  readonly offset: number;
+  readonly nextCursor: string | null;
+}
+
+const SEARCH_BACKFILL_BATCH = 100;
+const SEARCH_BACKFILL_ROUNDS = 20;
+
+/** Roles that do not hold a case. Kept out of the assignee filter. */
+const NON_ASSIGNEE_ROLE_SLUGS = ['applicant', 'applicant-representative'] as const;
+
+/**
+ * Rows created before the search index existed have no tokens. A search fills
+ * them in bounded batches so the first lookup after deploy can still see them.
+ * Later searches find the index already populated.
+ */
+async function ensureSearchTokens(scope: ReturnType<typeof currentScope>): Promise<void> {
+  for (let round = 0; round < SEARCH_BACKFILL_ROUNDS; round += 1) {
+    const missing = await scope.db
+      .select({
+        id: applications.id,
+        reference: applications.reference,
+        applicantName: applications.applicantName,
+      })
+      .from(applications)
+      .where(
+        scope.where(
+          applications.organisationId,
+          isNull(applications.deletedAt),
+          notExists(
+            scope.db
+              .select({ applicationId: applicationSearchTokens.applicationId })
+              .from(applicationSearchTokens)
+              .where(
+                and(
+                  eq(applicationSearchTokens.organisationId, applications.organisationId),
+                  eq(applicationSearchTokens.applicationId, applications.id),
+                ),
+              ),
+          ),
+        ),
+      )
+      .limit(SEARCH_BACKFILL_BATCH);
+    if (missing.length === 0) return;
+    for (const row of missing) {
+      await writeApplicationSearchTokens(scope.db, scope.organisationId, row);
+    }
+    if (missing.length < SEARCH_BACKFILL_BATCH) return;
+  }
 }
 
 /** Assert a row was returned from an insert/update `.returning()`. */
@@ -269,6 +344,27 @@ export async function listApplicationParticipants(): Promise<ApplicationParticip
     .orderBy(users.name);
 }
 
+/** Active staff the register can filter by. Requires `application:read-any`. */
+export async function listRegisterAssignees(): Promise<RegisterAssignee[]> {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'application:read-any');
+  const scope = currentScope();
+  return scope.db
+    .selectDistinct({ userId: users.id, name: users.name })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
+    .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
+    .where(
+      scope.where(
+        memberships.organisationId,
+        eq(memberships.status, 'active'),
+        notInArray(roles.slug, [...NON_ASSIGNEE_ROLE_SLUGS]),
+      ),
+    )
+    .orderBy(users.name);
+}
+
 /** Create a new application in `draft`. Requires `application:create`. */
 export async function createApplication(
   rawInput: CreateApplicationInput,
@@ -329,6 +425,12 @@ export async function createApplication(
     }),
   );
 
+  await writeApplicationSearchTokens(scope.db, scope.organisationId, {
+    id: row.id,
+    reference: row.reference,
+    applicantName: row.applicantName,
+  });
+
   await recordAudit({
     action: 'application.created',
     resourceType: 'application',
@@ -367,6 +469,17 @@ export async function updateIntake(
     .where(scope.where(applications.organisationId, eq(applications.id, id)))
     .returning();
   const row = must(updated[0], 'application');
+
+  if (
+    input.applicantName !== undefined &&
+    input.applicantName !== existing.applicantName
+  ) {
+    await writeApplicationSearchTokens(scope.db, scope.organisationId, {
+      id: row.id,
+      reference: row.reference,
+      applicantName: row.applicantName,
+    });
+  }
 
   await recordAudit({
     action: 'application.updated',
@@ -529,14 +642,30 @@ export async function transitionApplication(
  * List applications within the tenant. Actors with `application:read-any` see
  * every application; everyone else sees only applications they are the
  * applicant on or actively assigned to.
+ *
+ * Text search is an equality lookup on blind-index tokens, then a keyset page
+ * on `(created_at, id)` descending. Results stay in record order. Search does
+ * not rank or score a person.
  */
 export async function listApplications(
   rawInput: ListApplicationsInput = {},
-): Promise<{ items: ApplicationRow[]; limit: number; offset: number }> {
+): Promise<ApplicationListResult> {
   const ctx = requireTenantContext();
   const subject = subjectFromContext(ctx);
   const input = listApplicationsSchema.parse(rawInput);
   const scope = currentScope();
+  const rawQuery = input.q?.trim() ?? '';
+  const tokens = queryTokens(rawQuery);
+  // A one-letter query is not indexed. Return no rows rather than the whole
+  // register, which would look like the search had been ignored.
+  if (rawQuery && tokens.length === 0) {
+    return { items: [], limit: input.limit, offset: 0, nextCursor: null };
+  }
+
+  const position = input.cursor ? decodeApplicationCursor(input.cursor) : null;
+  if (input.cursor && !position) {
+    throw new Error('Invalid page cursor.');
+  }
 
   const filters: Array<SQL | undefined> = [isNull(applications.deletedAt)];
   if (input.status) filters.push(eq(applications.status, input.status));
@@ -545,6 +674,38 @@ export async function listApplications(
   }
   if (input.applicantUserId) {
     filters.push(eq(applications.applicantUserId, input.applicantUserId));
+  }
+  if (position) {
+    const createdAt = new Date(position.createdAt);
+    filters.push(
+      or(
+        lt(applications.createdAt, createdAt),
+        and(eq(applications.createdAt, createdAt), lt(applications.id, position.id)),
+      ),
+    );
+  }
+  if (tokens.length > 0) {
+    await ensureSearchTokens(scope);
+    for (const prefix of tokens) {
+      const hashed = blindTokensForPrefix(scope.organisationId, prefix);
+      filters.push(
+        inArray(
+          applications.id,
+          scope.db
+            .select({ id: applicationSearchTokens.applicationId })
+            .from(applicationSearchTokens)
+            .where(
+              and(
+                eq(applicationSearchTokens.organisationId, scope.organisationId),
+                or(
+                  eq(applicationSearchTokens.token, hashed.reference),
+                  eq(applicationSearchTokens.token, hashed.name),
+                ),
+              ),
+            ),
+        ),
+      );
+    }
   }
 
   // Narrow to own/assigned/team unless the actor may read the whole tenant.
@@ -577,15 +738,27 @@ export async function listApplications(
     );
   }
 
-  const items = await scope.db
+  const offset = position ? 0 : input.offset;
+  const rows = await scope.db
     .select()
     .from(applications)
     .where(scope.where(applications.organisationId, ...filters))
-    .orderBy(desc(applications.createdAt))
-    .limit(input.limit)
-    .offset(input.offset);
+    .orderBy(desc(applications.createdAt), desc(applications.id))
+    .limit(input.limit + 1)
+    .offset(offset);
 
-  return { items, limit: input.limit, offset: input.offset };
+  const hasMore = rows.length > input.limit;
+  const items = hasMore ? rows.slice(0, input.limit) : rows;
+  const last = items.at(-1);
+  const nextCursor =
+    hasMore && last
+      ? encodeApplicationCursor({
+          createdAt: last.createdAt.toISOString(),
+          id: last.id,
+        })
+      : null;
+
+  return { items, limit: input.limit, offset, nextCursor };
 }
 
 /**

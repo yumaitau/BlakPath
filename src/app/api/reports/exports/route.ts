@@ -6,7 +6,7 @@ import { listExports, requestExport, type RequestExportInput } from '@/domains/r
 /**
  * Export requests.
  * - GET  — list this tenant's export requests.
- * - POST — request an export ({ type }); the worker assembles the CSV.
+ * - POST — request an export ({ type, status?, from?, to? }); the worker assembles the CSV.
  */
 export async function GET(): Promise<Response> {
   try {

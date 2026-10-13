@@ -58,13 +58,21 @@ export {
   getApplicationCaseRecord,
   listApplicationParticipants,
   listApplications,
+  listRegisterAssignees,
   transitionApplication,
   updateIntake,
   type ApplicationAssignmentRow,
   type ApplicationCaseRecord,
   type ApplicationDetail,
+  type ApplicationListResult,
   type ApplicationNoteRow,
   type ApplicationParticipant,
   type ApplicationRow,
   type ApplicationStatusHistoryRow,
+  type RegisterAssignee,
 } from './service';
+
+export {
+  clearApplicationSearchTokens,
+  writeApplicationSearchTokens,
+} from './search-index';

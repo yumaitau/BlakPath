@@ -22,6 +22,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       : undefined;
     const input: ListApplicationsInput = {
       status,
+      assigneeUserId: params.get('assigneeUserId') || undefined,
+      q: params.get('q') || undefined,
+      cursor: params.get('cursor') || undefined,
       limit: params.get('limit') || undefined,
       offset: params.get('offset') || undefined,
     };

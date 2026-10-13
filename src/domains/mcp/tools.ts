@@ -30,13 +30,28 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
   {
     name: 'list_applications',
     description:
-      'List applications in the organisation the key may read. Optional status filter and paging.',
+      'List applications the key may read. Optional text search (reference or name), status, assignee, and cursor paging.',
     inputSchema: {
       type: 'object',
       properties: {
         status: { type: 'string', description: 'Filter by application status.' },
+        assigneeUserId: {
+          type: 'string',
+          description: 'Filter by the current assignee user id.',
+        },
+        q: {
+          type: 'string',
+          description: 'Search by reference or applicant name. At least two characters.',
+        },
+        cursor: {
+          type: 'string',
+          description: 'Opaque cursor returned by the previous page.',
+        },
         limit: { type: 'number', description: 'Max rows (1-100).' },
-        offset: { type: 'number', description: 'Rows to skip.' },
+        offset: {
+          type: 'number',
+          description: 'Rows to skip when no cursor is given.',
+        },
       },
     },
     scopes: ['application:read-any', 'application:read-assigned'],
