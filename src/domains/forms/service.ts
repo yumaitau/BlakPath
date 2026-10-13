@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
 import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
@@ -13,6 +14,7 @@ import { logger } from '@/lib/observability/logger';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { parseFieldsJson, validateResponse, type FormField } from '@/lib/forms/fields';
+import { openFormResponses, sealFormResponse } from '@/lib/encryption/tenant-fields';
 import {
   createFormSchema,
   createInvitationSchema,
@@ -306,11 +308,12 @@ export async function listResponses(formId: string): Promise<FormResponseRow[]> 
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(formResponses)
     .where(scope.where(formResponses.organisationId, eq(formResponses.formId, formId)))
     .orderBy(desc(formResponses.submittedAt));
+  return openFormResponses(scope.organisationId, rows);
 }
 
 /* ---------------------------------------------------------------------------
@@ -423,13 +426,19 @@ export async function submitPublicResponse(
   }
 
   const scope = scopeFor(invitation.organisationId);
+  const responseId = uuidv7();
+  const sealed = await sealFormResponse(invitation.organisationId, responseId, {
+    answers: parsed.data,
+    respondentEmail: invitation.recipientEmail,
+  });
   await scope.db.insert(formResponses).values(
     scope.insertValues({
+      id: responseId,
       formId: form.id,
       invitationId: invitation.id,
-      answers: parsed.data,
+      answers: sealed.answers,
       respondentName: invitation.recipientName,
-      respondentEmail: invitation.recipientEmail,
+      respondentEmail: sealed.respondentEmail,
       ipAddress: ipAddress ?? null,
     }),
   );

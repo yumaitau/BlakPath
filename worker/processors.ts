@@ -14,6 +14,11 @@ import {
   invitationKindFromJobName,
 } from '@/lib/email/invitation-delivery';
 import { sendEmail } from '@/lib/email/mailer';
+import { openCorrespondence } from '@/lib/encryption/tenant-fields';
+import {
+  enqueueEncryptionBackfillCursor,
+  runBackfillBatch,
+} from '@/lib/encryption/backfill';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
 import { createCheckpoint, verifyChain } from '@/domains/audit';
 import { settleAuditChain } from '@/domains/audit/anchor';
@@ -77,17 +82,34 @@ const malwareScanProcessor: ProcessorFn = async (job, logger) => {
 const emailProcessor: ProcessorFn = async (job, logger) => {
   const kind = invitationKindFromJobName(job.name);
   const invitationId = (job.data as { invitationId?: unknown }).invitationId;
-  if (!kind || typeof invitationId !== 'string' || invitationId.length === 0) {
-    // Malformed payload is a bug, not a transient fault — do not retry forever.
+  if (kind && typeof invitationId === 'string' && invitationId.length > 0) {
+    await deliverInvitationEmail({
+      kind,
+      organisationId: job.data.organisationId,
+      invitationId,
+      jobId: job.id,
+      logger,
+    });
+    return;
+  }
+  const { organisationId } = job.data;
+  const messageId = (job.data as { messageId?: unknown }).messageId;
+  if (typeof messageId !== 'string' || messageId.length === 0) {
+    // Invitation jobs carry an id. Other tenant mail carries a sealed message id.
+    // A body in Redis is dropped rather than logged.
     logger.error({ jobId: job.id }, 'email job payload invalid — dropping');
     return;
   }
-  await deliverInvitationEmail({
-    kind,
-    organisationId: job.data.organisationId,
-    invitationId,
-    jobId: job.id,
-    logger,
+  const message = await openCorrespondence(organisationId, messageId);
+  if (!message) {
+    logger.error({ jobId: job.id, organisationId }, 'email message not found — dropping');
+    return;
+  }
+  await sendEmail({
+    to: message.to,
+    subject: message.subject,
+    text: message.text,
+    ...(message.html ? { html: message.html } : {}),
   });
 };
 
@@ -244,6 +266,37 @@ const retentionProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Encryption backfill processor. Seals one batch of plaintext tenant fields
+ * under the tenant key, then enqueues the next cursor until the run is done.
+ */
+const encryptionBackfillProcessor: ProcessorFn = async (job, logger) => {
+  const { organisationId, correlationId } = job.data;
+  const cursor = (job.data as { cursor?: unknown }).cursor;
+  const result = await runBackfillBatch({
+    organisationId,
+    correlationId,
+    ...(typeof cursor === 'string' && cursor.length > 0 ? { cursor } : {}),
+  });
+  logger.info(
+    {
+      jobId: job.id,
+      organisationId,
+      table: result.table,
+      rowsEncrypted: result.rowsEncrypted,
+      done: result.done,
+    },
+    'encryption backfill batch',
+  );
+  if (!result.done && result.cursor) {
+    await enqueueEncryptionBackfillCursor({
+      organisationId,
+      correlationId,
+      cursor: result.cursor,
+    });
+  }
+};
+
+/**
  * Reminder processor. Dispatches due calendar reminders for the tenant as
  * notifications (email copies queued by the notification system). Idempotent
  * per reminder row: dispatched rows are marked sent.
@@ -282,6 +335,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Export]: withActiveTenant(exportProcessor),
   [QueueName.Webhook]: withActiveTenant(webhookProcessor),
   [QueueName.Reminder]: withActiveTenant(reminderProcessor),
+  [QueueName.EncryptionBackfill]: withActiveTenant(encryptionBackfillProcessor),
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

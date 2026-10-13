@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { uuidv7 } from 'uuidv7';
 import { conflictDeclarations, decisions, decisionVotes } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
@@ -11,6 +12,7 @@ import {
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
+import { openDecisionRows, sealRationale } from '@/lib/encryption/tenant-fields';
 import {
   castVoteSchema,
   finaliseDecisionSchema,
@@ -61,7 +63,10 @@ async function loadDecision(id: string): Promise<DecisionRow | null> {
       ),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const row = scope.assertOwned(rows[0]) ?? null;
+  if (!row) return null;
+  const [opened] = await openDecisionRows(scope.organisationId, [row]);
+  return opened ?? null;
 }
 
 /** The set of users conflicted out of an application (declared or recused). */
@@ -93,29 +98,38 @@ export async function proposeDecision(
   assertNotConflicted(ctx.userId, await conflictedUserIds(applicationId));
 
   const scope = currentScope();
+  const id = uuidv7();
+  const rationale = await sealRationale(
+    scope.organisationId,
+    id,
+    input.rationale ?? null,
+  );
   const inserted = await scope.db
     .insert(decisions)
     .values(
       scope.insertValues({
+        id,
         applicationId,
         proposedByUserId: ctx.userId,
         proposedOutcome: input.outcome,
-        rationale: input.rationale ?? null,
+        rationale,
         status: 'proposed',
       }),
     )
     .returning();
-  const row = must(inserted[0], 'decision');
+  const stored = must(inserted[0], 'decision');
+  const [row] = await openDecisionRows(scope.organisationId, [stored]);
+  const opened = must(row, 'decision');
 
   await recordAudit({
     action: 'decision.proposed',
     resourceType: 'decision',
-    resourceId: row.id,
+    resourceId: opened.id,
     result: 'success',
     after: { data: { applicationId }, allow: ['applicationId'] },
   });
 
-  return row;
+  return opened;
 }
 
 /** Cast or change a committee vote on a proposed decision. */
@@ -249,7 +263,9 @@ export async function finaliseDecision(
     })
     .where(scope.where(decisions.organisationId, eq(decisions.id, decisionId)))
     .returning();
-  const row = must(updated[0], 'decision');
+  const stored = must(updated[0], 'decision');
+  const [row] = await openDecisionRows(scope.organisationId, [stored]);
+  const opened = must(row, 'decision');
 
   // Drive the application's own workflow. This re-checks decision:finalise and
   // that the application is in the committee stage (throws otherwise).
@@ -278,14 +294,14 @@ export async function finaliseDecision(
     correlationId: ctx.correlationId,
   });
 
-  return row;
+  return opened;
 }
 
 /** List decisions for an application the actor may read. */
 export async function listDecisions(applicationId: string): Promise<DecisionRow[]> {
   await getApplication(applicationId);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(decisions)
     .where(
@@ -296,6 +312,7 @@ export async function listDecisions(applicationId: string): Promise<DecisionRow[
       ),
     )
     .orderBy(desc(decisions.createdAt));
+  return openDecisionRows(scope.organisationId, rows);
 }
 
 /** Load a decision with its votes and a tally (readable to application readers). */

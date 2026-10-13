@@ -63,6 +63,95 @@ database. These are protected with **envelope encryption**:
 - Plaintext exists only transiently in memory during a single operation; it is
   never logged (pino) and never persisted.
 
+## Tenant data classes under the tenant key
+
+RDS storage encryption and the shared bucket key are platform controls. A
+per-tenant guarantee is application field encryption plus per-object keys.
+Text columns store a canonical version-2 envelope string that starts with
+`{"v":2`. JSONB columns store the same envelope as an object. Null stays null
+and is not residue.
+
+Inventoried columns:
+
+- `applications.applicant_name` and `applications.intake`
+- `family_links.relative_name`, `community`, `notes`
+- `form_responses.answers` and `respondent_email`
+- `clients.contact_email`, `contact_phone`, `notes` (`display_name` stays readable)
+- `application_notes.body`
+- `decisions.rationale`
+- `webhook_endpoints.secret`
+- `correspondence_messages.recipient`, `subject`, `text_body`, `html_body`
+- `consent_records.wording_snapshot` (the wording copied at grant time)
+
+`applications.reference` stays readable so staff can see the matter number.
+Lookup does not use a plaintext index on that column.
+
+This is not a full correspondence product and not a full append-only consent
+ledger. Those remain separate work. The wording snapshot and the outbound
+email holding table exist so those bodies sit under the tenant key.
+
+### Blind index
+
+Reference and name search uses HMAC-SHA256. The HMAC key is generated once
+with encryption context `{org_id, purpose: blind-index}` and the wrapped key
+is stored on `organisation_keys.blind_index_wrapped_dek`. Terms are trimmed,
+lower-cased, and collapsed. The index stores the HMAC of the full string and,
+for names, of each whole word, so "smith" matches "Jane Smith". A fragment
+inside a word does not match. The unique index is
+`(organisation_id, reference_bidx)`. There is no unique index on the plaintext
+reference.
+
+The blind index is a lookup aid. It does not score, rank, predict, or infer
+Aboriginality, and it never approves or rejects an application.
+
+### Object storage
+
+Evidence, quarantine, certificate, and export objects use SSE-KMS with the
+tenant CMK (`x-amz-server-side-encryption-aws-kms-key-id`). S3 Bucket Keys are
+off on those objects so the key id recorded on the object is the tenant key.
+`S3_KMS_KEY_ID` (`alias/blakpath-prod-evidence`) is the bucket default only.
+Local development, where `S3_ENDPOINT` is set, skips SSE headers so MinIO
+works, and still refuses upload and download when the tenant key is missing
+or disabled. The evidence scanner decrypts in memory and zeroes that buffer
+before returning. It does not write decrypted bytes to disk.
+
+The example workload role allows `kms:Decrypt`, `kms:Encrypt`, and
+`kms:GenerateDataKey` when `kms:ViaService` is
+`s3.ap-southeast-2.amazonaws.com` and the encryption-context object ARN is in
+the evidence or quarantine bucket. It also allows the `blind-index` encryption
+context on tenant envelope calls. Applying that policy is an operator step.
+
+### Queues, logs, and OAuth tokens
+
+BullMQ payloads carry identifiers only: `organisationId`, `correlationId`,
+fields ending in `Id`, and a backfill `cursor` of the form `table:rowId`.
+Outbound email is inserted into `correspondence_messages` first. The job
+carries `messageId`. The worker decrypts the body in memory and does not log
+it. Operational logs redact every inventoried field name, including nested
+paths.
+
+OAuth tokens use Better Auth `account.encryptOAuthTokens` under
+`BETTER_AUTH_SECRET`, the platform secret, not the tenant CMK. Better Auth
+leaves a stored token unchanged when it does not look encrypted. A token that
+is already an even-length hex string can be mistaken for ciphertext.
+
+### Backfill and fail closed
+
+The `encryption-backfill` queue walks one table per batch. The cursor is
+`table:rowId`. Version-2 envelopes stay. Version 1 and legacy plaintext are
+sealed under the tenant key. The job is not scheduled. An operator enqueues it
+per organisation. Each batch and the completion are audited with the table
+name and the row count only. `PLAINTEXT_RESIDUE_SQL` counts non-null values
+that are not version-2 envelopes. A finished run leaves every count at 0.
+
+A disabled, pending-deletion, or unreachable tenant key fails closed
+(`TenantKeyUnavailableError`). Record reads and evidence downloads throw. They
+do not return ciphertext or fall back to the shared bucket key. Proving that
+against a revoked KMS key in staging is an operator step. Registering a real
+per-tenant CMK is also an operator step. Until then, development uses the
+local tenant ARN, and the seed and pilot helpers may register
+`PLATFORM_KMS_KEY_ARN` only when that variable is set.
+
 ## Consent ledger (planned)
 
 Consent is treated as a first-class, recorded fact, not an implicit assumption:

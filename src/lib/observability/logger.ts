@@ -1,4 +1,5 @@
 import pino, { type Logger } from 'pino';
+import { inventoryRedactPaths } from '@/lib/encryption/inventory';
 import { env, isProduction } from '@/lib/env';
 import { serializeLoggedError } from '@/lib/observability/error-log';
 
@@ -76,12 +77,15 @@ function redactPaths(keys: readonly string[], depth: number): string[] {
   return paths;
 }
 
-const REDACT_PATHS = redactPaths(SENSITIVE_KEYS, REDACT_DEPTH);
+const REDACT_PATHS = [...redactPaths(SENSITIVE_KEYS, REDACT_DEPTH), ...inventoryRedactPaths()];
 
 const REDACTED = '[redacted]';
 
+/** Paths censored before operational logs are serialised. */
+export const OPERATIONAL_REDACT_PATHS = REDACT_PATHS;
+
 /** Shared with tests so a log line is censored the same way as production. */
-export const logRedaction = { paths: REDACT_PATHS, censor: REDACTED };
+export const logRedaction = { paths: OPERATIONAL_REDACT_PATHS, censor: REDACTED };
 
 export const logSerializers = {
   err: serializeLoggedError,

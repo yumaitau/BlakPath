@@ -149,6 +149,8 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
     .where(eq(organisations.slug, 'dev-org'))
     .limit(1);
   const organisationId = orgRow[0]?.id ?? orgId;
+  const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+  await ensureOrganisationKey(organisationId);
 
   const [existingUser] = await db
     .select({ id: users.id })

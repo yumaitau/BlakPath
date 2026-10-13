@@ -251,6 +251,9 @@ export type AuditAction =
   | 'key.rotated'
   | 'key.status_changed'
   | 'key.unavailable'
+  // Field encryption backfill. Counts and table names only.
+  | 'encryption.backfill_batch'
+  | 'encryption.backfill_completed'
   // Audit self-events (integrity).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'

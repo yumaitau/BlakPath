@@ -1,4 +1,4 @@
-import { and, desc, eq, exists, isNull, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, exists, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import {
   applications,
@@ -22,6 +22,13 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { applicationSearchMac } from '@/lib/encryption/blind-index';
+import {
+  openApplicationRows,
+  openNoteRows,
+  sealApplicationFields,
+  sealNoteBody,
+} from '@/lib/encryption/tenant-fields';
 import { canReadApplication, readsAllApplications } from './policies';
 import {
   addNoteSchema,
@@ -98,7 +105,7 @@ function must<T>(row: T | undefined, what: string): T {
 /** Build a human-friendly per-organisation reference from a fresh id. */
 function makeReference(id: string): string {
   // Year is presentational only; uniqueness is guaranteed by the id tail and
-  // the (organisation_id, reference) unique index.
+  // the (organisation_id, reference_bidx) unique index.
   const year = new Date().getUTCFullYear();
   const tail = id.replace(/-/g, '').slice(-6).toUpperCase();
   return `APP-${year}-${tail}`;
@@ -119,7 +126,10 @@ async function loadApplication(id: string): Promise<ApplicationRow | null> {
       liveApplication(scope.where(applications.organisationId, eq(applications.id, id))),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const row = scope.assertOwned(rows[0]) ?? null;
+  if (!row) return null;
+  const [opened] = await openApplicationRows(scope.organisationId, [row]);
+  return opened ?? null;
 }
 
 /** Load the user ids with an ACTIVE assignment on an application. */
@@ -245,7 +255,12 @@ export async function getApplicationCaseRecord(
       .orderBy(desc(applicationNotes.createdAt)),
   ]);
 
-  return { ...detail, assignments, statusHistory, notes };
+  return {
+    ...detail,
+    assignments,
+    statusHistory,
+    notes: await openNoteRows(scope.organisationId, notes),
+  };
 }
 
 /** List active applicant-role accounts that intake staff may link to a new case. */
@@ -300,6 +315,18 @@ export async function createApplication(
 
   const id = uuidv7();
   const reference = makeReference(id);
+  const sealed = await sealApplicationFields(scope.organisationId, id, {
+    applicantName: input.applicantName,
+    intake: input.intake ?? null,
+    reference,
+  });
+  const applicantName = sealed.applicantName;
+  const referenceBidx = sealed.referenceBidx;
+  const applicantNameBidx = sealed.applicantNameBidx;
+  const applicantNameTokenBidx = sealed.applicantNameTokenBidx;
+  if (!applicantName || !referenceBidx || !applicantNameBidx || !applicantNameTokenBidx) {
+    throw new Error('Applicant fields were not sealed');
+  }
 
   const inserted = await scope.db
     .insert(applications)
@@ -307,17 +334,22 @@ export async function createApplication(
       scope.insertValues({
         id,
         reference,
-        applicantName: input.applicantName,
+        applicantName,
         applicantUserId: input.applicantUserId ?? null,
         clientId,
         priority: input.priority,
-        intake: input.intake ?? null,
+        intake: sealed.intake ?? null,
+        referenceBidx,
+        applicantNameBidx,
+        applicantNameTokenBidx,
         createdByUserId: ctx.userId,
         status: 'draft',
       }),
     )
     .returning();
-  const row = must(inserted[0], 'application');
+  const stored = must(inserted[0], 'application');
+  const [row] = await openApplicationRows(scope.organisationId, [stored]);
+  const opened = must(row, 'application');
 
   await scope.db.insert(applicationStatusHistory).values(
     scope.insertValues({
@@ -340,7 +372,7 @@ export async function createApplication(
     },
   });
 
-  return row;
+  return opened;
 }
 
 /** Update intake details. Requires `application:update-intake`. */
@@ -356,17 +388,33 @@ export async function updateIntake(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
+  const sealed = await sealApplicationFields(scope.organisationId, id, {
+    ...(input.applicantName !== undefined ? { applicantName: input.applicantName } : {}),
+    ...(input.intake !== undefined ? { intake: input.intake } : {}),
+  });
   const patch: ApplicationPatch = {};
-  if (input.applicantName !== undefined) patch.applicantName = input.applicantName;
+  if (input.applicantName !== undefined) {
+    const applicantName = sealed.applicantName;
+    const applicantNameBidx = sealed.applicantNameBidx;
+    const applicantNameTokenBidx = sealed.applicantNameTokenBidx;
+    if (!applicantName || !applicantNameBidx || !applicantNameTokenBidx) {
+      throw new Error('Applicant name was not sealed');
+    }
+    patch.applicantName = applicantName;
+    patch.applicantNameBidx = applicantNameBidx;
+    patch.applicantNameTokenBidx = applicantNameTokenBidx;
+  }
   if (input.priority !== undefined) patch.priority = input.priority;
-  if (input.intake !== undefined) patch.intake = input.intake;
+  if (input.intake !== undefined) patch.intake = sealed.intake ?? null;
 
   const updated = await scope.db
     .update(applications)
     .set(patch)
     .where(scope.where(applications.organisationId, eq(applications.id, id)))
     .returning();
-  const row = must(updated[0], 'application');
+  const stored = must(updated[0], 'application');
+  const [row] = await openApplicationRows(scope.organisationId, [stored]);
+  const opened = must(row, 'application');
 
   await recordAudit({
     action: 'application.updated',
@@ -375,18 +423,21 @@ export async function updateIntake(
     result: 'success',
     before: {
       data: {
-        applicantName: existing.applicantName,
+        nameUpdated: input.applicantName !== undefined,
         priority: existing.priority,
       },
-      allow: ['applicantName', 'priority'],
+      allow: ['nameUpdated', 'priority'],
     },
     after: {
-      data: { applicantName: row.applicantName, priority: row.priority },
-      allow: ['applicantName', 'priority'],
+      data: {
+        nameUpdated: input.applicantName !== undefined,
+        priority: opened.priority,
+      },
+      allow: ['nameUpdated', 'priority'],
     },
   });
 
-  return row;
+  return opened;
 }
 
 /** Assign (or reassign) an application to a worker. Requires `application:assign`. */
@@ -510,7 +561,9 @@ export async function transitionApplication(
 
     return updated;
   });
-  const row = must(updatedRows[0], 'application');
+  const stored = must(updatedRows[0], 'application');
+  const [row] = await openApplicationRows(scope.organisationId, [stored]);
+  const opened = must(row, 'application');
 
   await recordAudit({
     action: TRANSITIONS[action].audit,
@@ -522,7 +575,7 @@ export async function transitionApplication(
     after: { data: { status: to, action }, allow: ['status', 'action'] },
   });
 
-  return row;
+  return opened;
 }
 
 /**
@@ -545,6 +598,18 @@ export async function listApplications(
   }
   if (input.applicantUserId) {
     filters.push(eq(applications.applicantUserId, input.applicantUserId));
+  }
+  if (input.q) {
+    const mac = await applicationSearchMac(scope.organisationId, input.q);
+    if (mac) {
+      filters.push(
+        or(
+          eq(applications.referenceBidx, mac),
+          eq(applications.applicantNameBidx, mac),
+          sql`${mac} = ANY(${applications.applicantNameTokenBidx})`,
+        ),
+      );
+    }
   }
 
   // Narrow to own/assigned/team unless the actor may read the whole tenant.
@@ -585,7 +650,11 @@ export async function listApplications(
     .limit(input.limit)
     .offset(input.offset);
 
-  return { items, limit: input.limit, offset: input.offset };
+  return {
+    items: await openApplicationRows(scope.organisationId, items),
+    limit: input.limit,
+    offset: input.offset,
+  };
 }
 
 /**
@@ -608,23 +677,28 @@ export async function addNote(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
+  const noteId = uuidv7();
+  const body = await sealNoteBody(scope.organisationId, noteId, input.body);
   const insertedNote = await scope.db
     .insert(applicationNotes)
     .values(
       scope.insertValues({
+        id: noteId,
         applicationId: id,
         authorUserId: ctx.userId,
-        body: input.body,
+        body,
         visibility: input.visibility,
       }),
     )
     .returning();
-  const note = must(insertedNote[0], 'note');
+  const stored = must(insertedNote[0], 'note');
+  const [note] = await openNoteRows(scope.organisationId, [stored]);
+  const opened = must(note, 'note');
 
   await recordAudit({
     action: 'record.created',
     resourceType: 'record',
-    resourceId: note.id,
+    resourceId: opened.id,
     result: 'success',
     after: {
       data: { applicationId: id, visibility: input.visibility },
@@ -632,7 +706,7 @@ export async function addNote(
     },
   });
 
-  return note;
+  return opened;
 }
 
 /** Re-export the context type for callers that thread it explicitly. */

@@ -67,6 +67,8 @@ export const listApplicationsSchema = z.object({
   status: z.enum(APPLICATION_STATUSES).optional(),
   assigneeUserId: z.uuid().optional(),
   applicantUserId: z.uuid().optional(),
+  /** Reference or name lookup. Matched through the blind index, not ILIKE. */
+  q: z.string().trim().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   offset: z.coerce.number().int().min(0).default(0),
 });

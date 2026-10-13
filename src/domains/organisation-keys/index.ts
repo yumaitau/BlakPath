@@ -5,6 +5,7 @@ export type {
   RegisterOrganisationKeyInput,
 } from './service';
 export {
+  ensureOrganisationKey,
   getOrganisationKey,
   markOrganisationKeyUnavailable,
   registerOrganisationKey,
