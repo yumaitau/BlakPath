@@ -128,6 +128,8 @@ const serverSchema = z
 
     // Feature toggles
     AI_FEATURES_ENABLED: booleanish('false'),
+    // Per-key ceiling for the external tool endpoint. Fixed window of one minute.
+    MCP_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
 
     // Extra CIDRs refused for webhook delivery, comma-separated, in addition
     // to private, loopback, link-local, CGNAT and unique-local ranges.

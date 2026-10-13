@@ -29,4 +29,5 @@ data:
   CLAMAV_HOST: blakpath-clamav
   CLAMAV_PORT: '3310'
   AI_FEATURES_ENABLED: 'false'
+  MCP_RATE_LIMIT_PER_MINUTE: '60'
   OTEL_SERVICE_NAME: blakpath

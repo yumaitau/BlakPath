@@ -100,6 +100,18 @@ Consent is treated as a first-class, recorded fact, not an implicit assumption:
   (`src/lib/env.ts`), and the platform feature flag `aiFeatures` defaults to
   `false` and must be turned on explicitly by a human
   (`feature_flags` in `src/db/schema/tenancy.ts`).
+- **External tool access is closed unless both are on.** `/api/mcp` responds
+  404 while the platform flag is off. A tenant that has not opted in is refused
+  (403) even when the platform flag is on. Opt-in is an organisation
+  administrator action (`tenant:configure`) that requires step-up and a stored
+  governance approval (`ai_governance_approvals`: reference, statement, approver).
+  The change is audited as `admin.feature_flag_changed`.
+- **Dedicated scopes.** Tool calls require `mcp:read` or `mcp:read-pii`. Other
+  API-key scopes do not open the endpoint. Responses omit applicant names,
+  contact and intake fields, and recorded decision outcomes unless the key
+  holds `mcp:read-pii`. A key with an `mcp:` scope must declare a purpose and
+  a destination. Calls are rate-limited per key, and the key id is stored on
+  the audit entry (`resource_id` and `after_meta.keyId`).
 - **Never decides, scores or infers.** Even when enabled, AI may only assist with
   non-determinative convenience (e.g. drafting neutral correspondence, help with
   navigation). It must never evaluate identity, weigh evidence, produce a
@@ -109,4 +121,5 @@ Consent is treated as a first-class, recorded fact, not an implicit assumption:
   permission-checked and audited like any other.
 - **Data stays in-region and minimal.** AI features must respect data sovereignty
   and minimisation — no sending evidence, genealogy or determinations to offshore
-  or third-party models.
+  or third-party models. The declared destination on an `mcp:` key is the
+  record of where a council has agreed responses may go.
