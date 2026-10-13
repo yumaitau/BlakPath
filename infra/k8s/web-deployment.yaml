@@ -19,6 +19,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: blakpath-app
+        app.kubernetes.io/part-of: blakpath
     spec:
       serviceAccountName: blakpath
       securityContext:

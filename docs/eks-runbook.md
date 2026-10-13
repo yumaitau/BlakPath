@@ -3,6 +3,12 @@
 Region: `ap-southeast-2` for everything (cluster, RDS, ElastiCache, S3,
 SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
+Production does not run on the shared `yumait-prod` cluster. The account, VPC,
+private API, and security groups are decided in
+[`docs/adr/0064-isolation-boundary.md`](adr/0064-isolation-boundary.md) and
+expressed by `infra/aws/isolation-boundary.json`. Apply that stack before this
+runbook's deploy steps. Do not apply `infra/k8s/isolation/` to `yumait-prod`.
+
 ## Deploy
 
 1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.

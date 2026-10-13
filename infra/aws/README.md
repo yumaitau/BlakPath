@@ -1,8 +1,16 @@
 # AWS production controls
 
-These CloudFormation examples are deployment inputs, not a turn-key account
-bootstrap. Deploy them only in `ap-southeast-2` after replacing every parameter
-with resources owned by the production environment.
+`isolation-boundary.json` is the production network boundary from
+[`docs/adr/0064-isolation-boundary.md`](../../docs/adr/0064-isolation-boundary.md).
+Edit `isolation-boundary.ts`, regenerate with
+`pnpm exec tsx infra/aws/render-isolation-boundary.ts`, and deploy only in
+`ap-southeast-2`. The stack does not create RDS or ElastiCache instances.
+`organization-scp.json` is attached by the organization management account, not
+by this stack.
+
+The other templates are deployment inputs, not a turn-key account bootstrap.
+Deploy them only in `ap-southeast-2` after replacing every parameter with
+resources owned by the production environment.
 
 - `workload-roles.example.yaml` separates web, worker and ECS execution roles.
   The application roles have no Secrets Manager permission and no access keys;

@@ -1,0 +1,7 @@
+# Cluster-scoped Auto Mode resources. No namespace: NodeClass and NodePool
+# are not namespaced. Do not add the application kustomization here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - nodeclass.yaml
+  - nodepool.yaml

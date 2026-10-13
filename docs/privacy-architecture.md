@@ -32,6 +32,8 @@ recorded consent, thoughtful retention, and hard limits on automation.
   row records its `region`, defaulting to `ap-southeast-2`
   (`src/lib/env.ts`, `src/db/schema/tenancy.ts`).
 - PostgreSQL, Redis, object storage, backups and the worker all run in-region.
+- Production is a dedicated account and VPC, not a namespace on a shared
+  cluster ([`adr/0064-isolation-boundary.md`](adr/0064-isolation-boundary.md)).
 - Third-party processing that would move data offshore is not used for evidence,
   genealogy or determinations.
 
