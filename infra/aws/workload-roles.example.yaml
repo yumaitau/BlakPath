@@ -1,108 +1,180 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Least-privilege BlakPath ECS workload roles with no standing access keys.
+Description: >
+  Least-privilege BlakPath EKS Pod Identity roles. Web and worker only.
+  ClamAV and migrate have no role. No standing access keys. Reviewed in
+  infra/aws/unused-access-review.md.
 
 Parameters:
+  ClusterName:
+    Type: String
+    Description: EKS cluster name. Trust policy pins eks-cluster-name to this value.
   EvidenceBucketArn:
     Type: String
   QuarantineBucketArn:
     Type: String
   EvidenceKmsKeyArn:
     Type: String
-  RuntimeSecretArn:
+    Description: CMK used for SSE-KMS on both buckets (alias/blakpath-prod-evidence).
+  CoaSigningKeyArn:
     Type: String
-  RuntimeSecretKmsKeyArn:
+    Description: Asymmetric SIGN_VERIFY CMK (alias/blakpath-coa-signing). Web only.
+  SesIdentityArn:
     Type: String
+    Description: SES identity ARN the web and worker roles may send from.
 
 Resources:
-  WebTaskRole:
+  WebWorkloadRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: blakpath-web
+      Description: BlakPath web. Certificate signing and reads. Cannot delete evidence.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
+          - Sid: AllowEksAuthToAssumeRoleForPodIdentity
+            Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            # Session tags stay enabled on the association. A mismatch fails closed.
+            Condition:
+              StringEquals:
+                'aws:RequestTag/kubernetes-namespace': blakpath
+                'aws:RequestTag/kubernetes-service-account': blakpath-web
+                'aws:RequestTag/eks-cluster-name': !Ref ClusterName
       Policies:
-        - PolicyName: BlakPathWebEvidenceAccess
+        - PolicyName: BlakPathWeb
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: BucketReadiness
+              - Sid: EvidenceBucketReadiness
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: [!Ref EvidenceBucketArn]
-              - Sid: QuarantineUploads
+                Resource: !Ref EvidenceBucketArn
+              - Sid: QuarantinePresign
                 Effect: Allow
                 Action: s3:PutObject
-                Resource: [!Sub '${QuarantineBucketArn}/*']
-              - Sid: CleanEvidenceDownloads
+                Resource: !Sub '${QuarantineBucketArn}/*/applications/*/evidence/*'
+              - Sid: CertificatePdfWrite
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${EvidenceBucketArn}/*/certificates/*'
+              - Sid: EvidenceRead
                 Effect: Allow
                 Action: s3:GetObject
-                Resource: [!Sub '${EvidenceBucketArn}/*']
-              - Sid: EvidenceKms
+                Resource:
+                  - !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+                  - !Sub '${EvidenceBucketArn}/*/certificates/*'
+                  - !Sub '${EvidenceBucketArn}/*/exports/*'
+              - Sid: EvidenceKmsViaS3
                 Effect: Allow
-                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
-                Resource: [!Ref EvidenceKmsKeyArn]
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref EvidenceKmsKeyArn
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+              - Sid: CoaSignAndPublicKey
+                Effect: Allow
+                Action:
+                  - kms:Sign
+                  - kms:GetPublicKey
+                Resource: !Ref CoaSigningKeyArn
+              - Sid: SendAuthMail
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Ref SesIdentityArn
+              - Sid: DenyEvidenceDelete
+                Effect: Deny
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: !Sub '${EvidenceBucketArn}/*'
 
-  WorkerTaskRole:
+  WorkerWorkloadRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: blakpath-worker
+      Description: BlakPath worker. Evidence lifecycle and queued mail. Cannot kms:Sign.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
+          - Sid: AllowEksAuthToAssumeRoleForPodIdentity
+            Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Condition:
+              StringEquals:
+                'aws:RequestTag/kubernetes-namespace': blakpath
+                'aws:RequestTag/kubernetes-service-account': blakpath-worker
+                'aws:RequestTag/eks-cluster-name': !Ref ClusterName
       Policies:
-        - PolicyName: BlakPathWorkerEvidenceLifecycle
+        - PolicyName: BlakPathWorker
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: BucketReadiness
+              - Sid: QuarantineScan
                 Effect: Allow
-                Action: s3:ListBucket
-                Resource: [!Ref EvidenceBucketArn, !Ref QuarantineBucketArn]
-              - Sid: QuarantineReadDelete
+                Action:
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub '${QuarantineBucketArn}/*/applications/*/evidence/*'
+              - Sid: EvidencePromoteAndExport
                 Effect: Allow
-                Action: [s3:GetObject, s3:DeleteObject]
-                Resource: [!Sub '${QuarantineBucketArn}/*']
-              - Sid: EvidencePromote
+                Action: s3:PutObject
+                Resource:
+                  - !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+                  - !Sub '${EvidenceBucketArn}/*/exports/*'
+              - Sid: EvidenceRetentionDelete
                 Effect: Allow
-                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
-                Resource: [!Sub '${EvidenceBucketArn}/*']
-              - Sid: EvidenceKms
+                Action: s3:DeleteObject
+                Resource: !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+              - Sid: EvidenceKmsViaS3
                 Effect: Allow
-                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
-                Resource: [!Ref EvidenceKmsKeyArn]
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref EvidenceKmsKeyArn
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+              - Sid: SendQueuedMail
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Ref SesIdentityArn
+              - Sid: DenyCoaSigning
+                Effect: Deny
+                Action: kms:Sign
+                Resource: '*'
 
-  TaskExecutionRole:
-    Type: AWS::IAM::Role
+  WebPodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-      Policies:
-        - PolicyName: ReadRuntimeSecret
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: [!Ref RuntimeSecretArn]
-              - Effect: Allow
-                Action: kms:Decrypt
-                Resource: [!Ref RuntimeSecretKmsKeyArn]
+      ClusterName: !Ref ClusterName
+      Namespace: blakpath
+      ServiceAccount: blakpath-web
+      RoleArn: !GetAtt WebWorkloadRole.Arn
+
+  WorkerPodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: blakpath
+      ServiceAccount: blakpath-worker
+      RoleArn: !GetAtt WorkerWorkloadRole.Arn
 
 Outputs:
-  WebTaskRoleArn:
-    Value: !GetAtt WebTaskRole.Arn
-  WorkerTaskRoleArn:
-    Value: !GetAtt WorkerTaskRole.Arn
-  TaskExecutionRoleArn:
-    Value: !GetAtt TaskExecutionRole.Arn
+  WebRoleArn:
+    Value: !GetAtt WebWorkloadRole.Arn
+  WorkerRoleArn:
+    Value: !GetAtt WorkerWorkloadRole.Arn
+  WebPodIdentityAssociationArn:
+    Value: !GetAtt WebPodIdentity.AssociationArn
+  WorkerPodIdentityAssociationArn:
+    Value: !GetAtt WorkerPodIdentity.AssociationArn

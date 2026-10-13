@@ -45,7 +45,7 @@ const serverSchema = z
     S3_ENDPOINT: z.string().url().optional(),
     S3_REGION: z.string().default('ap-southeast-2'),
     // Local S3-compatible stores use an explicit key pair. In AWS production,
-    // leave both unset so the SDK uses short-lived task/IRSA credentials.
+    // leave both unset so the SDK uses short-lived EKS Pod Identity credentials.
     S3_ACCESS_KEY_ID: z.string().min(1).optional(),
     S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
     S3_KMS_KEY_ID: z.string().min(1).optional(),

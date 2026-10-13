@@ -15,12 +15,16 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-worker
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-worker
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         seccompProfile:
           type: RuntimeDefault
+      # tsx/esbuild scratch. HOME is /tmp so a read-only root has one writable path.
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: worker
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
@@ -31,6 +35,12 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 500m
@@ -40,6 +50,7 @@ spec:
               memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
 ---
@@ -60,10 +71,20 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-clamav
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-clamav
+      automountServiceAccountToken: false
+      # Image user clamav is uid/gid 1000. /init chowns as root and cannot
+      # pass restricted PSA; /init-unprivileged is the vendor non-root entrypoint.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: clamav
           image: clamav/clamav-debian:1.4
+          command: [/init-unprivileged]
           ports:
             - containerPort: 3310
               name: clamav
@@ -74,6 +95,10 @@ spec:
             limits:
               cpu: 1500m
               memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
 ---
 apiVersion: v1
 kind: Service

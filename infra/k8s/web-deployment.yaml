@@ -20,7 +20,7 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-app
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-web
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -69,5 +69,6 @@ spec:
               memory: 2Gi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
