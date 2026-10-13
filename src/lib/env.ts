@@ -63,6 +63,9 @@ const serverSchema = z
     SMTP_USER: z.string().optional(),
     SMTP_PASSWORD: z.string().optional(),
     SMTP_FROM: z.string().default('BlakPath <no-reply@blakpath.local>'),
+    // Sender quota in messages per second (SES production default is 14).
+    // The worker paces the Email and Notification queues beneath it.
+    EMAIL_SEND_RATE_PER_SECOND: z.coerce.number().int().positive().default(10),
     // PaperBoy transactional email (https://paperboy.yumait.au).
     // Placeholder wiring: the sender posts JSON to
     // `{PAPERBOY_URL}/api/v1/emails` with `Authorization: Bearer

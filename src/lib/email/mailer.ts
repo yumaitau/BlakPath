@@ -19,7 +19,16 @@ import type { AuthMailer, AuthEmailMessage } from '@/lib/auth/emails';
  * Bodies may contain bearer links: logged metadata only, never content.
  */
 
-const globalForMailer = globalThis as unknown as { __blakpathMailer?: Transporter };
+const globalForMailer = globalThis as unknown as {
+  __blakpathMailer?: Transporter;
+  __blakpathSes?: SESv2Client;
+};
+
+/** Lazily create (once) the shared SES API client; reuses its HTTP pool. */
+function getSesClient(): SESv2Client {
+  globalForMailer.__blakpathSes ??= new SESv2Client({ region: env.S3_REGION });
+  return globalForMailer.__blakpathSes;
+}
 
 /** Lazily create (once) the shared SMTP transport from validated env. */
 function getTransport(): Transporter {
@@ -70,8 +79,7 @@ export async function sendEmail({
     return;
   }
   if (!env.SMTP_USER) {
-    const client = new SESv2Client({ region: env.S3_REGION });
-    await client.send(
+    await getSesClient().send(
       new SendEmailCommand({
         FromEmailAddress: env.SMTP_FROM,
         Destination: { ToAddresses: [to] },

@@ -1,10 +1,13 @@
-import { Worker, type ConnectionOptions } from 'bullmq';
+import type { ConnectionOptions, Worker } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
-import { closeQueues, type TenantJob } from '@/lib/queues';
+import { env } from '@/lib/env';
+import { emailQueueRateLimits, type QueueRateLimit } from '@/lib/email/rate-limit';
+import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { startTenantScheduleSync } from './scheduler';
 import { queueFailureSignal } from './operational-signals';
+import { createQueueWorker } from './queue-worker';
 
 /**
  * BlakPath background worker bootstrap.
@@ -38,22 +41,33 @@ const connection = redis as unknown as ConnectionOptions;
 /** Maximum time to wait for in-flight jobs on shutdown before forcing exit. */
 const SHUTDOWN_GRACE_MS = 25_000;
 
+/**
+ * Mail-sending queues are paced beneath the sender quota (Redis-backed, so the
+ * limit holds across replicas). Other queues are unlimited.
+ */
+const emailLimits = emailQueueRateLimits(env.EMAIL_SEND_RATE_PER_SECOND);
+const RATE_LIMITS: Partial<Record<QueueName, QueueRateLimit>> = {
+  [QueueName.Email]: emailLimits.email,
+  [QueueName.Notification]: emailLimits.notification,
+};
+
 const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const processor = PROCESSORS[queueName];
   const childLogger = workerLogger.child({ queue: queueName });
+  const limiter = RATE_LIMITS[queueName];
 
-  const worker = new Worker<TenantJob>(
+  const worker = createQueueWorker({
     queueName,
-    async (job) => processor(job, childLogger),
-    {
-      connection,
-      prefix: 'bp:queue',
-      // Conservative default; per-queue tuning lands with real processors.
-      concurrency: 4,
-      // Do not autorun until all workers are constructed and listeners wired.
-      autorun: false,
-    },
-  );
+    processor,
+    logger: childLogger,
+    connection,
+    prefix: 'bp:queue',
+    // Conservative default; per-queue tuning lands with real processors.
+    concurrency: 4,
+    ...(limiter ? { limiter } : {}),
+    // Do not autorun until all workers are constructed and listeners wired.
+    autorun: false,
+  });
 
   worker.on('failed', (job, err) => {
     const failure = queueFailureSignal(job);
