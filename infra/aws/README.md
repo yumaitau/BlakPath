@@ -21,6 +21,9 @@ Network boundaries expected by these templates:
   traffic does not require a public route;
 - the quarantine and evidence buckets block public access, enforce TLS and the
   named customer-managed KMS key, and enable versioning and AWS Backup coverage.
+  Backup copies of tenant objects remain ciphertext under that tenant's CMK.
+  Deleting the CMK makes those copies unreadable. A restored environment must
+  have the client key grant again before the application can decrypt.
 
 Run `pnpm release:check` inside the exact web and worker task definitions before
 promoting a release. It deliberately rejects static S3 credentials; the AWS SDK

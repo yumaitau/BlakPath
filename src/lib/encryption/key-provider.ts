@@ -33,9 +33,21 @@ export interface GeneratedDataKey {
   keyId: string;
 }
 
+export interface WrapDataKeyInput {
+  readonly keyArn: string;
+  /** Existing 32-byte DEK. The caller zeroes it. */
+  readonly plaintext: Buffer;
+  readonly encryptionContext: EncryptionContext;
+}
+
 export interface KeyProvider {
   generateDataKey(input: GenerateDataKeyInput): Promise<GeneratedDataKey>;
   decrypt(input: DecryptDataKeyInput): Promise<Buffer>;
+  /**
+   * Wrap an existing data key under a CMK. Key replacement uses this so the
+   * field ciphertext stays put and only the wrapped DEK changes.
+   */
+  wrap(input: WrapDataKeyInput): Promise<Buffer>;
 }
 
 const KEY_ARN = /^arn:aws:kms:([a-z0-9-]+):(\d{12}):key\/[A-Za-z0-9-]+$/;

@@ -21,6 +21,9 @@ region.
 - [ ] Run a documented restore drill into an isolated environment. Confirm a
       tenant can sign in, their records are present, objects can be read only after
       the normal authorisation checks, and `audit-verify` reports a clean chain.
+      Re-establish each client key grant in the restored environment before
+      expecting tenant plaintext. A backup copy stays ciphertext under that
+      CMK ([`key-lifecycle.md`](key-lifecycle.md)).
 - [ ] Set an owner and escalation path for failed readiness checks, scanner
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`

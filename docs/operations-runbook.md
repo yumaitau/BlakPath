@@ -52,4 +52,19 @@ Stop the drill or recovery, preserve its target, and do not promote a partial
 restore. Confirm the source recovery point is immutable, open an incident, and
 repeat into a new isolated target after correcting the fault. A restore is usable
 only after sign-in, tenant records, evidence authorisation and every audit chain
-have been verified.
+have been verified. Re-establish the client key grant before reading tenant
+ciphertext. If the key was deleted, AWS Backup copies of that ciphertext are not
+readable ([`key-lifecycle.md`](key-lifecycle.md)).
+
+## Tenant key unavailable
+
+1. Staff see a lock, not a generic 500. Public forms and verify pages say the
+   encryption key is unavailable. They do not say the link or certificate is
+   missing.
+2. That tenant's jobs are delayed, not failed. Do not drain them by marking
+   them complete, and do not copy plaintext out by another path.
+3. If the client disabled the key or removed the grant, wait for them to
+   restore it. The next health probe (within the data-key cache TTL) sets an
+   `unavailable` row back to `active` and resumes paused jobs. `disabled` and
+   `pending_deletion` stay off until an operator changes the status.
+4. Other tenants keep running. A probe network error does not pause them.

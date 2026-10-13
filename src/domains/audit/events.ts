@@ -241,8 +241,12 @@ export type AuditAction =
   // Tenant key custody (platform chain — not a determination).
   | 'key.registered'
   | 'key.rotated'
+  | 'key.replacement_started'
+  | 'key.rewrap_completed'
   | 'key.status_changed'
   | 'key.unavailable'
+  | 'key.deletion_scheduled'
+  | 'key.destruction_certified'
   // Audit self-events (integrity).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'
@@ -260,6 +264,8 @@ export type ResourceType =
   | 'organisation'
   | 'organisation_settings'
   | 'organisation_key'
+  | 'organisation_key_rewrap'
+  | 'destruction_certificate'
   | 'organisation_domain'
   | 'feature_flag'
   | 'role'

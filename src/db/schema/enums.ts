@@ -245,3 +245,10 @@ export const organisationKeyStatus = pgEnum('organisation_key_status', [
   'pending_deletion',
   'unavailable',
 ]);
+
+/** Background re-wrap of fields and objects onto a replacement CMK. */
+export const organisationKeyRewrapStatus = pgEnum('organisation_key_rewrap_status', [
+  'running',
+  'completed',
+  'failed',
+]);

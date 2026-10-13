@@ -141,6 +141,13 @@
       "when": 1791895345792,
       "tag": "0019_thin_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791900107864,
+      "tag": "0020_sleepy_shatterstar",
+      "breakpoints": true
     }
   ]
 }

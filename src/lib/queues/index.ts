@@ -22,6 +22,7 @@ export enum QueueName {
   Export = 'export',
   Webhook = 'webhook',
   Reminder = 'reminder',
+  KeyRewrap = 'key-rewrap',
 }
 
 /** Base shape every job payload must satisfy: it is bound to one tenant. */

@@ -32,6 +32,7 @@ export interface TenantKeyMaterial {
   readonly organisationId: string;
   readonly kmsKeyArn: string;
   readonly keyVersion: number;
+  readonly previousKmsKeyArn: string | null;
   readonly status: 'active' | 'disabled' | 'pending_deletion' | 'unavailable';
 }
 
@@ -66,6 +67,7 @@ export async function scopeFor(
       organisationId: row.organisationId,
       kmsKeyArn: row.kmsKeyArn,
       keyVersion: row.keyVersion,
+      previousKmsKeyArn: row.previousKmsKeyArn ?? null,
       status: row.status,
     },
     {
@@ -93,6 +95,7 @@ export function platformScope(options: ScopeOptions = {}): EncryptionScope {
       organisationId: PLATFORM_ORGANISATION_ID,
       kmsKeyArn: arn || LOCAL_PLATFORM_ARN,
       keyVersion: 1,
+      previousKmsKeyArn: null,
       status: 'active',
     },
     { ...options, purpose: 'platform' },
@@ -131,14 +134,14 @@ function openScope(material: TenantKeyMaterial, options: ScopeOptions): Encrypti
     }
   }
 
-  async function unwrap(wrapped: Buffer): Promise<Buffer> {
-    const cacheId = dekCacheKey(material.kmsKeyArn, context, wrapped);
+  async function unwrap(wrapped: Buffer, keyArn: string): Promise<Buffer> {
+    const cacheId = dekCacheKey(keyArn, context, wrapped);
     const cached = cache.get(cacheId);
     if (cached) return cached;
     try {
       const dek = Buffer.from(
         await provider.decrypt({
-          keyArn: material.kmsKeyArn,
+          keyArn,
           ciphertextBlob: wrapped,
           encryptionContext: context,
         }),
@@ -213,10 +216,11 @@ function openScope(material: TenantKeyMaterial, options: ScopeOptions): Encrypti
         throw new Error('Ciphertext does not belong to this organisation');
       }
       const kid = parseKid(field.kid);
-      if (kid.arn !== material.kmsKeyArn) {
+      const previous = material.previousKmsKeyArn;
+      if (kid.arn !== material.kmsKeyArn && kid.arn !== previous) {
         throw new Error('Ciphertext does not belong to this organisation');
       }
-      const dek = await unwrap(Buffer.from(field.wrappedDek, 'base64'));
+      const dek = await unwrap(Buffer.from(field.wrappedDek, 'base64'), kid.arn);
       try {
         return openField(field, dek, fieldAad(binding, material.organisationId));
       } finally {

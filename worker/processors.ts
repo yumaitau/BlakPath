@@ -12,6 +12,7 @@ import { notifications, users } from '@/db/schema';
 import { sendEmail } from '@/lib/email/mailer';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
 import { verifyChain } from '@/domains/audit';
+import { processOrganisationKeyRewrap } from '@/domains/organisation-keys/rewrap-job';
 
 /**
  * Processor registry for the BlakPath background worker.
@@ -234,6 +235,34 @@ const reminderProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Key-replacement processor. Checkpoints live on the re-wrap row, so a kill
+ * retries from the cursor instead of starting over. A missing row is dropped.
+ */
+const keyRewrapProcessor: ProcessorFn = async (job, logger) => {
+  const { organisationId } = job.data;
+  const rewrapId = (job.data as { rewrapId?: unknown }).rewrapId;
+  if (typeof rewrapId !== 'string' || rewrapId.length === 0) {
+    logger.error({ jobId: job.id }, 'key-rewrap job missing rewrapId — dropping');
+    return;
+  }
+  const state = await processOrganisationKeyRewrap({ organisationId, rewrapId });
+  if (!state) {
+    logger.error({ jobId: job.id, organisationId }, 'key-rewrap row missing — dropping');
+    return;
+  }
+  logger.info(
+    {
+      jobId: job.id,
+      organisationId,
+      phase: state.phase,
+      fieldsDone: state.fieldsDone,
+      objectsDone: state.objectsDone,
+    },
+    'key re-wrap finished',
+  );
+};
+
+/**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
  * runs. Adding a real processor later is a one-line swap here.
@@ -247,6 +276,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Export]: exportProcessor,
   [QueueName.Webhook]: webhookProcessor,
   [QueueName.Reminder]: reminderProcessor,
+  [QueueName.KeyRewrap]: keyRewrapProcessor,
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */
