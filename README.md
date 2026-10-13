@@ -137,7 +137,7 @@ pnpm install
 cp .env.example .env
 #    Generate secrets:
 #      openssl rand -base64 48   # BETTER_AUTH_SECRET
-#      openssl rand -base64 32   # ENCRYPTION_MASTER_KEY
+#    Dev envelope encryption uses the local provider. No master key required.
 
 # 3. Start local infrastructure (Postgres, Redis, MinIO, ClamAV, Mailpit)
 docker compose up -d

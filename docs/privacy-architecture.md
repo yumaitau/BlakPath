@@ -40,17 +40,26 @@ recorded consent, thoughtful retention, and hard limits on automation.
 Some fields are too sensitive to sit in plaintext even inside a tenant-scoped
 database. These are protected with **envelope encryption**:
 
-- A **data key** encrypts the field with **AES-256-GCM** (authenticated
-  encryption — confidentiality and integrity). The data key is itself wrapped by
-  a **master key** managed by KMS in production
-  (`ENCRYPTION_MASTER_KEY` is a base64-encoded 32-byte key; in production it is
-  sourced from KMS, never the database — `src/lib/env.ts`).
-- **Key versioning** (`ENCRYPTION_KEY_VERSION`) is stored alongside ciphertext so
-  keys can be rotated without a flag-day re-encryption.
-- Applied to authentication secrets today — the TOTP `secret` and `backupCodes`
-  in `two_factors` store **ciphertext only** — and to sensitive evidence/identity
-  fields as those domains land (`src/db/schema/auth.ts`,
-  `docs/authentication.md`).
+- A fresh **data key** encrypts the field with **AES-256-GCM**. KMS
+  `GenerateDataKey` wraps that data key under the organisation's CMK (or an
+  external key store key). The encryption context is `{org_id, purpose}`.
+  Platform-owned data uses a separate platform CMK (`PLATFORM_KMS_KEY_ARN`),
+  not a tenant key.
+- The stored envelope is version 2: key id (ARN and version), encryption
+  context, nonce, tag, wrapped data key, and ciphertext. Additional
+  authenticated data binds the value to its table, column, row and organisation.
+  A version-1 reader remains only so older ciphertext can be migrated.
+  `ENCRYPTION_MASTER_KEY` is that legacy reader key. It is not required in
+  production.
+- `organisation_keys` records custody mode, key ARN, version, status
+  (`active`, `disabled`, `pending_deletion`, `unavailable`) and whether an
+  escrow copy exists. Changes are appended to the platform audit chain.
+- A disabled or unreachable key fails closed (`TenantKeyUnavailableError`).
+  The API returns 423 or 503 with code `TENANT_KEY_UNAVAILABLE`. There is no
+  plaintext fallback. Unwrapped data keys stay in a process-local cache for at
+  most five minutes and are zeroed when dropped.
+- Local development and CI use a deterministic local provider. Production
+  refuses `ENCRYPTION_LOCAL_KEY` and `KMS_ENDPOINT`.
 - Plaintext exists only transiently in memory during a single operation; it is
   never logged (pino) and never persisted.
 

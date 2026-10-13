@@ -24,7 +24,9 @@ Generate the two secrets you must not leave at their placeholder values:
 
 ```bash
 openssl rand -base64 48   # BETTER_AUTH_SECRET  (>= 32 chars required)
-openssl rand -base64 32   # ENCRYPTION_MASTER_KEY (base64-encoded 32-byte key)
+# Envelope encryption uses a deterministic local provider in development.
+# Set ENCRYPTION_LOCAL_KEY (openssl rand -base64 32) only to pin that root.
+# ENCRYPTION_MASTER_KEY is optional and only reads version-1 ciphertext.
 ```
 
 Configuration is validated centrally by `src/lib/env.ts` (Zod). The process
@@ -139,8 +141,8 @@ or email, keep it running.
 
 - **"Invalid environment configuration".** `src/lib/env.ts` rejected your `.env`;
   the error lists the failing keys. Common causes: `BETTER_AUTH_SECRET` shorter
-  than 32 chars, or `ENCRYPTION_MASTER_KEY` not a base64 32-byte key. Regenerate
-  with the `openssl` commands above.
+  than 32 chars. Regenerate with the `openssl` command above. A set
+  `ENCRYPTION_LOCAL_KEY` or `ENCRYPTION_MASTER_KEY` must be base64 for 32 bytes.
 - **DB connection refused / migrations fail.** Ensure `docker compose ps` shows
   Postgres healthy and `DATABASE_URL` matches. `pnpm db:migrate` uses a dedicated
   single connection and exits cleanly on success.

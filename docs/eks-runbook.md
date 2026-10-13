@@ -7,8 +7,11 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
-   `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_MASTER_KEY`,
+   `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`,
    `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_WEBHOOK_SECRET`.
+   Set `PLATFORM_KMS_KEY_ARN` (platform CMK, not a secret) in the config.
+   Do not set `ENCRYPTION_LOCAL_KEY` or `KMS_ENDPOINT`.
+   `ENCRYPTION_MASTER_KEY` is optional and only reads version-1 ciphertext.
 3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
 4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.

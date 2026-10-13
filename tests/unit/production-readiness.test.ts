@@ -15,7 +15,8 @@ const valid = {
   CLAMAV_HOST: 'clamav.internal',
   SMTP_HOST: 'smtp.internal',
   BETTER_AUTH_SECRET: 'a-secure-runtime-value-that-is-long-enough',
-  ENCRYPTION_MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+  PLATFORM_KMS_KEY_ARN:
+    'arn:aws:kms:ap-southeast-2:123456789012:key/12345678-1234-1234-1234-123456789abc',
 } as const;
 
 describe('production readiness configuration', () => {
@@ -40,6 +41,7 @@ describe('production readiness configuration', () => {
       SMTP_HOST: 'localhost',
     });
 
+    expect(issues.map(({ key }) => key)).not.toContain('ENCRYPTION_MASTER_KEY');
     expect(issues.map(({ key }) => key)).toEqual(
       expect.arrayContaining([
         'APP_REGION',
@@ -53,6 +55,22 @@ describe('production readiness configuration', () => {
         'OTEL_EXPORTER_OTLP_ENDPOINT',
         'CLAMAV_HOST',
         'SMTP_HOST',
+      ]),
+    );
+  });
+
+  it('rejects the local encryption provider and a local KMS endpoint', () => {
+    const issues = validateProductionReadiness({
+      ...valid,
+      ENCRYPTION_LOCAL_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      KMS_ENDPOINT: 'http://localhost:4566',
+      PLATFORM_KMS_KEY_ARN: undefined,
+    });
+    expect(issues.map(({ key }) => key)).toEqual(
+      expect.arrayContaining([
+        'ENCRYPTION_LOCAL_KEY',
+        'KMS_ENDPOINT',
+        'PLATFORM_KMS_KEY_ARN',
       ]),
     );
   });

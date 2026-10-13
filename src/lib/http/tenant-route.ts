@@ -10,6 +10,7 @@ import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { tenantKeyErrorResponse } from '@/lib/http/tenant-key-response';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -64,6 +65,8 @@ export async function withRequestTenant<T>(
  * from "does not exist".
  */
 export function toErrorResponse(error: unknown): NextResponse {
+  const locked = tenantKeyErrorResponse(error);
+  if (locked) return locked;
   if (error instanceof UnauthenticatedError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

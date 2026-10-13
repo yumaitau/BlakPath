@@ -34,12 +34,20 @@ const serverSchema = z
     BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be >= 32 chars'),
     BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
 
-    // Application-level envelope encryption. Master key is a base64-encoded
-    // 32-byte key. In production this is sourced from KMS, never the DB.
+    // Envelope encryption. Tenant keys live in `organisation_keys` and KMS.
+    // The platform CMK wraps non-tenant data. The local root and the KMS
+    // endpoint are development/CI only and are refused in production.
+    // ENCRYPTION_MASTER_KEY remains only so version-1 ciphertext can be read.
+    PLATFORM_KMS_KEY_ARN: z.string().min(20).optional(),
+    KMS_ENDPOINT: z.string().url().optional(),
+    ENCRYPTION_LOCAL_KEY: z
+      .string()
+      .min(44, 'ENCRYPTION_LOCAL_KEY must be a base64-encoded 32-byte key')
+      .optional(),
     ENCRYPTION_MASTER_KEY: z
       .string()
-      .min(44, 'ENCRYPTION_MASTER_KEY must be a base64-encoded 32-byte key'),
-    ENCRYPTION_KEY_VERSION: z.coerce.number().int().positive().default(1),
+      .min(44, 'ENCRYPTION_MASTER_KEY must be a base64-encoded 32-byte key')
+      .optional(),
 
     // S3-compatible object storage
     S3_ENDPOINT: z.string().url().optional(),
@@ -112,6 +120,20 @@ const serverSchema = z
         code: 'custom',
         path: ['S3_ACCESS_KEY_ID'],
         message: 'S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.ENCRYPTION_LOCAL_KEY) {
+      context.addIssue({
+        code: 'custom',
+        path: ['ENCRYPTION_LOCAL_KEY'],
+        message: 'ENCRYPTION_LOCAL_KEY is refused in production — configure KMS.',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.KMS_ENDPOINT) {
+      context.addIssue({
+        code: 'custom',
+        path: ['KMS_ENDPOINT'],
+        message: 'KMS_ENDPOINT is refused in production — configure KMS.',
       });
     }
   });

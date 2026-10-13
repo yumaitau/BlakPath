@@ -12,6 +12,12 @@ Parameters:
     Type: String
   RuntimeSecretKmsKeyArn:
     Type: String
+  # Informational. Tenant and platform envelope calls are authorised by the
+  # encryption-context condition below, because BYOK / XKS ARNs are not known
+  # when this role is deployed. The customer key policy must grant this role
+  # kms:Decrypt and kms:GenerateDataKey.
+  PlatformKmsKeyArn:
+    Type: String
 
 Resources:
   WebTaskRole:
@@ -44,6 +50,19 @@ Resources:
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
                 Resource: [!Ref EvidenceKmsKeyArn]
+              - Sid: PlatformEnvelopeKey
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: [!Ref PlatformKmsKeyArn]
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
 
   WorkerTaskRole:
     Type: AWS::IAM::Role
@@ -75,6 +94,19 @@ Resources:
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
                 Resource: [!Ref EvidenceKmsKeyArn]
+              - Sid: PlatformEnvelopeKey
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: [!Ref PlatformKmsKeyArn]
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
 
   TaskExecutionRole:
     Type: AWS::IAM::Role
