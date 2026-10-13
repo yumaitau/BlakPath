@@ -50,6 +50,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/db/seeds/index.ts",
+    "certificates:backfill-signing-keys": "tsx scripts/backfill-coa-signing-keys.ts",
     "worker": "tsx worker/index.ts",
     "worker:dev": "tsx watch worker/index.ts"
   },

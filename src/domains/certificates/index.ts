@@ -6,6 +6,7 @@
  *   - `schemas` — zod v4 input validation.
  *   - `service` — tenant-scoped, permission-checked, audited generate/sign/
  *     revoke/download + the public `verifyCertificate`.
+ *   - `signing-keys` — stored public halves of seal keys (offline verify).
  */
 export {
   CERTIFICATE_STATUSES,
@@ -31,6 +32,7 @@ export {
   generateCertificate,
   getDownloadUrl,
   listCertificates,
+  rebuildCanonicalPayload,
   revokeCertificate,
   signCertificate,
   verifyCertificate,
@@ -38,3 +40,5 @@ export {
   type CertificateVerification,
   type CoaCanonicalPayload,
 } from './service';
+
+export { loadSigningKey, recordSigningKey } from './signing-keys';

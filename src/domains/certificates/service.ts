@@ -35,6 +35,7 @@ import {
   type RevokeCertificateInput,
 } from './schemas';
 import { renderCertificatePdf } from './render';
+import { loadSigningKey, recordSigningKey } from './signing-keys';
 import {
   canRevoke,
   canSign,
@@ -285,6 +286,8 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   });
   const { signCoaPayload } = await import('@/lib/kms/sign');
   const seal = await signCoaPayload(canonical);
+  // Public half first: no stored seal may reference a key /verify cannot load.
+  if (seal.publicKey) await recordSigningKey(seal.publicKey);
   const updated = await scope.db
     .update(certificates)
     .set({
@@ -407,6 +410,38 @@ export async function listCertificates(applicationId: string): Promise<Certifica
     .orderBy(desc(certificates.createdAt));
 }
 
+/**
+ * Rebuild the canonical bytes a sealed certificate attests, from the stored
+ * row and its decision's recorded outcome. Root client: used by the public
+ * verifier and the operator signing-key backfill, both outside a tenant scope.
+ */
+export async function rebuildCanonicalPayload(cert: {
+  id: string;
+  organisationId: string;
+  reference: string;
+  applicationId: string;
+  decisionId: string;
+  verificationCode: string;
+  signedAt: Date;
+}): Promise<string> {
+  const decisionRows = await db
+    .select({ outcome: decisions.finalOutcome })
+    .from(decisions)
+    .where(eq(decisions.id, cert.decisionId))
+    .limit(1);
+  return canonicalCoaPayload({
+    v: 1,
+    certificateId: cert.id,
+    organisationId: cert.organisationId,
+    reference: cert.reference,
+    applicationId: cert.applicationId,
+    decisionId: cert.decisionId,
+    outcome: decisionRows[0]?.outcome ?? 'unknown',
+    verificationCode: cert.verificationCode,
+    signedAt: cert.signedAt.toISOString(),
+  });
+}
+
 /** Public, non-personal authenticity check by verification code. Unauthenticated. */
 export interface CertificateVerification {
   valid: boolean;
@@ -463,30 +498,22 @@ export async function verifyCertificate(
     cert.signingAlgorithm &&
     cert.signingKeyId
   ) {
-    const decisionRows = await db
-      .select({ outcome: decisions.finalOutcome })
-      .from(decisions)
-      .where(eq(decisions.id, cert.decisionId))
-      .limit(1);
-    const canonical = canonicalCoaPayload({
-      v: 1,
-      certificateId: cert.id,
-      organisationId: cert.organisationId,
-      reference: cert.reference,
-      applicationId: cert.applicationId,
-      decisionId: cert.decisionId,
-      outcome: decisionRows[0]?.outcome ?? 'unknown',
-      verificationCode: cert.verificationCode,
-      signedAt: cert.signedAt.toISOString(),
-    });
-    const { coaPayloadHash, verifyCoaSignature } = await import('@/lib/kms/sign');
+    const canonical = await rebuildCanonicalPayload({ ...cert, signedAt: cert.signedAt });
+    const { coaPayloadHash, verifyCoaSignature, LOCAL_DEV_KEY_ID } =
+      await import('@/lib/kms/sign');
     payloadIntact = coaPayloadHash(canonical) === cert.payloadHash;
     if (payloadIntact) {
+      // Offline: the stored public half, never a KMS call per public request.
+      const stored =
+        cert.signingKeyId === LOCAL_DEV_KEY_ID
+          ? null
+          : await loadSigningKey(cert.signingKeyId);
       const result = await verifyCoaSignature({
         canonical,
         signatureB64: cert.signature,
         algorithm: cert.signingAlgorithm,
         keyId: cert.signingKeyId,
+        publicKeySpki: stored?.publicKeySpki ?? null,
       });
       signatureValid = result.signatureValid;
     }

@@ -52,13 +52,40 @@ against its public key — private key material never leaves KMS.
 
 1. Create the key: RSA_2048 (or ECC_NIST_P256), usage SIGN_VERIFY, alias
    `alias/blakpath-coa-signing`, ap-southeast-2.
-2. Grant the workload role `kms:Sign`, `kms:Verify`, `kms:GetPublicKey`,
-   `kms:DescribeKey` on the key ARN (Pod Identity association).
-3. Set `COA_SIGNING_KEY_ID` to the key ARN in `blakpath-eks-runtime`.
-4. Rotate by creating a new key version/alias target; existing seals verify
-   against their stored `signingKeyId`, so rotation never invalidates issued
-   certificates. Local development and CI use `COA_SIGNING_LOCAL_KEY_PEM`,
-   which the app refuses in production.
+2. Grant the workload role `kms:Sign` and `kms:GetPublicKey` on the key ARN
+   (Pod Identity association). Signing needs nothing else; public
+   verification needs no KMS access at all.
+3. Set `COA_SIGNING_KEY_ID` to the alias (`alias/blakpath-coa-signing`) or the
+   key ARN in `blakpath-eks-runtime`.
+4. Every seal stores the resolved key ARN KMS reports it signed with (never
+   the alias), and the first seal by a key stores that key's public half
+   (SPKI + SHA-256 fingerprint) in `signing_keys`. `/verify` checks seals
+   offline against that stored public key — zero KMS calls per request.
+
+Rotation. KMS does not rotate asymmetric keys in place, so rotation is a new
+key plus an alias retarget:
+
+1. Create a new SIGN_VERIFY key (same spec) and grant the workload role
+   `kms:Sign` and `kms:GetPublicKey` on it.
+2. Retarget the alias: `aws kms update-alias --alias-name
+alias/blakpath-coa-signing --target-key-id <new-key-id>` (or, if
+   `COA_SIGNING_KEY_ID` holds an ARN, point it at the new ARN and restart).
+   The next seal records the new ARN and its public key automatically.
+3. Earlier certificates keep verifying from their stored public keys, so the
+   old key can then be disabled and scheduled for deletion once the backfill
+   below reports nothing outstanding. Do not delete a key whose public half
+   is not in `signing_keys`.
+
+Seals made before `signing_keys` existed carry the alias/env value and have no
+stored public key, so `/verify` shows them "Not verified" until backfilled.
+While every old key is still enabled, run
+`pnpm certificates:backfill-signing-keys` (dry run), then with `--apply`.
+If the alias was already retargeted, append the previous key ARN as an extra
+candidate. Each seal is re-verified against a candidate key before its
+`signing_key_id` is rewritten to that ARN; nothing is re-signed.
+
+Local development and CI use `COA_SIGNING_LOCAL_KEY_PEM`, which the app
+refuses in production.
 
 ## Restore drill (EKS variant)
 
