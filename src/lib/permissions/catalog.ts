@@ -89,6 +89,12 @@ export const PERMISSION_CATALOG = Object.freeze({
     category: 'evidence',
     description: 'Upload supporting evidence to one’s own application.',
   },
+  'evidence:upload-on-behalf': {
+    key: 'evidence:upload-on-behalf',
+    category: 'evidence',
+    description:
+      'Record evidence received on behalf of an applicant (post, email, in person or other), on an application the actor can read.',
+  },
   'evidence:read-assigned': {
     key: 'evidence:read-assigned',
     category: 'evidence',

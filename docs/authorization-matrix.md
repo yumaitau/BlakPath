@@ -32,37 +32,38 @@ set is cached on the verified `TenantContext.permissions`
 Permission keys are namespaced `resource:action`. This is the Phase-1 catalogue;
 domains added later extend it, never bypass it.
 
-| Category       | Key                                 | Description                                              |
-| -------------- | ----------------------------------- | -------------------------------------------------------- |
-| organisation   | `organisation:read`                 | View organisation profile and status                     |
-| organisation   | `organisation:update`               | Edit organisation profile                                |
-| organisation   | `organisation:manage-settings`      | Edit settings, terminology, guidance, retention defaults |
-| organisation   | `organisation:manage-domains`       | Add/verify organisation email domains                    |
-| organisation   | `organisation:manage-feature-flags` | Toggle tenant feature flags                              |
-| membership     | `membership:read`                   | View members of the organisation                         |
-| membership     | `membership:invite`                 | Invite a person to the organisation                      |
-| membership     | `membership:manage`                 | Change member status (suspend/revoke)                    |
-| membership     | `membership:assign-roles`           | Assign/remove roles on a membership                      |
-| role           | `role:read`                         | View roles and their permissions                         |
-| role           | `role:manage`                       | Create/edit/delete tenant roles and grants               |
-| representative | `representative:read`               | View representative authorisations                       |
-| representative | `representative:manage`             | Grant/revoke representative access                       |
-| application    | `application:read-assigned`         | View applications assigned to the user                   |
-| application    | `application:read-all`              | View all applications in the organisation                |
-| application    | `application:create`                | Record/start a new application                           |
-| application    | `application:update`                | Edit application details/status (non-determinative)      |
-| application    | `application:assign`                | Assign an application to a caseworker                    |
-| evidence       | `evidence:upload`                   | Upload supporting evidence (to quarantine)               |
-| evidence       | `evidence:read`                     | View/download promoted (scanned-clean) evidence          |
-| evidence       | `evidence:manage`                   | Replace/withdraw evidence                                |
-| genealogy      | `genealogy:read`                    | View genealogy records                                   |
-| genealogy      | `genealogy:manage`                  | Create/edit genealogy records                            |
-| decision       | `decision:record`                   | Record a human determination outcome                     |
-| decision       | `decision:review`                   | Second-person review of a recorded decision              |
-| certificate    | `certificate:issue`                 | Issue a certificate for an approved decision             |
-| certificate    | `certificate:revoke`                | Revoke a previously issued certificate                   |
-| audit          | `audit:read`                        | Read the organisation's audit trail                      |
-| audit          | `audit:verify`                      | Trigger/verify audit integrity checkpoints               |
+| Category       | Key                                 | Description                                                 |
+| -------------- | ----------------------------------- | ----------------------------------------------------------- |
+| organisation   | `organisation:read`                 | View organisation profile and status                        |
+| organisation   | `organisation:update`               | Edit organisation profile                                   |
+| organisation   | `organisation:manage-settings`      | Edit settings, terminology, guidance, retention defaults    |
+| organisation   | `organisation:manage-domains`       | Add/verify organisation email domains                       |
+| organisation   | `organisation:manage-feature-flags` | Toggle tenant feature flags                                 |
+| membership     | `membership:read`                   | View members of the organisation                            |
+| membership     | `membership:invite`                 | Invite a person to the organisation                         |
+| membership     | `membership:manage`                 | Change member status (suspend/revoke)                       |
+| membership     | `membership:assign-roles`           | Assign/remove roles on a membership                         |
+| role           | `role:read`                         | View roles and their permissions                            |
+| role           | `role:manage`                       | Create/edit/delete tenant roles and grants                  |
+| representative | `representative:read`               | View representative authorisations                          |
+| representative | `representative:manage`             | Grant/revoke representative access                          |
+| application    | `application:read-assigned`         | View applications assigned to the user                      |
+| application    | `application:read-all`              | View all applications in the organisation                   |
+| application    | `application:create`                | Record/start a new application                              |
+| application    | `application:update`                | Edit application details/status (non-determinative)         |
+| application    | `application:assign`                | Assign an application to a caseworker                       |
+| evidence       | `evidence:upload`                   | Upload supporting evidence (to quarantine)                  |
+| evidence       | `evidence:upload-on-behalf`         | Record evidence received for an applicant (same quarantine) |
+| evidence       | `evidence:read`                     | View/download promoted (scanned-clean) evidence             |
+| evidence       | `evidence:manage`                   | Replace/withdraw evidence                                   |
+| genealogy      | `genealogy:read`                    | View genealogy records                                      |
+| genealogy      | `genealogy:manage`                  | Create/edit genealogy records                               |
+| decision       | `decision:record`                   | Record a human determination outcome                        |
+| decision       | `decision:review`                   | Second-person review of a recorded decision                 |
+| certificate    | `certificate:issue`                 | Issue a certificate for an approved decision                |
+| certificate    | `certificate:revoke`                | Revoke a previously issued certificate                      |
+| audit          | `audit:read`                        | Read the organisation's audit trail                         |
+| audit          | `audit:verify`                      | Trigger/verify audit integrity checkpoints                  |
 
 ## Roles × permissions
 
@@ -88,9 +89,10 @@ domains added later extend it, never bypass it.
 | `application:create`                |         ✓         |     ✓      |          |                    |     ✓     |         |
 | `application:update`                |         ✓         |     ✓      |          |                    |     ✓     |         |
 | `application:assign`                |                   |            |    ✓     |                    |     ✓     |         |
-| `evidence:upload`                   |         ✓         |     ✓      |          |                    |     ✓     |         |
-| `evidence:read`                     |                   |     ✓      |    ✓     |         ✓          |     ✓     |         |
-| `evidence:manage`                   |                   |     ✓      |          |                    |     ✓     |         |
+| `evidence:upload`                   |         ✓         |     ✓      |          |                    |           |         |
+| `evidence:upload-on-behalf`         |                   |     ✓      |          |                    |           |         |
+| `evidence:read`                     |                   |     ✓      |    ✓     |         ✓          |           |         |
+| `evidence:manage`                   |                   |     ✓      |          |                    |           |         |
 | `genealogy:read`                    |                   |     ✓      |    ✓     |         ✓          |     ✓     |         |
 | `genealogy:manage`                  |                   |     ✓      |          |                    |     ✓     |         |
 | `decision:record`                   |                   |            |    ✓     |                    |     ✓     |         |
@@ -105,6 +107,18 @@ Notes:
 - **Org Admin** manages people and configuration but is deliberately **not**
   granted `decision:record`, `decision:review` or `certificate:issue` by
   default — administrative power is separated from determination power.
+  The implemented `organisation-admin` role also holds **no** `evidence:*`
+  permission, including `evidence:upload-on-behalf`.
+- **Evidence received for an applicant.** The enforced keys are
+  `evidence:upload-own` (the applicant, on their own case) and
+  `evidence:upload-on-behalf` (intake officer and case officer, on any case
+  they can already read). On-behalf uploads record the actor, a receipt
+  channel (`post`, `in_person`, `email`, `other`) and the date received.
+  Both paths use the same quarantine bucket and malware scan. The Phase-1
+  names `evidence:upload`, `evidence:read` and `evidence:manage` in the table
+  above are not the keys the application checks; see
+  `src/lib/permissions/catalog.ts` and `src/lib/permissions/roles.ts`.
+  In that table, Caseworker stands in for intake officer and case officer.
 - **Auditor** is read-only oversight: audit and role visibility, no data
   mutation and no case access.
 

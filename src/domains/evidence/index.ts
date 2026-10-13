@@ -20,6 +20,7 @@ export {
 
 export {
   classifyEvidenceSchema,
+  onBehalfReceiptSchema,
   requestEvidenceSchema,
   requestUploadSchema,
   type ClassifyEvidenceInput,

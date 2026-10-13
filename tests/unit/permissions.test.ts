@@ -53,6 +53,7 @@ describe('permission catalogue', () => {
       'application:update-intake',
       'application:assign',
       'evidence:upload-own',
+      'evidence:upload-on-behalf',
       'evidence:read-assigned',
       'evidence:classify',
       'evidence:download',
@@ -128,8 +129,25 @@ describe('system role templates', () => {
         expect(key.startsWith('decision:')).toBe(false);
         expect(key.startsWith('certificate:')).toBe(false);
       }
+      expect(admin).not.toContain('evidence:upload-on-behalf');
       expect(admin).toContain('membership:manage');
       expect(admin).toContain('break-glass:approve');
+    });
+
+    it('lets intake and case officers record evidence received for an applicant', () => {
+      expect(permissionsForRole('intake-officer')).toContain('evidence:upload-on-behalf');
+      expect(permissionsForRole('case-officer')).toContain('evidence:upload-on-behalf');
+      expect(permissionsForRole('applicant')).not.toContain('evidence:upload-on-behalf');
+      expect(permissionsForRole('applicant')).toContain('evidence:upload-own');
+      for (const slug of [
+        'genealogy-officer',
+        'records-officer',
+        'committee-member',
+        'committee-chair',
+        'platform-operator',
+      ] as const) {
+        expect(permissionsForRole(slug)).not.toContain('evidence:upload-on-behalf');
+      }
     });
 
     it('case-officer cannot finalise decisions or sign certificates', () => {

@@ -23,6 +23,8 @@ interface CaseEvidence {
   classification: string | null;
   sizeBytes: number;
   createdAt: string;
+  receiptChannel: string | null;
+  receivedOn: string | null;
 }
 
 interface CaseRequest {
@@ -55,6 +57,8 @@ interface WorkspacePermissions {
   downloadEvidence: boolean;
   addNote: boolean;
   uploadEvidence: boolean;
+  /** Staff recording a file received for the applicant, not their own upload. */
+  uploadOnBehalf: boolean;
 }
 
 export interface ApplicationCaseWorkspaceProps {
@@ -80,6 +84,29 @@ function displayDate(value: string): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+function displayDay(value: string): string {
+  return new Intl.DateTimeFormat('en-AU', {
+    dateStyle: 'medium',
+    timeZone: 'UTC',
+  }).format(new Date(`${value}T00:00:00Z`));
+}
+
+const RECEIPT_PHRASES: Record<string, string> = {
+  post: 'by post',
+  in_person: 'in person',
+  email: 'by email',
+  other: 'another way',
+};
+
+function receiptSummary(
+  channel: string | null,
+  receivedOn: string | null,
+): string | null {
+  if (!channel || !receivedOn) return null;
+  const phrase = RECEIPT_PHRASES[channel] ?? channel;
+  return `Received ${phrase} on ${displayDay(receivedOn)}`;
 }
 
 function evidenceTone(status: string): 'success' | 'warning' | 'destructive' {
@@ -108,6 +135,8 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const [noteBody, setNoteBody] = useState('');
   const [noteVisibility, setNoteVisibility] = useState('staff');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [receiptChannel, setReceiptChannel] = useState('');
+  const [receivedOn, setReceivedOn] = useState('');
 
   async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -123,6 +152,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
           fileName: selectedFile.name,
           contentType: selectedFile.type,
           sizeBytes: selectedFile.size,
+          ...(props.permissions.uploadOnBehalf ? { receiptChannel, receivedOn } : {}),
         }),
       });
       if (!request.ok) {
@@ -328,6 +358,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               {props.evidence.map((item) => {
                 const downloadable =
                   item.status === 'clean' && props.permissions.downloadEvidence;
+                const received = receiptSummary(item.receiptChannel, item.receivedOn);
                 return (
                   <li
                     key={item.id}
@@ -340,6 +371,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
                       <span className="text-muted-foreground text-xs">
                         {item.classification ?? 'Not classified'} ·{' '}
                         {Math.ceil(item.sizeBytes / 1024)} KB
+                        {received ? ` · ${received}` : ''}
                       </span>
                     </span>
                     <span className="flex items-center gap-3">
@@ -368,7 +400,11 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
 
           {props.permissions.uploadEvidence ? (
             <form className="border-border mt-6 border-t pt-5" onSubmit={uploadEvidence}>
-              <Label htmlFor="evidence-file">Upload supporting evidence</Label>
+              <Label htmlFor="evidence-file">
+                {props.permissions.uploadOnBehalf
+                  ? 'Record evidence received'
+                  : 'Upload supporting evidence'}
+              </Label>
               <Input
                 id="evidence-file"
                 className="mt-2"
@@ -377,14 +413,57 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
                 required
                 onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               />
+              {props.permissions.uploadOnBehalf ? (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="evidence-receipt-channel">How it was received</Label>
+                    <select
+                      id="evidence-receipt-channel"
+                      value={receiptChannel}
+                      required
+                      onChange={(event) => setReceiptChannel(event.target.value)}
+                      className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+                    >
+                      <option value="">Choose one</option>
+                      <option value="post">Post</option>
+                      <option value="in_person">In person</option>
+                      <option value="email">Email</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="evidence-received-on">Date received</Label>
+                    <Input
+                      id="evidence-received-on"
+                      type="date"
+                      required
+                      max={new Intl.DateTimeFormat('en-CA', {
+                        timeZone: 'Australia/Sydney',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                      }).format(new Date())}
+                      value={receivedOn}
+                      onChange={(event) => setReceivedOn(event.target.value)}
+                    />
+                  </div>
+                </div>
+              ) : null}
               <p className="text-muted-foreground mt-2 text-xs">
-                PDF, JPEG or PNG, up to 25 MB. The file is quarantined until its malware
-                scan is clean.
+                PDF, JPEG or PNG, up to 25 MB.
+                {props.permissions.uploadOnBehalf
+                  ? ' Say how and when it arrived.'
+                  : ''}{' '}
+                The file is quarantined until its malware scan is clean.
               </p>
               <Button
                 className="mt-3"
                 type="submit"
-                disabled={!selectedFile || busy !== null}
+                disabled={
+                  !selectedFile ||
+                  busy !== null ||
+                  (props.permissions.uploadOnBehalf && (!receiptChannel || !receivedOn))
+                }
               >
                 {busy === 'upload-evidence' ? 'Uploading…' : 'Upload evidence'}
               </Button>
