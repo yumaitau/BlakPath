@@ -21,6 +21,7 @@ import {
 import { listCertificates } from '@/domains/certificates';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
+import { readEvidenceRequirements } from '@/domains/organisation-settings';
 import { listReviewsForApplication } from '@/domains/reviews';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/check';
@@ -57,15 +58,23 @@ export default async function ApplicationDetailPage({
 
   try {
     data = await withRequestTenant(async (ctx) => {
-      const [record, evidence, evidenceRequests, reviews, decisions, certificates] =
-        await Promise.all([
-          getApplicationCaseRecord(id),
-          listForApplication(id),
-          listRequestsForApplication(id),
-          listReviewsForApplication(id),
-          listDecisions(id),
-          listCertificates(id),
-        ]);
+      const [
+        record,
+        evidence,
+        evidenceRequests,
+        reviews,
+        decisions,
+        certificates,
+        evidenceRequirements,
+      ] = await Promise.all([
+        getApplicationCaseRecord(id),
+        listForApplication(id),
+        listRequestsForApplication(id),
+        listReviewsForApplication(id),
+        listDecisions(id),
+        listCertificates(id),
+        readEvidenceRequirements(),
+      ]);
       const subject = subjectFromContext(ctx);
       const application = record.application;
       const decisionDetails = await Promise.all(
@@ -99,6 +108,7 @@ export default async function ApplicationDetailPage({
             dueAt: request.dueAt?.toISOString() ?? null,
             createdAt: request.createdAt.toISOString(),
           })),
+          evidenceRequirements,
           history: record.statusHistory.map((entry) => ({
             id: entry.id,
             action: entry.action,

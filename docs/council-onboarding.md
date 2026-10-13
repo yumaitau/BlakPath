@@ -11,16 +11,23 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
    defaults; tenant clones roles on first admin sign-in).
 3. Create teams (Intake, Casework, Committee support) and groups via
    `/settings/teams` or `POST /api/teams`, `/api/groups`.
-4. Record consent wording + evidence requirements in `organisation_settings`.
+4. Set terminology, guidance, consent wording, evidence requirements,
+   escalation contacts, retention defaults and the readiness checklist at
+   `/settings/organisation`. Consent wording is shown on public form links.
+   Evidence requirements are shown in the case evidence section. Retention
+   numbers recorded here do not themselves delete records.
 
 ## 2. Identity
 
 - Invite staff via membership invitations (hash-only tokens, verified email).
 - Assign team/group memberships. Verify deny-by-default with
   `tests/e2e/team-isolation.spec.ts` against staging.
-- Optional SSO: register provider (`src/lib/auth/sso-provider.ts`), add
-  binding `POST /api/sso/providers`, verify domain in `organisation_domains`,
-  then enable. SCIM maps onto membership status transitions.
+- Optional SSO: claim the council domain at `/settings/organisation`, publish
+  the TXT record shown there (`_blakpath-verify.<domain>` =
+  `blakpath-verify=<token>`) at the council's DNS host, then check DNS. Add a
+  provider binding with `POST /api/sso/providers` and enable it only after the
+  domain is verified. Removing a domain disables SSO bindings that used it.
+  SCIM maps onto membership status transitions.
 
 ## 3. Go live
 

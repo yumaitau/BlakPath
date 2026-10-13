@@ -10,6 +10,7 @@ import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { OrganisationSettingsError } from '@/domains/organisation-settings/errors';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -78,6 +79,9 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
+  }
+  if (error instanceof OrganisationSettingsError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
   }
   if (error instanceof AuthorizationError || error instanceof TenantContextError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

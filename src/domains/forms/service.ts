@@ -5,6 +5,7 @@ import { db } from '@/db/client';
 import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import { readPublicConsentWording } from '@/domains/organisation-settings';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { env } from '@/lib/env';
 import { queueTenantEmail } from '@/lib/email/queue';
@@ -333,6 +334,8 @@ export interface PublicForm {
   title: string;
   description: string | null;
   fields: FormField[];
+  /** Organisation consent wording, when the organisation has published any. */
+  consentWording: { title: string | null; body: string; version: string | null } | null;
 }
 
 /** Resolve an invitation by its raw token, enforcing usability. Internal. */
@@ -396,11 +399,20 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
     });
   }
 
+  const consent = await readPublicConsentWording(form.organisationId);
+
   return {
     formId: form.id,
     title: form.title,
     description: form.description,
     fields: parseFieldsJson(form.fields),
+    consentWording: consent
+      ? {
+          title: consent.title ?? null,
+          body: consent.body,
+          version: consent.version ?? null,
+        }
+      : null,
   };
 }
 

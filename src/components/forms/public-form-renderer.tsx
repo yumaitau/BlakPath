@@ -264,6 +264,25 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
             />
           ))}
 
+          {form.consentWording ? (
+            <section
+              aria-labelledby={`${baseId}-consent`}
+              className="border-border bg-surface-muted rounded-md border p-4"
+            >
+              <h2 id={`${baseId}-consent`} className="text-sm font-semibold">
+                {form.consentWording.title ?? 'Consent'}
+              </h2>
+              {form.consentWording.version ? (
+                <p className="text-muted-foreground mt-1 text-xs">
+                  Version {form.consentWording.version}
+                </p>
+              ) : null}
+              <p className="mt-2 text-sm whitespace-pre-wrap">
+                {form.consentWording.body}
+              </p>
+            </section>
+          ) : null}
+
           {submit.status === 'error' ? (
             <p
               ref={errorRef}
