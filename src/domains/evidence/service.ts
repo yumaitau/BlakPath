@@ -345,6 +345,8 @@ export async function requestFurtherEvidence(
     after: { data: { applicationId }, allow: ['applicationId'] },
   });
 
+  // Recording the request does not notify the applicant. A person sends that
+  // notice, with the due date, through correspondence.
   return row;
 }
 

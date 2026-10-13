@@ -19,6 +19,7 @@ export * from './family';
 export * from './meetings';
 export * from './decisions';
 export * from './certificates';
+export * from './correspondence';
 export * from './tasks';
 export * from './forms';
 export * from './api-keys';

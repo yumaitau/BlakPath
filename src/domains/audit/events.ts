@@ -158,6 +158,13 @@ export type AuditAction =
   | 'message.viewed'
   | 'message.deleted'
   | 'notification.sent'
+  // Correspondence: human-sent letters and emails stored on a case.
+  | 'correspondence.template_created'
+  | 'correspondence.template_updated'
+  | 'correspondence.drafted'
+  | 'correspondence.sent'
+  | 'correspondence.viewed'
+  | 'correspondence.downloaded'
   | 'email.suppressed'
   | 'email.suppression_cleared'
   // Meeting lifecycle & agenda.
@@ -282,6 +289,8 @@ export type ResourceType =
   | 'client'
   | 'message'
   | 'notification'
+  | 'correspondence'
+  | 'correspondence_template'
   | 'email_suppression'
   | 'meeting_pack'
   | 'conflict'

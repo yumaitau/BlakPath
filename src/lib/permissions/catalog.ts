@@ -27,6 +27,7 @@ export const PERMISSION_CATEGORIES = [
   'client',
   'decision',
   'certificate',
+  'correspondence',
   'reporting',
   'audit',
   'retention',
@@ -185,6 +186,17 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'certificate:revoke',
     category: 'certificate',
     description: 'Revoke a previously issued certificate.',
+  },
+  'correspondence:send': {
+    key: 'correspondence:send',
+    category: 'correspondence',
+    description:
+      'Prepare and send a letter or email to an applicant. Sending is a separate human action. The software never sends an outcome by itself.',
+  },
+  'correspondence:manage-templates': {
+    key: 'correspondence:manage-templates',
+    category: 'correspondence',
+    description: 'Create and edit the organisation’s letter templates.',
   },
   'report:view': {
     key: 'report:view',

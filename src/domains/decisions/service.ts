@@ -266,6 +266,9 @@ export async function finaliseDecision(
     after: { data: { outcome: input.outcome }, allow: ['outcome'] },
   });
 
+  // Outcome letters are not sent here. A person Sends correspondence only after
+  // this decision is finalised (src/domains/correspondence). Nothing in this
+  // function emails the applicant.
   // Notify subscribed webhook endpoints (best-effort; never fails the decision).
   await emitWebhookEventSafe({
     organisationId: ctx.organisationId,

@@ -26,9 +26,14 @@ export default function SecuritySettingsPage() {
         Add extra protection to your account with two-step verification and passkeys.
       </p>
       <div className="mt-4">
-        <Button asChild variant="outline" size="sm">
-          <Link href="/settings/people">Manage people and access</Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/settings/people">Manage people and access</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/settings/correspondence">Letter templates</Link>
+          </Button>
+        </div>
       </div>
       <div className="mt-8">
         <SecuritySettings />

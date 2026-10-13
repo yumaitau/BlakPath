@@ -71,6 +71,8 @@ describe('permission catalogue', () => {
       'certificate:generate',
       'certificate:sign',
       'certificate:revoke',
+      'correspondence:send',
+      'correspondence:manage-templates',
       'report:view',
       'report:export',
       'audit:view',
@@ -130,6 +132,8 @@ describe('system role templates', () => {
       }
       expect(admin).toContain('membership:manage');
       expect(admin).toContain('break-glass:approve');
+      expect(admin).toContain('correspondence:manage-templates');
+      expect(admin).not.toContain('correspondence:send');
     });
 
     it('case-officer cannot finalise decisions or sign certificates', () => {
