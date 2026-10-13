@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { StaffShell } from '@/components/staff/staff-shell';
 import { getServerSession } from '@/lib/auth/session';
+import { withRequestTenant } from '@/lib/http/tenant-route';
+import { visibleStaffTools } from '@/lib/navigation/staff-tools';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,
@@ -26,11 +28,21 @@ export default async function StaffLayout({ children }: { children: ReactNode })
     redirect('/select-organisation');
   }
 
+  let tools: { href: string; label: string }[] = [];
+  try {
+    tools = await withRequestTenant((ctx) =>
+      visibleStaffTools(ctx.permissions).map(({ href, label }) => ({ href, label })),
+    );
+  } catch {
+    tools = [];
+  }
+
   return (
     <div className="flex min-h-dvh flex-col">
       <StaffShell
         organisations={organisations}
         activeOrganisationId={activeOrganisationId}
+        tools={tools}
       />
       <main id="main-content" tabIndex={-1} className="flex-1">
         {children}

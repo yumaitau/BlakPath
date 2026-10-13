@@ -36,7 +36,7 @@ test('public and authentication journeys meet automated WCAG checks', async ({
 test('organisation selection and core staff journeys meet automated WCAG checks', async ({
   page,
 }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   await signIn(page);
   await expect(
     page.getByRole('heading', { name: 'Choose an organisation' }),
@@ -64,11 +64,58 @@ test('organisation selection and core staff journeys meet automated WCAG checks'
   await auditRoute(page, '/board', 'Work board');
   await auditRoute(page, '/forms', 'Forms');
   await auditRoute(page, '/notifications', 'Notifications');
+  await auditRoute(page, '/reports', 'Reports');
+  await auditRoute(page, '/imports', 'Imports');
+  await auditRoute(page, '/consents', 'Consents');
+  await auditRoute(page, '/representatives', 'Representatives');
+  await auditRoute(page, '/settings/api-keys', 'API keys');
+  await auditRoute(page, '/settings/webhooks', 'Webhooks');
+  await auditRoute(page, '/settings/sso', 'Single sign-on');
+  await auditRoute(page, '/settings/retention', 'Retention');
 
   await page.goto('/dashboard');
   const notifications = page.getByRole('button', { name: /^Notifications,/ });
   await notifications.click();
   await expect(page.getByRole('region', { name: 'Notifications' })).toBeVisible();
+  await expectNoWcagViolations(page);
+});
+
+test('keyboard users can use organisation tool screens', async ({ page }) => {
+  test.setTimeout(90_000);
+  await signInAndSelectOrganisation(page);
+
+  const tools = page.getByRole('navigation', { name: 'Organisation tools' });
+  await expect(tools.getByRole('link', { name: 'API keys' })).toBeVisible();
+  await expect(tools.getByRole('link', { name: 'Retention' })).toBeVisible();
+  await expect(tools.getByRole('link', { name: 'Consents' })).toBeVisible();
+
+  const controls = [
+    ['/reports', 'Reports', 'Report'],
+    ['/imports', 'Imports', 'Applications to import'],
+    ['/consents', 'Consents', 'Account ID of the person'],
+    ['/representatives', 'Representatives', 'Account ID of the person being represented'],
+    ['/settings/api-keys', 'API keys', 'Key name'],
+    ['/settings/webhooks', 'Webhooks', 'Endpoint URL'],
+    ['/settings/sso', 'Single sign-on', 'Provider key'],
+    ['/settings/retention', 'Retention', 'Policy record type'],
+  ] as const;
+
+  for (const [path, heading, label] of controls) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+    const control = page.getByLabel(label);
+    await control.focus();
+    await expectVisibleFocus(page);
+    await expectNoWcagViolations(page);
+  }
+
+  await page.goto('/imports');
+  const lines = page.getByLabel('Applications to import');
+  await lines.focus();
+  await page.keyboard.type('Keyboard Import Person');
+  await page.getByRole('button', { name: 'Check import' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('status')).toContainText('Nothing was created');
   await expectNoWcagViolations(page);
 });
 
