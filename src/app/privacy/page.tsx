@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 export default function PrivacyPage() {
   return (
     <main
@@ -20,6 +22,14 @@ export default function PrivacyPage() {
           Data and backups are intended to remain in Australia. Evidence is held in
           quarantine until it has passed malware scanning, and is not made available while
           it is unscanned.
+        </p>
+        <p>
+          Sensitive records are encrypted under a key held for each organisation. An
+          organisation can hold that key itself and turn it off at any time. See{' '}
+          <Link href="/key-custody" className="text-primary underline underline-offset-4">
+            key custody
+          </Link>{' '}
+          for who can see what and how to revoke a key.
         </p>
         <p>
           For a privacy request or concern, contact the organisation that holds the

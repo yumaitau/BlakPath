@@ -72,6 +72,9 @@ Resources:
                       - platform
                       - blind-index
                       - key_validation
+                      # Wrap-and-unwrap check from Settings → Encryption keys.
+                      # Web only; no record data is wrapped under it.
+                      - key_health
               - Sid: TenantObjectSse
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]

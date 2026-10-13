@@ -11,7 +11,10 @@ with resources owned by the production environment.
   `/blakpath/production/*` from the `blakpath` namespace only. The shared
   External Secrets role is denied that folder and the app-secrets key. The
   workload role may `ses:SendEmail` from the application address. No SMTP user
-  and no access key.
+  and no access key. Tenant keys are used only with encryption-context purpose
+  `field`, `platform`, `blind-index`, or `key_validation` (plus `key_health`
+  for the web role's key check). The matching statement for a client's own key
+  policy is in `docs/customer-held-keys.md`.
 - `blakpath-eks-runtime-trust.example.json` is the pod identity trust for
   service account `blakpath` in namespace `blakpath`.
 - `eks-api-endpoint.example.yaml` keeps the Kubernetes API private. Public
