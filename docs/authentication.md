@@ -55,10 +55,13 @@ data on its own — that comes from a DB-verified membership plus permissions
 ## Staff MFA requirement
 
 **Every organisation staff member must have a second factor** (a passkey, or TOTP
-with recovery codes) before they can act on tenant data. Sign-in for a staff
-account that has not completed MFA enrolment is routed to enrolment, not to the
-workspace. Applicants using the public application flow are encouraged, but not
-forced, to enable MFA. Platform operators must use MFA unconditionally.
+with recovery codes) before they can act on tenant data. A TOTP row counts only
+after the user confirms a code (`two_factors.verified`). Sign-in for a staff
+account that has not completed that enrolment is routed to `/mfa/enrol`, not to
+the workspace. The staff shell and `withTenant` (every tenant `/api/*` handler)
+enforce this before any tenant work runs, and a refusal is audited. Applicants
+using the public application flow are encouraged, but not forced, to enable MFA.
+Platform operators must use MFA unconditionally.
 
 ## Organisation invitations
 

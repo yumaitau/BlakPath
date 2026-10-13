@@ -9,6 +9,7 @@ import {
   memberships,
   membershipRoles,
   organisations,
+  passkeys,
   permissions,
   rolePermissions,
   roles,
@@ -96,6 +97,28 @@ async function seedRolePermissions(roleIdBySlug: Map<string, string>): Promise<v
   console.info(`[seed] role→permission grants ensured (${grants} pairs checked)`);
 }
 
+/**
+ * Local bootstrap accounts that hold staff roles need a registered passkey so
+ * password sign-in can open the workspace. The credential is not a real
+ * WebAuthn key and is never created in production.
+ */
+async function ensureDevPasskey(userId: string): Promise<void> {
+  const [existing] = await db
+    .select({ id: passkeys.id })
+    .from(passkeys)
+    .where(eq(passkeys.userId, userId))
+    .limit(1);
+  if (existing) return;
+  await db.insert(passkeys).values({
+    id: uuidv7(),
+    userId,
+    name: 'Development bootstrap passkey',
+    credentialID: `dev-bootstrap-${userId}`,
+    publicKey: 'development-bootstrap-passkey',
+    counter: 0,
+  });
+}
+
 /** Non-production only: a ready-to-use organisation + admin login. */
 async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void> {
   if (env.NODE_ENV === 'production') {
@@ -107,6 +130,8 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
   const devPassword = 'blakpath-dev-admin-2026';
   const staffEmail = 'staff@blakpath.local';
   const staffPassword = 'blakpath-dev-staff-2026';
+  const pendingMfaEmail = 'mfa-pending@blakpath.local';
+  const pendingMfaPassword = 'blakpath-dev-mfa-2026';
 
   const orgId = uuidv7();
   await db
@@ -150,6 +175,7 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
       password: await argon2Hash(devPassword, ARGON2_OPTIONS),
     });
   }
+  await ensureDevPasskey(userId);
 
   const [existingMembership] = await db
     .select({ id: memberships.id })
@@ -227,7 +253,69 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
       password: await argon2Hash(staffPassword, ARGON2_OPTIONS),
     });
   }
+  const [staffUser] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, staffEmail))
+    .limit(1);
+  if (staffUser) await ensureDevPasskey(staffUser.id);
   console.info(`         spare:    ${staffEmail} / ${staffPassword} (no membership)`);
+
+  // Staff membership with no second factor, so the enrolment gate can be
+  // exercised locally. Do not attach a passkey or a verified TOTP row.
+  const intakeRoleId = roleIdBySlug.get('intake-officer');
+  if (!intakeRoleId) {
+    throw new Error('intake-officer system role is missing');
+  }
+  const [existingPending] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, pendingMfaEmail))
+    .limit(1);
+  const pendingUserId = existingPending?.id ?? uuidv7();
+  if (!existingPending) {
+    await db.insert(users).values({
+      id: pendingUserId,
+      name: 'Dev Staff Pending MFA',
+      email: pendingMfaEmail,
+      emailVerified: true,
+    });
+    await db.insert(accounts).values({
+      id: uuidv7(),
+      userId: pendingUserId,
+      providerId: 'credential',
+      accountId: pendingUserId,
+      password: await argon2Hash(pendingMfaPassword, ARGON2_OPTIONS),
+    });
+  }
+  const [existingPendingMembership] = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.userId, pendingUserId),
+      ),
+    )
+    .limit(1);
+  const pendingMembershipId = existingPendingMembership?.id ?? uuidv7();
+  if (!existingPendingMembership) {
+    await db.insert(memberships).values({
+      id: pendingMembershipId,
+      organisationId,
+      userId: pendingUserId,
+      status: 'active',
+    });
+  }
+  await db
+    .insert(membershipRoles)
+    .values({ id: uuidv7(), membershipId: pendingMembershipId, roleId: intakeRoleId })
+    .onConflictDoNothing({
+      target: [membershipRoles.membershipId, membershipRoles.roleId],
+    });
+  console.info(
+    `         pending:  ${pendingMfaEmail} / ${pendingMfaPassword} (no second factor)`,
+  );
 }
 
 async function main(): Promise<void> {

@@ -76,7 +76,8 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
 
 - **Threat:** impersonating a user or another tenant.
 - **Mitigations:** Better Auth sessions; argon2 password hashing; **mandatory
-  staff MFA** (passkeys/TOTP); step-up re-auth for sensitive actions; sessions
+  staff MFA** (passkeys or verified TOTP, enforced before tenant access);
+  step-up re-auth for sensitive actions; sessions
   bound server-side with `ipAddress`/`userAgent`; tenant id derived from the
   verified membership, never the request (`docs/authentication.md`).
 
