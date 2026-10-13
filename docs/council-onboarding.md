@@ -18,9 +18,15 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 - Invite staff via membership invitations (hash-only tokens, verified email).
 - Assign team/group memberships. Verify deny-by-default with
   `tests/e2e/team-isolation.spec.ts` against staging.
-- Optional SSO: register provider (`src/lib/auth/sso-provider.ts`), add
-  binding `POST /api/sso/providers`, verify domain in `organisation_domains`,
-  then enable. SCIM maps onto membership status transitions.
+- Optional SSO (Entra ID): register the BlakPath app in the council tenant
+  with redirect URI `https://<app>/api/auth/sso/callback`; put
+  `SSO_ENTRA_CLIENT_ID`, `SSO_ENTRA_CLIENT_SECRET` and `SSO_STATE_SECRET` in
+  the Secrets Manager runtime secret; add binding `POST /api/sso/providers`
+  with the tenant-specific issuer
+  `https://login.microsoftonline.com/<tenant-id>/v2.0`; verify the domain in
+  `organisation_domains`, then enable. Enforce MFA via Conditional Access.
+  Staff must already be invited members. SCIM maps onto membership status
+  transitions.
 
 ## 3. Go live
 

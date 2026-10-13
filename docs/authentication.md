@@ -140,14 +140,36 @@ sequenceDiagram
 - Account recovery that would reset a factor is treated as sensitive and audited;
   it never silently disables MFA for staff.
 
-## SSO / SCIM (future abstraction)
+## SSO (Entra ID OIDC) / SCIM
 
-Enterprise sign-on is not in Phase 1, but the design leaves room for it:
+Federated sign-in is tenant-bound and off unless explicitly configured:
 
-- **SSO (OIDC/SAML):** `accounts` already models federated providers
-  (`providerId`, tokens), so an OIDC/SAML provider slots in as another account
-  type. Organisation-to-provider mapping will hang off the tenancy domain (e.g.
-  via `organisation_domains` for email-domain routing).
+- **Provider:** `src/lib/auth/sso-entra.ts` (authorization code + PKCE S256,
+  nonce, RS256 id_token verified against the tenant JWKS, `iss`/`aud`/`exp`/
+  `nbf` checks). It registers only when `SSO_ENTRA_CLIENT_ID`,
+  `SSO_ENTRA_CLIENT_SECRET` and a dedicated `SSO_STATE_SECRET` are present.
+  These come from Secrets Manager via the runtime secret — never the database.
+- **Tenant binding:** `organisation_sso_providers` routes a verified email
+  domain to a tenant-specific issuer
+  (`https://login.microsoftonline.com/{tenant-id}/v2.0`, never `common`).
+  The discovery document's `issuer` must equal it exactly. A binding works only
+  when enabled AND its domain is verified in `organisation_domains` for the same
+  organisation; otherwise the user gets one generic error, the denial is
+  audited, and password + MFA remain available.
+- **Flow:** `POST /api/auth/sso/sign-in { email }` → IdP →
+  `GET /api/auth/sso/callback`. State, nonce and PKCE verifier are sealed
+  (AES-256-GCM under `SSO_STATE_SECRET`) in a 10-minute httpOnly flow cookie,
+  so a callback only completes in the browser that started it.
+- **Sessions:** issued by Better Auth itself (`sso-plugin.ts`) with
+  `activeOrganisationId` set to the bound tenant after an active membership
+  check. Federation never creates users or memberships (invite-only): first
+  sign-in links an invited, email-verified user whose email (`email`, else the
+  UPN) is on the binding's domain; later sign-ins resolve by IdP subject.
+  Success and denial are audited as `auth.sign_in`.
+- **Tokens:** IdP access/refresh tokens are not stored. Better Auth
+  `account.encryptOAuthTokens` is on as a backstop.
+- **MFA:** for federated users the second factor is the IdP's job — the
+  council must enforce MFA in Entra Conditional Access for the BlakPath app.
 - **SCIM provisioning:** membership lifecycle already lives in `memberships` /
   `membership_roles` with clear statuses, so SCIM create/update/deactivate maps
   onto membership status transitions rather than a parallel identity store.
