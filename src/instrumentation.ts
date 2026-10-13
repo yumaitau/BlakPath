@@ -1,3 +1,5 @@
+import type { Instrumentation } from 'next';
+
 /**
  * Next.js instrumentation hook.
  *
@@ -33,3 +35,42 @@ export async function register(): Promise<void> {
     logger.error({ err }, 'failed to register SSO providers');
   }
 }
+
+/**
+ * Server-error correlation. Next.js shows the browser only an opaque `digest`
+ * for a server error, which our error pages display as the support reference.
+ * Logging it here with the route lets operators go from that reference to the
+ * failure. Only the route PATTERN is logged (e.g. `/form/[token]`), never the
+ * concrete path, which can carry invitation tokens or record ids.
+ */
+export const onRequestError: Instrumentation.onRequestError = async (
+  error,
+  request,
+  context,
+) => {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  try {
+    const [{ logger }, { correlationFromHeaders }] = await Promise.all([
+      import('@/lib/observability/logger'),
+      import('@/lib/observability/correlation'),
+    ]);
+    const digest =
+      typeof error === 'object' && error !== null && 'digest' in error
+        ? String((error as { digest: unknown }).digest)
+        : undefined;
+    logger.error(
+      {
+        err: error,
+        digest,
+        ...correlationFromHeaders(request.headers),
+        method: request.method,
+        routePath: context.routePath,
+        routeType: context.routeType,
+        renderSource: context.renderSource,
+      },
+      'request error',
+    );
+  } catch {
+    // Error reporting must never itself throw.
+  }
+};

@@ -33,6 +33,9 @@ const serverSchema = z
     // Better Auth
     BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be >= 32 chars'),
     BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
+    // Staff UI inactivity sign-out. A warning appears two minutes before the
+    // session is ended; activity in any open tab resets the timer.
+    STAFF_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(5).max(720).default(30),
 
     // Application-level envelope encryption. Master key is a base64-encoded
     // 32-byte key. In production this is sourced from KMS, never the DB.

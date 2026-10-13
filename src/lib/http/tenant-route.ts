@@ -68,7 +68,11 @@ export function toErrorResponse(error: unknown): NextResponse {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   if (error instanceof StepUpRequiredError) {
-    return NextResponse.json({ error: 'Re-authentication required' }, { status: 401 });
+    // `code` lets the client tell "re-authenticate" apart from "signed out".
+    return NextResponse.json(
+      { error: 'Re-authentication required', code: 'STEP_UP_REQUIRED' },
+      { status: 401 },
+    );
   }
   if (error instanceof NoActiveOrganisationError) {
     return NextResponse.json({ error: 'No active organisation' }, { status: 409 });

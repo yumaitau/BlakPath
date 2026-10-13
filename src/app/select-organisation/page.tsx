@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { OrganisationPicker } from '@/components/tenancy/organisation-picker';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { safeReturnTo, signInPath } from '@/lib/auth/return-to';
 import { getServerSession } from '@/lib/auth/session';
 import {
   getActiveOrganisationId,
@@ -15,8 +16,18 @@ export const metadata: Metadata = {
   title: 'Choose an organisation — BlakPath',
 };
 
-/** A pre-tenant route, intentionally outside the guarded staff route group. */
-export default async function SelectOrganisationPage() {
+/**
+ * A pre-tenant route, intentionally outside the guarded staff route group.
+ * `returnTo` (the page a fresh or expired session was heading for) is
+ * validated, then used as the destination once an organisation is chosen.
+ */
+export default async function SelectOrganisationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ returnTo?: string | string[] }>;
+}) {
+  const requested = (await searchParams).returnTo;
+  const returnTo = safeReturnTo(typeof requested === 'string' ? requested : null);
   const session = await getServerSession();
   if (!session) {
     return (
@@ -26,7 +37,7 @@ export default async function SelectOrganisationPage() {
             <p>You need to sign in before choosing an organisation.</p>
             <div className="mt-4">
               <Button asChild variant="primary" size="sm">
-                <Link href="/sign-in">Sign in</Link>
+                <Link href={signInPath(returnTo)}>Sign in</Link>
               </Button>
             </div>
           </Alert>
@@ -41,7 +52,7 @@ export default async function SelectOrganisationPage() {
     activeOrganisationId &&
     organisations.some((org) => org.organisationId === activeOrganisationId)
   ) {
-    redirect('/dashboard');
+    redirect(returnTo);
   }
 
   return (
@@ -80,6 +91,7 @@ export default async function SelectOrganisationPage() {
                 slug: org.slug,
               }))}
               activeOrganisationId={activeOrganisationId}
+              returnTo={returnTo}
             />
           )}
         </div>
