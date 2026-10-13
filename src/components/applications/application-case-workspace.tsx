@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import type { CollectionNotice as Notice } from '@/lib/privacy/collection-notice';
+import { CollectionNotice } from '@/components/privacy/collection-notice';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -69,6 +71,8 @@ export interface ApplicationCaseWorkspaceProps {
   history: CaseHistory[];
   notes: CaseNote[];
   permissions: WorkspacePermissions;
+  /** Shown before an applicant uploads evidence; null when they cannot. */
+  collectionNotice: Notice | null;
 }
 
 function displayLabel(value: string): string {
@@ -108,10 +112,17 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const [noteBody, setNoteBody] = useState('');
   const [noteVisibility, setNoteVisibility] = useState('staff');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [noticeRead, setNoticeRead] = useState(false);
+  const [noticeInvalid, setNoticeInvalid] = useState(false);
 
   async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedFile) return;
+    if (!selectedFile || !props.collectionNotice) return;
+    if (!noticeRead) {
+      setNoticeInvalid(true);
+      document.getElementById('evidence-collection-notice')?.focus();
+      return;
+    }
     setBusy('upload-evidence');
     setError(null);
     setMessage(null);
@@ -123,8 +134,18 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
           fileName: selectedFile.name,
           contentType: selectedFile.type,
           sizeBytes: selectedFile.size,
+          collectionNotice: {
+            version: props.collectionNotice.version,
+            hash: props.collectionNotice.hash,
+          },
         }),
       });
+      if (request.status === 409) {
+        setError(
+          'The collection notice has changed. Reload the page and read the current notice before uploading.',
+        );
+        return;
+      }
       if (!request.ok) {
         setError('This file could not be prepared for upload. Check its type and size.');
         return;
@@ -366,7 +387,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
             </ul>
           )}
 
-          {props.permissions.uploadEvidence ? (
+          {props.permissions.uploadEvidence && props.collectionNotice ? (
             <form className="border-border mt-6 border-t pt-5" onSubmit={uploadEvidence}>
               <Label htmlFor="evidence-file">Upload supporting evidence</Label>
               <Input
@@ -381,6 +402,18 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
                 PDF, JPEG or PNG, up to 25 MB. The file is quarantined until its malware
                 scan is clean.
               </p>
+              <CollectionNotice
+                notice={props.collectionNotice}
+                id="evidence-collection-notice"
+                className="mt-4"
+                collapsible
+                acknowledged={noticeRead}
+                invalid={noticeInvalid}
+                onAcknowledgedChange={(read) => {
+                  setNoticeRead(read);
+                  if (read) setNoticeInvalid(false);
+                }}
+              />
               <Button
                 className="mt-3"
                 type="submit"

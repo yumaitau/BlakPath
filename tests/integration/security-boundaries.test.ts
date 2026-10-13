@@ -21,6 +21,7 @@ async function loadRuntime() {
     forms,
     memberships,
     audit,
+    consent,
   ] = await Promise.all([
     import('@/db/client'),
     import('@/db/schema'),
@@ -32,6 +33,7 @@ async function loadRuntime() {
     import('@/domains/forms'),
     import('@/domains/memberships'),
     import('@/domains/audit'),
+    import('@/domains/consent'),
   ]);
 
   return {
@@ -45,6 +47,7 @@ async function loadRuntime() {
     forms,
     memberships,
     audit,
+    consent,
   };
 }
 
@@ -164,11 +167,24 @@ integration('database-backed security boundaries', () => {
       }),
     );
 
+    const notice = await runtime.tenancy.runWithTenantContext(contextA, () =>
+      runtime.consent.currentCollectionNotice(),
+    );
+    await expect(
+      runtime.tenancy.runWithTenantContext(contextA, () =>
+        runtime.evidence.requestUpload(application.id, {
+          fileName: 'unacknowledged.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 1024,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'COLLECTION_NOTICE_NOT_ACKNOWLEDGED' });
     const upload = await runtime.tenancy.runWithTenantContext(contextA, () =>
       runtime.evidence.requestUpload(application.id, {
         fileName: 'supporting-record.pdf',
         contentType: 'application/pdf',
         sizeBytes: 1024,
+        collectionNotice: { version: notice.version, hash: notice.hash },
       }),
     );
     expect(upload.evidence).toMatchObject({
@@ -251,6 +267,52 @@ integration('database-backed security boundaries', () => {
     expect(guarded.organisationId).toBe(organisationB);
   });
 
+  it('requires a staff attestation of the current collection notice at intake', async () => {
+    const notice = await runtime.tenancy.runWithTenantContext(contextA, () =>
+      runtime.consent.currentCollectionNotice(),
+    );
+    expect(notice.hash).toMatch(/^[a-f0-9]{64}$/);
+
+    await expect(
+      runtime.tenancy.runWithTenantContext(contextA, () =>
+        runtime.applications.createApplication(
+          { applicantName: 'Intake without notice', applicantUserId: userId },
+          { requireCollectionNotice: true },
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'COLLECTION_NOTICE_NOT_ACKNOWLEDGED' });
+
+    const application = await runtime.tenancy.runWithTenantContext(contextA, () =>
+      runtime.applications.createApplication(
+        {
+          applicantName: 'Intake with notice given',
+          applicantUserId: userId,
+          collectionNotice: { version: notice.version, hash: notice.hash },
+        },
+        { requireCollectionNotice: true },
+      ),
+    );
+
+    const { eq } = await import('drizzle-orm');
+    const acknowledgements = await runtime.db
+      .select()
+      .from(runtime.schema.collectionNoticeAcknowledgements)
+      .where(
+        eq(runtime.schema.collectionNoticeAcknowledgements.resourceId, application.id),
+      );
+    expect(acknowledgements).toHaveLength(1);
+    expect(acknowledgements[0]).toMatchObject({
+      organisationId: organisationA,
+      context: 'application_intake',
+      method: 'staff_attested',
+      resourceType: 'application',
+      acknowledgedByUserId: userId,
+      subjectUserId: userId,
+      noticeVersion: notice.version,
+      noticeHash: notice.hash,
+    });
+  });
+
   it('enforces valid, expired, revoked and single-use public form tokens', async () => {
     const fieldId = randomUUID();
     const { form, valid, revoked, expired } = await runtime.tenancy.runWithTenantContext(
@@ -300,25 +362,52 @@ integration('database-backed security boundaries', () => {
     expect(publicForm).toMatchObject({
       formId: form.id,
       title: 'Integration public form',
+      notice: { organisationName: 'Integration Organisation A' },
     });
+    const acknowledgement = {
+      version: publicForm.notice.version,
+      hash: publicForm.notice.hash,
+    };
     await expect(
       runtime.forms.submitPublicResponse(valid.token, {
-        supplied_name: '',
+        supplied_name: 'Submitted without reading the notice',
       }),
+    ).rejects.toMatchObject({ code: 'COLLECTION_NOTICE_NOT_ACKNOWLEDGED' });
+    await expect(
+      runtime.forms.submitPublicResponse(
+        valid.token,
+        { supplied_name: 'Submitted against a stale notice' },
+        undefined,
+        { version: acknowledgement.version, hash: '0'.repeat(64) },
+      ),
+    ).rejects.toMatchObject({ code: 'COLLECTION_NOTICE_NOT_ACKNOWLEDGED' });
+    await expect(
+      runtime.forms.submitPublicResponse(
+        valid.token,
+        { supplied_name: '' },
+        undefined,
+        acknowledgement,
+      ),
     ).rejects.toMatchObject({ code: 'POLICY_DENIED' });
     await expect(
-      runtime.forms.submitPublicResponse(valid.token, {
-        supplied_name: 'Name supplied by recipient',
-      }),
+      runtime.forms.submitPublicResponse(
+        valid.token,
+        { supplied_name: 'Name supplied by recipient' },
+        undefined,
+        acknowledgement,
+      ),
     ).resolves.toEqual({ ok: true });
 
     await expect(runtime.forms.getPublicForm(valid.token)).rejects.toMatchObject({
       code: 'FORM_TOKEN_INVALID',
     });
     await expect(
-      runtime.forms.submitPublicResponse(valid.token, {
-        supplied_name: 'Second submission attempt',
-      }),
+      runtime.forms.submitPublicResponse(
+        valid.token,
+        { supplied_name: 'Second submission attempt' },
+        undefined,
+        acknowledgement,
+      ),
     ).rejects.toMatchObject({ code: 'FORM_TOKEN_INVALID' });
     await expect(runtime.forms.getPublicForm(revoked.token)).rejects.toMatchObject({
       code: 'FORM_TOKEN_INVALID',
@@ -342,6 +431,21 @@ integration('database-backed security boundaries', () => {
       answers: { supplied_name: 'Name supplied by recipient' },
     });
     expect(responsesB).toEqual([]);
+
+    const acknowledgements = await runtime.db
+      .select()
+      .from(runtime.schema.collectionNoticeAcknowledgements)
+      .where(
+        eq(runtime.schema.collectionNoticeAcknowledgements.resourceId, responsesA[0]!.id),
+      );
+    expect(acknowledgements).toHaveLength(1);
+    expect(acknowledgements[0]).toMatchObject({
+      organisationId: organisationA,
+      context: 'form_response',
+      method: 'self',
+      noticeVersion: acknowledgement.version,
+      noticeHash: acknowledgement.hash,
+    });
 
     const [storedInvitation] = await runtime.db
       .select({ tokenHash: runtime.schema.formInvitations.tokenHash })

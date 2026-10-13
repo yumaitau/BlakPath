@@ -124,6 +124,12 @@ test('a form can be authored, completed once, reviewed and revoked', async ({ pa
   await page.goto(publicUrl);
   await page.getByRole('button', { name: 'Submit' }).click();
   await expect(
+    page.getByText('Please read and confirm the collection notice before submitting.'),
+  ).toBeVisible();
+  await expect(page.getByLabel('I have read this collection notice')).toBeFocused();
+  await page.getByLabel('I have read this collection notice').check();
+  await page.getByRole('button', { name: 'Submit' }).click();
+  await expect(
     page.getByText(
       'Some answers need another look. Please check the form and try again.',
     ),

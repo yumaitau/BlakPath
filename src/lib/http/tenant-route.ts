@@ -10,6 +10,7 @@ import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { CollectionNoticeError } from '@/domains/consent/errors';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -75,6 +76,12 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof ZodError) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  }
+  if (error instanceof CollectionNoticeError) {
+    return NextResponse.json(
+      { error: 'Collection notice not acknowledged' },
+      { status: 409 },
+    );
   }
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });

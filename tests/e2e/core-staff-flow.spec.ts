@@ -73,8 +73,9 @@ test('public support and certificate-verification journeys are usable', async ({
   page,
 }) => {
   const destinations = [
-    ['Accessibility', '/accessibility', 'Accessibility'],
-    ['Privacy', '/privacy', 'Privacy'],
+    ['Accessibility', '/accessibility', 'Accessibility statement'],
+    ['Privacy', '/privacy', 'Privacy policy'],
+    ['Terms of use', '/terms', 'Terms of use'],
     ['Support', '/support', 'Support'],
     ['Find an organisation', '/organisations', 'Find an organisation'],
   ] as const;
@@ -119,6 +120,7 @@ test('staff can select a tenant, validate input, and start and find an applicati
   const applicantName = `E2E case record ${Date.now()}`;
   await page.getByLabel('Name as provided').fill(applicantName);
   await page.getByLabel('Handling priority').selectOption('high');
+  await page.getByLabel('I have given this collection notice to the applicant').check();
   await page.getByRole('button', { name: 'Start application' }).click();
 
   await expect(page).toHaveURL(/\/applications\/[0-9a-f-]+$/);
@@ -184,6 +186,7 @@ test('a linked applicant uploads evidence into quarantine without download acces
   await page.getByLabel('Applicant account (optional)').selectOption({
     label: `Dev Staff Member (${APPLICANT_EMAIL})`,
   });
+  await page.getByLabel('I have given this collection notice to the applicant').check();
   await page.getByRole('button', { name: 'Start application' }).click();
   await expect(page).toHaveURL(/\/applications\/[0-9a-f-]+$/);
 
@@ -219,6 +222,7 @@ test('a linked applicant uploads evidence into quarantine without download acces
       response.request().method() === 'POST' &&
       /\/api\/evidence\/[0-9a-f-]+\/complete$/.test(response.url()),
   );
+  await applicantPage.getByLabel('I have read this collection notice').check();
   await applicantPage.getByRole('button', { name: 'Upload evidence' }).click();
   const completed = await completedResponse;
   expect(completed.status()).toBe(200);
@@ -252,6 +256,7 @@ test('staff can progress a case through review and a human committee decision', 
   const originalName = `E2E workspace case ${stamp}`;
   const updatedName = `${originalName} updated`;
   await page.getByLabel('Name as provided').fill(originalName);
+  await page.getByLabel('I have given this collection notice to the applicant').check();
   await page.getByRole('button', { name: 'Start application' }).click();
   await expect(page).toHaveURL(/\/applications\/[0-9a-f-]+$/);
 

@@ -4,24 +4,29 @@ import {
   type RegisterParticipant,
 } from '@/components/applications/application-register';
 import { listApplicationParticipants, listApplications } from '@/domains/applications';
+import { currentCollectionNotice } from '@/domains/consent';
+import type { CollectionNotice } from '@/lib/privacy/collection-notice';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 
 export default async function ApplicationsPage() {
   let applications: RegisterApplication[] = [];
   let participants: RegisterParticipant[] = [];
   let canCreate = false;
+  let collectionNotice: CollectionNotice | null = null;
   let unavailable = false;
   try {
     const loaded = await withRequestTenant(async (ctx) => {
       const mayCreate = ctx.permissions.has('application:create');
-      const [listed, linkedApplicants] = await Promise.all([
+      const [listed, linkedApplicants, notice] = await Promise.all([
         listApplications({ limit: 100 }),
         mayCreate ? listApplicationParticipants() : Promise.resolve([]),
+        mayCreate ? currentCollectionNotice() : Promise.resolve(null),
       ]);
-      return { listed, linkedApplicants, mayCreate };
+      return { listed, linkedApplicants, mayCreate, notice };
     });
     participants = loaded.linkedApplicants;
     canCreate = loaded.mayCreate;
+    collectionNotice = loaded.notice;
     applications = loaded.listed.items.map((application) => ({
       id: application.id,
       reference: application.reference,
@@ -47,6 +52,7 @@ export default async function ApplicationsPage() {
         applications={applications}
         participants={participants}
         canCreate={canCreate}
+        collectionNotice={collectionNotice}
       />
     </div>
   );

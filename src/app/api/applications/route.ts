@@ -35,7 +35,10 @@ export async function GET(request: NextRequest): Promise<Response> {
 export async function POST(request: NextRequest): Promise<Response> {
   try {
     const input = (await request.json()) as CreateApplicationInput;
-    const application = await withRequestTenant(() => createApplication(input));
+    // Staff intake: the applicant must have been given the collection notice.
+    const application = await withRequestTenant(() =>
+      createApplication(input, { requireCollectionNotice: true }),
+    );
     return NextResponse.json({ application }, { status: 201 });
   } catch (error) {
     return toErrorResponse(error);

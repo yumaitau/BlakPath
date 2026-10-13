@@ -17,9 +17,21 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
   const api = page.request;
   const stamp = Date.now();
 
+  // Staff intake attests the applicant was given the current collection notice.
+  const { notice } = (await (await api.get('/api/collection-notice')).json()) as {
+    notice: { version: string; hash: string };
+  };
+  const unacknowledged = await api.post('/api/applications', {
+    data: { applicantName: `Unacknowledged applicant ${stamp}` },
+  });
+  expect(unacknowledged.status()).toBe(409);
+
   const app = (await (
     await api.post('/api/applications', {
-      data: { applicantName: `Sealed lifecycle applicant ${stamp}` },
+      data: {
+        applicantName: `Sealed lifecycle applicant ${stamp}`,
+        collectionNotice: { version: notice.version, hash: notice.hash },
+      },
     })
   ).json()) as { application: { id: string } };
   const applicationId = app.application.id;

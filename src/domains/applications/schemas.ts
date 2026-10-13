@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { collectionNoticeAcknowledgementSchema } from '@/lib/privacy/collection-notice';
 import { APPLICATION_STATUSES } from './workflow';
 
 /**
@@ -27,6 +28,12 @@ export const createApplicationSchema = z.object({
   clientId: z.uuid().optional(),
   priority: z.enum(APPLICATION_PRIORITIES).default('normal'),
   intake: intakeSchema.optional(),
+  /**
+   * Staff attestation that the applicant was given the organisation's
+   * collection notice (version + hash of the wording shown). Required on the
+   * staff intake route; see `createApplication`'s `requireCollectionNotice`.
+   */
+  collectionNotice: collectionNoticeAcknowledgementSchema.optional(),
 });
 export type CreateApplicationInput = z.input<typeof createApplicationSchema>;
 

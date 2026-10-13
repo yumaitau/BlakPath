@@ -72,6 +72,7 @@ async function uploadEvidence(
       mimeType: 'image/png',
       buffer: png,
     });
+    await applicantPage.getByLabel('I have read this collection notice').check();
     await applicantPage.getByRole('button', { name: 'Upload evidence' }).click();
     await expect(
       applicantPage.getByText(
@@ -103,6 +104,7 @@ test('seeded users complete the database, scan, email and public-form journey', 
   await page.getByLabel('Applicant account (optional)').selectOption({
     label: `Dev Staff Member (${APPLICANT_EMAIL})`,
   });
+  await page.getByLabel('I have given this collection notice to the applicant').check();
   await page.getByRole('button', { name: 'Start application' }).click();
   await expect(page).toHaveURL(/\/applications\/[0-9a-f-]+$/);
   const applicationUrl = page.url();
@@ -155,6 +157,7 @@ test('seeded users complete the database, scan, email and public-form journey', 
   try {
     await publicPage.goto(invitationUrl);
     await publicPage.getByLabel('Community response').fill(`Live response ${stamp}`);
+    await publicPage.getByLabel('I have read this collection notice').check();
     await publicPage.getByRole('button', { name: 'Submit' }).click();
     await expect(
       publicPage.getByRole('heading', {

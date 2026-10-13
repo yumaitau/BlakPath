@@ -5,6 +5,11 @@ import { uuidv7 } from 'uuidv7';
 import { evidence, evidenceRequests } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import {
+  assertNoticeAcknowledged,
+  currentCollectionNotice,
+  recordNoticeAcknowledgement,
+} from '@/domains/consent/notices';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -76,7 +81,8 @@ async function loadEvidence(id: string): Promise<EvidenceRow | null> {
 /**
  * Start an upload: create a `pending` evidence record and mint a short-lived
  * presigned PUT into the quarantine bucket. Applicants upload to their OWN
- * application only (`evidence:upload-own`).
+ * application only (`evidence:upload-own`), and only after acknowledging the
+ * organisation's current collection notice (recorded with the evidence row).
  */
 export async function requestUpload(
   applicationId: string,
@@ -94,6 +100,11 @@ export async function requestUpload(
     throw new AuthorizationError('POLICY_DENIED');
   }
 
+  // APP 5: the applicant must have acknowledged the CURRENT collection notice
+  // before any evidence is accepted.
+  const notice = await currentCollectionNotice();
+  assertNoticeAcknowledged(notice, input.collectionNotice);
+
   const scope = currentScope();
   const id = uuidv7();
   const key = objectKey(
@@ -104,23 +115,38 @@ export async function requestUpload(
     id,
   );
 
-  const inserted = await scope.db
-    .insert(evidence)
-    .values(
-      scope.insertValues({
-        id,
-        applicationId,
-        uploadedByUserId: ctx.userId,
-        fulfilsRequestId: input.fulfilsRequestId ?? null,
-        fileName: input.fileName,
-        declaredContentType: input.contentType,
-        sizeBytes: input.sizeBytes,
-        status: 'pending',
-        quarantineKey: key,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'evidence');
+  const row = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(evidence)
+      .values(
+        scope.insertValues({
+          id,
+          applicationId,
+          uploadedByUserId: ctx.userId,
+          fulfilsRequestId: input.fulfilsRequestId ?? null,
+          fileName: input.fileName,
+          declaredContentType: input.contentType,
+          sizeBytes: input.sizeBytes,
+          status: 'pending',
+          quarantineKey: key,
+        }),
+      )
+      .returning();
+    await recordNoticeAcknowledgement(
+      {
+        organisationId: scope.organisationId,
+        notice,
+        context: 'evidence_upload',
+        method: 'self',
+        resourceType: 'evidence',
+        resourceId: id,
+        acknowledgedByUserId: ctx.userId,
+        subjectUserId: ctx.userId,
+      },
+      tx,
+    );
+    return must(inserted[0], 'evidence');
+  });
 
   const upload = await presignUpload({
     organisationId: scope.organisationId,

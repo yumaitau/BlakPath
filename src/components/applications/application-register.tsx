@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import type { CollectionNotice as Notice } from '@/lib/privacy/collection-notice';
+import { CollectionNotice } from '@/components/privacy/collection-notice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,10 +35,13 @@ export function ApplicationRegister({
   applications,
   participants,
   canCreate,
+  collectionNotice,
 }: {
   applications: RegisterApplication[];
   participants: RegisterParticipant[];
   canCreate: boolean;
+  /** The organisation's collection notice; staff attest it was given. */
+  collectionNotice: Notice | null;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState('');
@@ -45,6 +50,8 @@ export function ApplicationRegister({
   const [applicantUserId, setApplicantUserId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [noticeGiven, setNoticeGiven] = useState(false);
+  const [noticeInvalid, setNoticeInvalid] = useState(false);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -58,7 +65,12 @@ export function ApplicationRegister({
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim() || busy) return;
+    if (!name.trim() || busy || !collectionNotice) return;
+    if (!noticeGiven) {
+      setNoticeInvalid(true);
+      document.getElementById('application-collection-notice')?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -69,13 +81,19 @@ export function ApplicationRegister({
           applicantName: name,
           priority,
           applicantUserId: applicantUserId || undefined,
+          collectionNotice: {
+            version: collectionNotice.version,
+            hash: collectionNotice.hash,
+          },
         }),
       });
       if (!response.ok) {
         setError(
           response.status === 403
             ? 'You do not have access to start an application.'
-            : 'We could not start that application. Please try again.',
+            : response.status === 409
+              ? 'The collection notice has changed. Reload the page, give the applicant the current notice, then try again.'
+              : 'We could not start that application. Please try again.',
         );
         return;
       }
@@ -102,7 +120,7 @@ export function ApplicationRegister({
             organisation does, it never makes a determination about a person.
           </p>
         </div>
-        {canCreate ? (
+        {canCreate && collectionNotice ? (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Start an application</CardTitle>
@@ -152,6 +170,19 @@ export function ApplicationRegister({
                     <option value="low">Low</option>
                   </select>
                 </div>
+                <CollectionNotice
+                  notice={collectionNotice}
+                  id="application-collection-notice"
+                  mode="staff_attested"
+                  collapsible
+                  headingLevel={4}
+                  acknowledged={noticeGiven}
+                  invalid={noticeInvalid}
+                  onAcknowledgedChange={(given) => {
+                    setNoticeGiven(given);
+                    if (given) setNoticeInvalid(false);
+                  }}
+                />
                 <Button type="submit" disabled={busy}>
                   {busy ? 'Starting…' : 'Start application'}
                 </Button>

@@ -5,6 +5,12 @@ import { db } from '@/db/client';
 import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import {
+  assertNoticeAcknowledged,
+  loadCollectionNotice,
+  recordNoticeAcknowledgement,
+} from '@/domains/consent/notices';
+import type { CollectionNotice } from '@/lib/privacy/collection-notice';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { env } from '@/lib/env';
 import { queueTenantEmail } from '@/lib/email/queue';
@@ -333,6 +339,8 @@ export interface PublicForm {
   title: string;
   description: string | null;
   fields: FormField[];
+  /** The organisation's APP 5 collection notice, shown before any answer. */
+  notice: CollectionNotice;
 }
 
 /** Resolve an invitation by its raw token, enforcing usability. Internal. */
@@ -401,21 +409,29 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
     title: form.title,
     description: form.description,
     fields: parseFieldsJson(form.fields),
+    notice: await loadCollectionNotice(invitation.organisationId),
   };
 }
 
 /**
- * Submit a response for a token. Validates the answers against the form's own
- * field definitions, writes the response under the invitation's organisation,
- * and marks the invitation completed (single use). Unauthenticated.
+ * Submit a response for a token. Requires an acknowledgement of the CURRENT
+ * collection notice (version + hash) — checked before anything is written —
+ * then validates the answers against the form's own field definitions, writes
+ * the response and its acknowledgement under the invitation's organisation in
+ * one transaction, and marks the invitation completed (single use).
+ * Unauthenticated.
  */
 export async function submitPublicResponse(
   token: string,
   rawAnswers: unknown,
   ipAddress?: string,
+  rawAcknowledgement?: unknown,
 ): Promise<{ ok: true }> {
   const { invitation, form } = await resolveUsableInvitation(token);
   const fields = parseFieldsJson(form.fields);
+
+  const notice = await loadCollectionNotice(invitation.organisationId);
+  assertNoticeAcknowledged(notice, rawAcknowledgement);
 
   const parsed = validateResponse(fields, rawAnswers);
   if (!parsed.success) {
@@ -423,21 +439,40 @@ export async function submitPublicResponse(
   }
 
   const scope = scopeFor(invitation.organisationId);
-  await scope.db.insert(formResponses).values(
-    scope.insertValues({
-      formId: form.id,
-      invitationId: invitation.id,
-      answers: parsed.data,
-      respondentName: invitation.recipientName,
-      respondentEmail: invitation.recipientEmail,
-      ipAddress: ipAddress ?? null,
-    }),
-  );
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(formResponses)
+      .values(
+        scope.insertValues({
+          formId: form.id,
+          invitationId: invitation.id,
+          answers: parsed.data,
+          respondentName: invitation.recipientName,
+          respondentEmail: invitation.recipientEmail,
+          ipAddress: ipAddress ?? null,
+        }),
+      )
+      .returning({ id: formResponses.id });
+    const response = must(inserted[0], 'form response');
 
-  await db
-    .update(formInvitations)
-    .set({ status: 'completed', completedAt: new Date() })
-    .where(eq(formInvitations.id, invitation.id));
+    await recordNoticeAcknowledgement(
+      {
+        organisationId: invitation.organisationId,
+        notice,
+        context: 'form_response',
+        method: 'self',
+        resourceType: 'form_response',
+        resourceId: response.id,
+        ipAddress: ipAddress ?? null,
+      },
+      tx,
+    );
+
+    await tx
+      .update(formInvitations)
+      .set({ status: 'completed', completedAt: new Date() })
+      .where(eq(formInvitations.id, invitation.id));
+  });
 
   await recordAudit({
     action: 'form.response_submitted',
@@ -449,6 +484,10 @@ export async function submitPublicResponse(
     actingRole: 'public',
     sessionId: null,
     ...(ipAddress ? { ipAddress } : {}),
+    after: {
+      data: { noticeVersion: notice.version, noticeHash: notice.hash },
+      allow: ['noticeVersion', 'noticeHash'],
+    },
   });
 
   return { ok: true };
