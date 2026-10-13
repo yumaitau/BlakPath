@@ -54,6 +54,7 @@ export default function TwoFactorPage() {
       return;
     }
 
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load so Server Components see the verified session cookie
     window.location.href = '/dashboard';
   }
 

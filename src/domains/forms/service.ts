@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import { db } from '@/db/client';
 import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { env } from '@/lib/env';
@@ -40,13 +41,6 @@ export type FormResponseRow = typeof formResponses.$inferSelect;
 
 /** Capabilities allowed to author/manage forms and read responses. */
 const FORM_MANAGE = ['application:read-any', 'application:update-intake'] as const;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 /** SHA-256 hex of a token. Same one-way transform on write and on lookup. */
 function hashToken(token: string): string {
@@ -86,7 +80,7 @@ export async function createForm(rawInput: CreateFormInput): Promise<FormRow> {
       }),
     )
     .returning();
-  const row = must(inserted[0], 'form');
+  const row = expectRow(inserted[0], 'form');
 
   await recordAudit({
     action: 'form.created',
@@ -120,7 +114,7 @@ export async function updateForm(
     .set(patch)
     .where(scope.where(forms.organisationId, eq(forms.id, formId)))
     .returning();
-  const row = must(updated[0], 'form');
+  const row = expectRow(updated[0], 'form');
 
   await recordAudit({
     action: 'form.updated',
@@ -149,7 +143,7 @@ async function setFormStatus(
     .set({ status })
     .where(scope.where(forms.organisationId, eq(forms.id, formId)))
     .returning();
-  const row = must(updated[0], 'form');
+  const row = expectRow(updated[0], 'form');
 
   await recordAudit({
     action,
@@ -219,7 +213,7 @@ export async function createInvitation(
       }),
     )
     .returning();
-  const invitation = must(inserted[0], 'invitation');
+  const invitation = expectRow(inserted[0], 'invitation');
 
   await recordAudit({
     action: 'form.invitation_sent',
@@ -278,7 +272,7 @@ export async function revokeInvitation(invitationId: string): Promise<FormInvita
       scope.where(formInvitations.organisationId, eq(formInvitations.id, invitationId)),
     )
     .returning();
-  const row = must(updated[0], 'invitation');
+  const row = expectRow(updated[0], 'invitation');
 
   await recordAudit({
     action: 'form.invitation_revoked',

@@ -26,14 +26,13 @@ import { verifyChain } from '@/domains/audit';
  *      (ClamAV) is unavailable, the job MUST fail (and be retried) — it must
  *      never default to "clean".
  *
- * Every job carries `organisationId` (see `TenantJob`); real processors must
- * establish a verified TenantContext before touching any data.
+ * Every job carries `organisationId` (see `TenantJob`); processors establish a
+ * verified tenant scope before touching tenant data.
  *
- * Phase-1: these are thin, REAL stubs. They log structured operational context
- * and acknowledge the job so queues drain and the system is observable end to
- * end. Full implementations (ClamAV scan, certificate/export rendering, SMTP
- * delivery, audit verification, retention sweeps, webhooks) land in later
- * phases and will import domain services from `@/lib/*`.
+ * Each processor runs a real domain operation: evidence scan, SMTP delivery,
+ * notification email, audit-chain verification, webhook delivery, export,
+ * retention sweep, or calendar reminders. A processor records or moves work.
+ * It never scores, ranks, predicts, or decides an application outcome.
  */
 
 /** A single job processor. Receives the BullMQ job and a scoped logger. */
@@ -236,7 +235,7 @@ const reminderProcessor: ProcessorFn = async (job) => {
 /**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
- * runs. Adding a real processor later is a one-line swap here.
+ * runs. Registering another queue is one entry here.
  */
 export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.MalwareScan]: malwareScanProcessor,

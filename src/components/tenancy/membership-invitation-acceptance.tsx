@@ -45,6 +45,7 @@ export function MembershipInvitationAcceptance({
         );
         return;
       }
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load after the account cookie is set
       window.location.assign(`/sign-in?returnTo=${encodeURIComponent(`/join/${token}`)}`);
     } catch {
       setError('We could not reach the service. Please try again.');
@@ -68,6 +69,7 @@ export function MembershipInvitationAcceptance({
         );
         return;
       }
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load so Server Components see the accepted membership
       window.location.assign('/dashboard');
     } catch {
       setError('We could not reach the service. Please try again.');

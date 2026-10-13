@@ -1,6 +1,7 @@
 import { asc, eq, isNull, sql } from 'drizzle-orm';
 import { tasks, users } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
@@ -37,13 +38,6 @@ const TASK_READ = ['application:read-assigned', 'application:read-any'] as const
 
 /** Capabilities that permit changing the board. */
 const TASK_WRITE = ['application:read-any', 'application:assign'] as const;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 /** Load a single live task within the active tenant, or null. */
 async function loadTask(id: string): Promise<TaskRow | null> {
@@ -140,7 +134,7 @@ export async function createTask(rawInput: CreateTaskInput): Promise<TaskRow> {
       }),
     )
     .returning();
-  const row = must(inserted[0], 'task');
+  const row = expectRow(inserted[0], 'task');
 
   await recordAudit({
     action: 'task.created',
@@ -182,7 +176,7 @@ export async function updateTask(
     })
     .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
     .returning();
-  const row = must(updated[0], 'task');
+  const row = expectRow(updated[0], 'task');
 
   await recordAudit({
     action: 'task.updated',
@@ -213,7 +207,7 @@ export async function assignTask(
     .set({ assigneeUserId: input.assigneeUserId })
     .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
     .returning();
-  const row = must(updated[0], 'task');
+  const row = expectRow(updated[0], 'task');
 
   await recordAudit({
     action: 'task.assigned',
@@ -272,7 +266,7 @@ export async function moveTask(id: string, rawInput: MoveTaskInput): Promise<Tas
     .set({ status: input.status, position })
     .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
     .returning();
-  const row = must(updated[0], 'task');
+  const row = expectRow(updated[0], 'task');
 
   await recordAudit({
     action: 'task.moved',
@@ -299,7 +293,7 @@ export async function completeTask(id: string): Promise<TaskRow> {
     .set({ status: 'done' })
     .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
     .returning();
-  const row = must(updated[0], 'task');
+  const row = expectRow(updated[0], 'task');
 
   await recordAudit({
     action: 'task.completed',

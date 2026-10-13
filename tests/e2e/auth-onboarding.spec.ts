@@ -1,12 +1,7 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
-
-function watchForPageErrors(page: Page): Error[] {
-  const errors: Error[] = [];
-  page.on('pageerror', (error) => errors.push(error));
-  return errors;
-}
+import { watchForPageErrors } from './helpers/page-errors';
 
 test('auth: anonymous users hit sign-in gate', async ({ page }) => {
   await page.goto('/dashboard');

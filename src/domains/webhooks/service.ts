@@ -2,6 +2,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -29,11 +30,6 @@ const secretGen = customAlphabet(
   48,
 );
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
-
 /** Create an endpoint. The signing secret is returned so it can be configured. */
 export async function createEndpoint(
   rawInput: CreateEndpointInput,
@@ -55,7 +51,7 @@ export async function createEndpoint(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'webhook endpoint');
+  const row = expectRow(inserted[0], 'webhook endpoint');
 
   await recordAudit({
     action: 'integration.connected',

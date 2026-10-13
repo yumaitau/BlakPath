@@ -1,6 +1,7 @@
 import { desc, eq, isNull } from 'drizzle-orm';
 import { familyLinks } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -29,13 +30,6 @@ import { canDecide, canWithdraw, type FamilyLinkStatus } from './status';
  */
 
 export type FamilyLinkRow = typeof familyLinks.$inferSelect;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 /** Load a live family link within the active tenant scope. */
 async function loadLink(id: string): Promise<FamilyLinkRow | null> {
@@ -81,7 +75,7 @@ export async function requestFamilyLink(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'family link');
+  const row = expectRow(inserted[0], 'family link');
 
   await recordAudit({
     action: 'family_link.created',
@@ -126,7 +120,7 @@ async function decideLink(
     })
     .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
     .returning();
-  const row = must(updated[0], 'family link');
+  const row = expectRow(updated[0], 'family link');
 
   await recordAudit({
     action: next === 'approved' ? 'family_link.confirmed' : 'family_link.disputed',
@@ -177,7 +171,7 @@ export async function withdrawFamilyLink(linkId: string): Promise<FamilyLinkRow>
     .set({ status: 'withdrawn' })
     .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
     .returning();
-  const row = must(updated[0], 'family link');
+  const row = expectRow(updated[0], 'family link');
 
   await recordAudit({
     action: 'family_link.removed',

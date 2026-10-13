@@ -13,6 +13,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -88,12 +89,6 @@ export interface ApplicationParticipant {
 }
 
 /** Assert a row was returned from an insert/update `.returning()`. */
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 /** Build a human-friendly per-organisation reference from a fresh id. */
 function makeReference(id: string): string {
@@ -317,7 +312,7 @@ export async function createApplication(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'application');
+  const row = expectRow(inserted[0], 'application');
 
   await scope.db.insert(applicationStatusHistory).values(
     scope.insertValues({
@@ -366,7 +361,7 @@ export async function updateIntake(
     .set(patch)
     .where(scope.where(applications.organisationId, eq(applications.id, id)))
     .returning();
-  const row = must(updated[0], 'application');
+  const row = expectRow(updated[0], 'application');
 
   await recordAudit({
     action: 'application.updated',
@@ -430,7 +425,7 @@ export async function assignApplication(
         }),
       )
       .returning();
-    const assignment = must(insertedAssignment[0], 'assignment');
+    const assignment = expectRow(insertedAssignment[0], 'assignment');
 
     await tx
       .update(applications)
@@ -510,7 +505,7 @@ export async function transitionApplication(
 
     return updated;
   });
-  const row = must(updatedRows[0], 'application');
+  const row = expectRow(updatedRows[0], 'application');
 
   await recordAudit({
     action: TRANSITIONS[action].audit,
@@ -619,7 +614,7 @@ export async function addNote(
       }),
     )
     .returning();
-  const note = must(insertedNote[0], 'note');
+  const note = expectRow(insertedNote[0], 'note');
 
   await recordAudit({
     action: 'record.created',

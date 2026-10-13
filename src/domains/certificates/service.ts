@@ -11,6 +11,7 @@ import {
   organisationSettings,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
@@ -70,11 +71,6 @@ const codeGen = customAlphabet(
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
   32,
 );
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
 
 async function loadCertificate(id: string): Promise<CertificateRow | null> {
   const scope = currentScope();
@@ -137,7 +133,7 @@ export async function generateCertificate(
       ),
     )
     .limit(1);
-  const application = must(appRows[0], 'application');
+  const application = expectRow(appRows[0], 'application');
 
   const orgRows = await db
     .select({
@@ -147,7 +143,7 @@ export async function generateCertificate(
     .from(organisations)
     .where(eq(organisations.id, scope.organisationId))
     .limit(1);
-  const org = must(orgRows[0], 'organisation');
+  const org = expectRow(orgRows[0], 'organisation');
 
   // Optional brand colour for the certificate heading (organisation-authored).
   const settingsRows = await scope.db
@@ -196,7 +192,7 @@ export async function generateCertificate(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'certificate');
+  const row = expectRow(inserted[0], 'certificate');
 
   await recordAudit({
     action: 'certificate.generated',
@@ -298,7 +294,7 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
     })
     .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
     .returning();
-  const row = must(updated[0], 'certificate');
+  const row = expectRow(updated[0], 'certificate');
 
   await recordAudit({
     action: 'certificate.signed',
@@ -352,7 +348,7 @@ export async function revokeCertificate(
     })
     .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
     .returning();
-  const row = must(updated[0], 'certificate');
+  const row = expectRow(updated[0], 'certificate');
 
   await recordAudit({
     action: 'certificate.revoked',

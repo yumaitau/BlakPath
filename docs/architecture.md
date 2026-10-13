@@ -26,21 +26,21 @@ tenancy, authorisation and audit gates.
 
 ## Domains (modules)
 
-Phase 1 lands the platform spine. Later phases add case-management domains on top
-of the same tenancy/authorisation/audit foundation.
+Phase 1 landed the platform spine. Case-management domains sit on the same
+tenancy, authorisation and audit foundation.
 
-| Domain                | Responsibility                                                                                                       | Status      |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------- |
-| **Tenancy**           | Organisations, settings, domains, feature flags; the tenant boundary itself (`src/db/schema/tenancy.ts`)             | Phase 1     |
-| **Identity & Auth**   | Better Auth tables and flows: accounts, sessions, passkeys, TOTP (`src/db/schema/auth.ts`)                           | Phase 1     |
-| **Membership & RBAC** | Memberships, roles, permission catalogue, role grants, representative authorisations (`src/db/schema/membership.ts`) | Phase 1     |
-| **Audit & Integrity** | Append-only hash-chained audit trail, integrity checkpoints, break-glass requests (`src/db/schema/audit.ts`)         | Phase 1     |
-| **Applications**      | CoA application intake, status lifecycle, correspondence                                                             | Later phase |
-| **Evidence**          | Secure document upload, quarantine → scan → serve lifecycle (`docs/evidence-scanning-design.md`)                     | Phase 3     |
-| **Genealogy**         | Family/ancestry records supporting an application                                                                    | Later phase |
-| **Decisions**         | Human-recorded determinations and certificate issuance                                                               | Later phase |
-| **Consent**           | Consent ledger; ties representative access to recorded consent                                                       | Later phase |
-| **Notifications**     | Email and in-app messaging (via the worker)                                                                          | Later phase |
+| Domain                | Responsibility                                                                                                       | Status  |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------- | ------- |
+| **Tenancy**           | Organisations, settings, domains, feature flags; the tenant boundary itself (`src/db/schema/tenancy.ts`)             | Phase 1 |
+| **Identity & Auth**   | Better Auth tables and flows: accounts, sessions, passkeys, TOTP (`src/db/schema/auth.ts`)                           | Phase 1 |
+| **Membership & RBAC** | Memberships, roles, permission catalogue, role grants, representative authorisations (`src/db/schema/membership.ts`) | Phase 1 |
+| **Audit & Integrity** | Append-only hash-chained audit trail, integrity checkpoints, break-glass requests (`src/db/schema/audit.ts`)         | Phase 1 |
+| **Applications**      | CoA application intake, status lifecycle, correspondence (`src/domains/applications`)                                | Shipped |
+| **Evidence**          | Secure document upload, quarantine → scan → serve lifecycle (`docs/evidence-scanning-design.md`)                     | Shipped |
+| **Genealogy**         | Family-link records supporting an application (`src/domains/family-links`). Links are human-recorded, never inferred | Shipped |
+| **Decisions**         | Human-recorded determinations and certificate issuance (`src/domains/decisions`). The software never decides         | Shipped |
+| **Consent**           | Consent ledger; ties representative access to recorded consent (`src/domains/consent`)                               | Shipped |
+| **Notifications**     | Email and in-app messaging (via the worker) (`src/domains/notifications`)                                            | Shipped |
 
 Every future tenant-owned table uses the shared helpers (`organisationId()`,
 `primaryId()`, `timestamps`) and is reached through the tenant-scoped data access

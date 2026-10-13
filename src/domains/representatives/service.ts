@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { consentRecords, representativeAuthorisations } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
@@ -32,11 +33,6 @@ const requestSchema = z.object({
   consentRecordId: z.uuid(),
   expiresAt: z.coerce.date().optional(),
 });
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} from database.`);
-  return row;
-}
 
 async function liveConsent(
   scope: ReturnType<typeof currentScope>,
@@ -108,7 +104,7 @@ export async function requestRepresentativeAccess(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'representative authorisation');
+  const row = expectRow(inserted[0], 'representative authorisation');
   await recordAudit({
     action: 'representative.requested',
     resourceType: 'representative_authorisation',
@@ -160,7 +156,7 @@ export async function activateRepresentativeAccess(
       ),
     )
     .returning();
-  const row = must(updated[0], 'representative authorisation');
+  const row = expectRow(updated[0], 'representative authorisation');
   await recordAudit({
     action: 'representative.activated',
     resourceType: 'representative_authorisation',

@@ -1,6 +1,7 @@
 import { and, asc, eq, exists, isNull, or } from 'drizzle-orm';
 import { clients, groupMemberships, groups, teamMemberships, teams } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -38,11 +39,6 @@ export type ClientRow = typeof clients.$inferSelect;
 const TEAM_READ = ['team:manage', 'membership:manage'] as const;
 const CLIENT_READ = ['client:read-any', 'client:read-assigned'] as const;
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} from database.`);
-  return row;
-}
-
 export async function createTeam(raw: CreateTeamInput): Promise<TeamRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'team:create');
@@ -58,7 +54,7 @@ export async function createTeam(raw: CreateTeamInput): Promise<TeamRow> {
       }),
     )
     .returning();
-  const row = must(inserted[0], 'team');
+  const row = expectRow(inserted[0], 'team');
   await recordAudit({
     action: 'team.created',
     resourceType: 'team',
@@ -95,7 +91,7 @@ export async function addTeamMember(raw: AddTeamMemberInput) {
       }),
     )
     .returning();
-  const row = must(inserted[0], 'team membership');
+  const row = expectRow(inserted[0], 'team membership');
   await recordAudit({
     action: 'team.member_added',
     resourceType: 'team',
@@ -121,7 +117,7 @@ export async function createGroup(raw: CreateGroupInput): Promise<GroupRow> {
       }),
     )
     .returning();
-  const row = must(inserted[0], 'group');
+  const row = expectRow(inserted[0], 'group');
   await recordAudit({
     action: 'group.created',
     resourceType: 'group',
@@ -152,7 +148,7 @@ export async function addGroupMember(raw: AddGroupMemberInput) {
     .insert(groupMemberships)
     .values(scope.insertValues({ groupId: input.groupId, userId: input.userId }))
     .returning();
-  const row = must(inserted[0], 'group membership');
+  const row = expectRow(inserted[0], 'group membership');
   await recordAudit({
     action: 'group.member_added',
     resourceType: 'group',
@@ -180,7 +176,7 @@ export async function createClient(raw: CreateClientInput): Promise<ClientRow> {
       }),
     )
     .returning();
-  const row = must(inserted[0], 'client');
+  const row = expectRow(inserted[0], 'client');
   await recordAudit({
     action: 'client.created',
     resourceType: 'client',

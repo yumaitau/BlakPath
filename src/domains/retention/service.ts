@@ -1,6 +1,7 @@
 import { desc, eq, isNull } from 'drizzle-orm';
 import { legalHolds, retentionPolicies } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -24,11 +25,6 @@ import {
 export type RetentionPolicyRow = typeof retentionPolicies.$inferSelect;
 export type LegalHoldRow = typeof legalHolds.$inferSelect;
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
-
 export async function createPolicy(
   rawInput: CreatePolicyInput,
 ): Promise<RetentionPolicyRow> {
@@ -48,7 +44,7 @@ export async function createPolicy(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'retention policy');
+  const row = expectRow(inserted[0], 'retention policy');
 
   await recordAudit({
     action: 'retention.policy_applied',
@@ -107,7 +103,7 @@ export async function placeHold(rawInput: PlaceHoldInput): Promise<LegalHoldRow>
       }),
     )
     .returning();
-  const row = must(inserted[0], 'legal hold');
+  const row = expectRow(inserted[0], 'legal hold');
 
   await recordAudit({
     action: 'retention.hold_placed',
@@ -137,7 +133,7 @@ export async function releaseHold(id: string): Promise<LegalHoldRow> {
       ),
     )
     .returning();
-  const row = must(updated[0], 'legal hold');
+  const row = expectRow(updated[0], 'legal hold');
 
   await recordAudit({
     action: 'retention.hold_released',

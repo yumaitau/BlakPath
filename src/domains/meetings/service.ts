@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import { conflictDeclarations, meetingAgendaItems, meetings } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -42,13 +43,6 @@ const MEETING_READ = [
   'meeting:agenda-manage',
 ] as const;
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
-
 async function loadMeeting(id: string): Promise<MeetingRow | null> {
   const scope = currentScope();
   const rows = await scope.db
@@ -86,7 +80,7 @@ export async function createMeeting(rawInput: CreateMeetingInput): Promise<Meeti
       }),
     )
     .returning();
-  const row = must(inserted[0], 'meeting');
+  const row = expectRow(inserted[0], 'meeting');
 
   await recordAudit({
     action: 'meeting.created',
@@ -113,7 +107,7 @@ export async function cancelMeeting(meetingId: string): Promise<MeetingRow> {
     .set({ status: 'cancelled' })
     .where(scope.where(meetings.organisationId, eq(meetings.id, meetingId)))
     .returning();
-  const row = must(updated[0], 'meeting');
+  const row = expectRow(updated[0], 'meeting');
 
   await recordAudit({
     action: 'meeting.cancelled',
@@ -162,7 +156,7 @@ export async function addAgendaItem(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'agenda item');
+  const row = expectRow(inserted[0], 'agenda item');
 
   await recordAudit({
     action: 'meeting.agenda_changed',
@@ -264,7 +258,7 @@ export async function declareConflict(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'conflict declaration');
+  const row = expectRow(inserted[0], 'conflict declaration');
 
   await recordAudit({
     action: 'conflict.declared',
@@ -293,7 +287,7 @@ export async function clearConflict(conflictId: string): Promise<ConflictRow> {
       ),
     )
     .returning();
-  const row = must(updated[0], 'conflict declaration');
+  const row = expectRow(updated[0], 'conflict declaration');
 
   await recordAudit({
     action: 'conflict.cleared',
@@ -363,7 +357,7 @@ export async function importMeetingsFromIcs(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'meeting');
+    const row = expectRow(inserted[0], 'meeting');
     created += 1;
     await recordAudit({
       action: 'meeting.created',

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
+import { watchForPageErrors } from './helpers/page-errors';
 
 /**
  * Full Confirmation of Aboriginality lifecycle through to a KMS-sealed
@@ -11,8 +12,7 @@ import { signInAndSelectOrganisation } from './helpers/auth';
  */
 test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => {
   test.setTimeout(120_000);
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
+  const pageErrors = watchForPageErrors(page);
   await signInAndSelectOrganisation(page);
   const api = page.request;
   const stamp = Date.now();

@@ -53,6 +53,7 @@ export function OrganisationPicker({
       // Cross the tenant-selection boundary with a full navigation. This avoids
       // racing a client-side push against a refresh of the picker route and
       // guarantees every server component reads the updated session row.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load so every Server Component reads the updated session row
       window.location.assign('/dashboard');
     } catch {
       setError('We could not switch to that organisation. Please try again.');

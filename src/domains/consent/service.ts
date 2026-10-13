@@ -2,6 +2,7 @@ import { asc, eq, gt, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { consentRecords } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
@@ -32,11 +33,6 @@ const recordSchema = z.object({
   notes: z.string().trim().max(2000).optional(),
 });
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} from database.`);
-  return row;
-}
-
 export async function recordConsent(
   raw: z.input<typeof recordSchema>,
 ): Promise<ConsentRow> {
@@ -57,7 +53,7 @@ export async function recordConsent(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'consent record');
+  const row = expectRow(inserted[0], 'consent record');
   await recordAudit({
     action: 'consent.recorded',
     resourceType: 'consent',

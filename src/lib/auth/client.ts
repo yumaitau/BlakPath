@@ -26,6 +26,7 @@ export const authClient = createAuthClient({
     twoFactorClient({
       onTwoFactorRedirect() {
         if (typeof window !== 'undefined') {
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Better Auth callback has no router; full load carries the partial session
           window.location.href = '/sign-in/two-factor';
         }
       },

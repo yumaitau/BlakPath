@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { conflictDeclarations, decisions, decisionVotes } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication, transitionApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -40,13 +41,6 @@ import {
 
 export type DecisionRow = typeof decisions.$inferSelect;
 export type DecisionVoteRow = typeof decisionVotes.$inferSelect;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 async function loadDecision(id: string): Promise<DecisionRow | null> {
   const scope = currentScope();
@@ -105,7 +99,7 @@ export async function proposeDecision(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'decision');
+  const row = expectRow(inserted[0], 'decision');
 
   await recordAudit({
     action: 'decision.proposed',
@@ -158,7 +152,7 @@ export async function castVote(
       .set({ choice: input.choice, note: input.note ?? null })
       .where(scope.where(decisionVotes.organisationId, eq(decisionVotes.id, existing.id)))
       .returning();
-    const row = must(updated[0], 'vote');
+    const row = expectRow(updated[0], 'vote');
     await recordAudit({
       action: 'vote.changed',
       resourceType: 'vote',
@@ -179,7 +173,7 @@ export async function castVote(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'vote');
+  const row = expectRow(inserted[0], 'vote');
   await recordAudit({
     action: 'vote.cast',
     resourceType: 'vote',
@@ -249,7 +243,7 @@ export async function finaliseDecision(
     })
     .where(scope.where(decisions.organisationId, eq(decisions.id, decisionId)))
     .returning();
-  const row = must(updated[0], 'decision');
+  const row = expectRow(updated[0], 'decision');
 
   // Drive the application's own workflow. This re-checks decision:finalise and
   // that the application is in the committee stage (throws otherwise).

@@ -2,6 +2,7 @@ import { desc, eq, isNull } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
 import { apiKeys } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -26,11 +27,6 @@ const secretGen = customAlphabet(
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
   40,
 );
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
 
 /** Create a key. Returns the RAW secret once; only the hash is persisted. */
 export async function createApiKey(
@@ -69,7 +65,7 @@ export async function createApiKey(
       }),
     )
     .returning();
-  const apiKey = must(inserted[0], 'api key');
+  const apiKey = expectRow(inserted[0], 'api key');
 
   await recordAudit({
     action: 'api_key.created',
@@ -134,7 +130,7 @@ export async function revokeApiKey(id: string): Promise<ApiKeyRow> {
       scope.where(apiKeys.organisationId, eq(apiKeys.id, id), isNull(apiKeys.revokedAt)),
     )
     .returning();
-  const row = must(updated[0], 'api key');
+  const row = expectRow(updated[0], 'api key');
 
   await recordAudit({
     action: 'api_key.revoked',

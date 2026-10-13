@@ -2,6 +2,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { breakGlassRequests } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -54,11 +55,6 @@ export class BreakGlassError extends Error {
   }
 }
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
-
 /* --------------------------------------------------------------------------
  * Platform-operator side (cross-tenant; route proves operator + step-up)
  * ------------------------------------------------------------------------ */
@@ -84,7 +80,7 @@ export async function requestBreakGlass(params: {
       expiresAt,
     })
     .returning();
-  const row = must(inserted[0], 'break-glass request');
+  const row = expectRow(inserted[0], 'break-glass request');
 
   await recordAudit({
     action: 'break_glass.requested',
@@ -127,7 +123,7 @@ export async function activateBreakGlass(params: {
     .set({ status: 'active', activatedAt: now, tenantNotifiedAt: now })
     .where(eq(breakGlassRequests.id, params.requestId))
     .returning();
-  const row = must(updated[0], 'break-glass request');
+  const row = expectRow(updated[0], 'break-glass request');
 
   for (const action of [
     'break_glass.activated',
@@ -185,7 +181,7 @@ export async function approveBreakGlass(requestId: string): Promise<BreakGlassRo
       ),
     )
     .returning();
-  const row = must(updated[0], 'break-glass request');
+  const row = expectRow(updated[0], 'break-glass request');
 
   await recordAudit({
     action: 'break_glass.approved',
@@ -221,7 +217,7 @@ export async function denyBreakGlass(
       ),
     )
     .returning();
-  const row = must(updated[0], 'break-glass request');
+  const row = expectRow(updated[0], 'break-glass request');
 
   await recordAudit({
     action: 'break_glass.denied',
@@ -254,7 +250,7 @@ export async function revokeBreakGlass(requestId: string): Promise<BreakGlassRow
       ),
     )
     .returning();
-  const row = must(updated[0], 'break-glass request');
+  const row = expectRow(updated[0], 'break-glass request');
 
   await recordAudit({
     action: 'break_glass.revoked',
