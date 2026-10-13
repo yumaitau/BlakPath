@@ -6,6 +6,7 @@ import { db, sqlClient } from '@/db/client';
 import { env } from '@/lib/env';
 import {
   accounts,
+  certificateTemplates,
   memberships,
   membershipRoles,
   organisations,
@@ -14,6 +15,10 @@ import {
   roles,
   users,
 } from '@/db/schema';
+import {
+  DEFAULT_CERTIFICATE_WORDING,
+  templateContentHash,
+} from '@/domains/certificates/template';
 import { PERMISSION_SEED } from '@/lib/permissions/catalog';
 import { SYSTEM_ROLES, SYSTEM_ROLE_SEED } from '@/lib/permissions/roles';
 
@@ -195,6 +200,36 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
           target: [membershipRoles.membershipId, membershipRoles.roleId],
         });
     }
+  }
+
+  await db
+    .update(organisations)
+    .set({ abn: '51824753556' })
+    .where(and(eq(organisations.id, organisationId), isNull(organisations.abn)));
+
+  const [existingTemplate] = await db
+    .select({ id: certificateTemplates.id })
+    .from(certificateTemplates)
+    .where(eq(certificateTemplates.organisationId, organisationId))
+    .limit(1);
+  if (!existingTemplate) {
+    const signatoryName = 'Dev Admin';
+    const signatoryRole = 'Development signatory';
+    await db.insert(certificateTemplates).values({
+      id: uuidv7(),
+      organisationId,
+      templateVersion: 1,
+      wording: DEFAULT_CERTIFICATE_WORDING,
+      signatoryName,
+      signatoryRole,
+      contentHash: templateContentHash({
+        wording: DEFAULT_CERTIFICATE_WORDING,
+        signatoryName,
+        signatoryRole,
+        logoSha256: null,
+      }),
+      createdByUserId: userId,
+    });
   }
 
   console.info('[seed] developer bootstrap ensured:');

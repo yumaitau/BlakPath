@@ -202,6 +202,7 @@ export type AuditAction =
   | 'certificate.downloaded'
   | 'certificate.reissued'
   | 'certificate.revoked'
+  | 'certificate.template_published'
   // Data export.
   | 'export.requested'
   | 'export.generated'
@@ -288,6 +289,7 @@ export type ResourceType =
   | 'vote'
   | 'decision'
   | 'certificate'
+  | 'certificate_template'
   | 'export'
   | 'import'
   | 'retention_policy'

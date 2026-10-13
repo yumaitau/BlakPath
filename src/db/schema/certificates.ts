@@ -1,5 +1,13 @@
-import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import {
+  type AnyPgColumn,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -23,9 +31,59 @@ import { decisions } from './decisions';
  * metadata, the content hash and the public verification code. Tenant-owned and
  * org-leading indexed.
  *
+ * Organisation-authored layout (wording, logo, signatory) lives in immutable
+ * `certificate_templates` versions. A re-issue revokes the previous certificate
+ * and records the link both ways (`supersedes` / `superseded_by`). Public
+ * verification calls that state "superseded" and still returns no applicant
+ * detail.
+ *
  * PRODUCT INVARIANT: the certificate attests a decision authorised humans made
  * and recorded. Nothing here computes, scores or determines Aboriginality.
  */
+
+/**
+ * One published certificate layout for an organisation.
+ *
+ * Rows are immutable. A change inserts the next `template_version`; it never
+ * updates wording in place. Certificates store the version id they were
+ * rendered from, so later publishes do not rewrite issued PDFs.
+ */
+export const certificateTemplates = pgTable(
+  'certificate_templates',
+  {
+    id: primaryId(),
+    organisationId: organisationIdCol().references(() => organisations.id, {
+      onDelete: 'cascade',
+    }),
+    /** Monotonic per organisation. Version 1 is the first publish. */
+    templateVersion: integer('template_version').notNull(),
+    /** Organisation-authored body text printed on the certificate. */
+    wording: text('wording').notNull(),
+    /** Name printed as the organisation's signatory. Authored, not inferred. */
+    signatoryName: text('signatory_name').notNull(),
+    /** Role printed under the signatory name. */
+    signatoryRole: text('signatory_role').notNull(),
+    /** Evidence-bucket key of the optional logo. Shared across versions that reuse it. */
+    logoObjectKey: text('logo_object_key'),
+    /** `image/png` or `image/jpeg` when a logo is set. */
+    logoContentType: text('logo_content_type'),
+    /** SHA-256 of the logo bytes, so an unchanged logo keeps the same content hash. */
+    logoSha256: text('logo_sha256'),
+    /** SHA-256 of the canonical wording, signatory and logo hash. */
+    contentHash: text('content_hash').notNull(),
+    createdByUserId: refId('created_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('certificate_templates_org_version_unique').on(
+      table.organisationId,
+      table.templateVersion,
+    ),
+  ],
+);
+
 export const certificates = pgTable(
   'certificates',
   {
@@ -40,6 +98,25 @@ export const certificates = pgTable(
     decisionId: refId('decision_id')
       .notNull()
       .references(() => decisions.id, { onDelete: 'cascade' }),
+    /** Template version rendered into this PDF. Null on rows from before templates. */
+    templateId: refId('template_id').references(() => certificateTemplates.id, {
+      onDelete: 'restrict',
+    }),
+    /**
+     * The earlier certificate this one replaces. Set on the new draft at re-issue.
+     */
+    supersedesCertificateId: refId('supersedes_certificate_id').references(
+      (): AnyPgColumn => certificates.id,
+      { onDelete: 'set null' },
+    ),
+    /**
+     * The later certificate that replaced this one. Set when this row is revoked
+     * by re-issue. Public verify shows "superseded" only when this is present.
+     */
+    supersededByCertificateId: refId('superseded_by_certificate_id').references(
+      (): AnyPgColumn => certificates.id,
+      { onDelete: 'set null' },
+    ),
     /** Human-friendly per-organisation certificate reference (e.g. "CERT-2026-000123"). */
     reference: text('reference').notNull(),
     status: certificateStatus('status').notNull().default('draft'),
@@ -78,12 +155,30 @@ export const certificates = pgTable(
       table.reference,
     ),
     uniqueIndex('certificates_verification_code_unique').on(table.verificationCode),
+    uniqueIndex('certificates_one_live_per_decision')
+      .on(table.organisationId, table.decisionId)
+      .where(sql`${table.deletedAt} IS NULL AND ${table.status} IN ('draft', 'signed')`),
     index('certificates_org_status_idx').on(table.organisationId, table.status),
     index('certificates_org_application_idx').on(
       table.organisationId,
       table.applicationId,
     ),
   ],
+);
+
+export const certificateTemplatesRelations = relations(
+  certificateTemplates,
+  ({ one, many }) => ({
+    organisation: one(organisations, {
+      fields: [certificateTemplates.organisationId],
+      references: [organisations.id],
+    }),
+    createdBy: one(users, {
+      fields: [certificateTemplates.createdByUserId],
+      references: [users.id],
+    }),
+    certificates: many(certificates),
+  }),
 );
 
 export const certificatesRelations = relations(certificates, ({ one }) => ({
@@ -98,6 +193,10 @@ export const certificatesRelations = relations(certificates, ({ one }) => ({
   decision: one(decisions, {
     fields: [certificates.decisionId],
     references: [decisions.id],
+  }),
+  template: one(certificateTemplates, {
+    fields: [certificates.templateId],
+    references: [certificateTemplates.id],
   }),
   signedBy: one(users, {
     fields: [certificates.signedByUserId],

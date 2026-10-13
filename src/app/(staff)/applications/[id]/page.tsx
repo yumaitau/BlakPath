@@ -166,6 +166,11 @@ export default async function ApplicationDetailPage({
           status: certificate.status,
           decisionId: certificate.decisionId,
           revokedReason: certificate.revokedReason,
+          supersededByReference: certificate.supersededByCertificateId
+            ? (certificates.find(
+                (other) => other.id === certificate.supersededByCertificateId,
+              )?.reference ?? null)
+            : null,
         })),
       };
     });

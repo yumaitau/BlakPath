@@ -1,7 +1,11 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
-import { generateCertificate, listCertificates } from '@/domains/certificates';
+import {
+  CertificateTemplateRequiredError,
+  generateCertificate,
+  listCertificates,
+} from '@/domains/certificates';
 
 /**
  * Certificates collection.
@@ -30,6 +34,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
     return NextResponse.json({ id: certificate.id, reference: certificate.reference });
   } catch (error) {
+    if (error instanceof CertificateTemplateRequiredError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     return toErrorResponse(error);
   }
 }
