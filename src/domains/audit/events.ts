@@ -94,6 +94,10 @@ export type AuditAction =
   // API keys (public REST API credentials).
   | 'api_key.created'
   | 'api_key.revoked'
+  // SCIM directory credentials (per organisation).
+  | 'scim.credential_created'
+  | 'scim.credential_rotated'
+  | 'scim.credential_revoked'
   // Custom forms & tokenised responses.
   | 'form.created'
   | 'form.updated'
@@ -270,6 +274,7 @@ export type ResourceType =
   | 'assignment'
   | 'task'
   | 'api_key'
+  | 'scim_credential'
   | 'form'
   | 'form_invitation'
   | 'form_response'

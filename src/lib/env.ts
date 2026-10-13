@@ -73,8 +73,6 @@ const serverSchema = z
     // Shared secret gating the SES SNS event webhook (bounce/complaint).
     // Unset locally; required in production where SES events are wired.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),
-    // Bearer credential for SCIM directory provisioning. Unset = SCIM off.
-    SCIM_BEARER_TOKEN: z.string().min(32).optional(),
     // One-time live-bootstrap token. Unset = bootstrap route disabled.
     PILOT_BOOTSTRAP_TOKEN: z.string().min(32).optional(),
     // CoA cryptographic signing. Production uses a KMS asymmetric key

@@ -20,7 +20,11 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
   `tests/e2e/team-isolation.spec.ts` against staging.
 - Optional SSO: register provider (`src/lib/auth/sso-provider.ts`), add
   binding `POST /api/sso/providers`, verify domain in `organisation_domains`,
-  then enable. SCIM maps onto membership status transitions.
+  then enable. SCIM, if used, needs a per-organisation credential from
+  `POST /api/scim/credentials` (hashed at rest, rotatable, revocable). The IdP
+  calls `/api/scim/v2/{orgId}/Users` with that credential. Group display names
+  must match role slugs. `organisation-admin` stays unavailable unless the
+  credential is created with `allowOrganisationAdmin: true`.
 
 ## 3. Go live
 
