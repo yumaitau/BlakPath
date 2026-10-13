@@ -1,30 +1,15 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { toErrorResponse } from '@/lib/http/tenant-route';
-import { AuthorizationError } from '@/lib/permissions/errors';
 import { provisionScimUser, setScimUserActive, verifyScimBearer } from '@/domains/scim';
-
-function scimError(error: unknown): Response {
-  if (error instanceof AuthorizationError) {
-    return NextResponse.json(
-      {
-        schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
-        status: '403',
-        detail: 'Forbidden',
-      },
-      { status: 403 },
-    );
-  }
-  return toErrorResponse(error);
-}
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
 
 /** POST /api/scim/v2/[orgId]/Users — provision user + membership. */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ orgId: string }> },
-): Promise<Response> {
-  try {
+export const POST = tenantHandler(
+  async function POST(
+    request: NextRequest,
+    { params }: { params: Promise<{ orgId: string }> },
+  ): Promise<Response> {
     verifyScimBearer(request);
     const { orgId } = await params;
     const result = await provisionScimUser(orgId, await request.json());
@@ -37,10 +22,9 @@ export async function POST(
       },
       { status: 201 },
     );
-  } catch (error) {
-    return scimError(error);
-  }
-}
+  },
+  { presentation: 'scim' },
+);
 
 const patchSchema = z.object({
   Operations: z
@@ -60,11 +44,11 @@ const patchSchema = z.object({
  * PATCH — set active flag (userName in body, or replace op on active).
  * DELETE with ?userName= — suspend membership (history preserved, never erased).
  */
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: Promise<{ orgId: string }> },
-): Promise<Response> {
-  try {
+export const PATCH = tenantHandler(
+  async function PATCH(
+    request: NextRequest,
+    { params }: { params: Promise<{ orgId: string }> },
+  ): Promise<Response> {
     verifyScimBearer(request);
     const { orgId } = await params;
     const body = patchSchema.parse(await request.json());
@@ -76,28 +60,25 @@ export async function PATCH(
         ? (op.value as Record<string, unknown>).active
         : undefined);
     if (!userName || typeof active !== 'boolean') {
-      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+      throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Invalid request');
     }
     await setScimUserActive(orgId, userName, active);
     return NextResponse.json({ userName, active });
-  } catch (error) {
-    return scimError(error);
-  }
-}
+  },
+  { presentation: 'scim' },
+);
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ orgId: string }> },
-): Promise<Response> {
-  try {
+export const DELETE = tenantHandler(
+  async function DELETE(
+    request: NextRequest,
+    { params }: { params: Promise<{ orgId: string }> },
+  ): Promise<Response> {
     verifyScimBearer(request);
     const { orgId } = await params;
     const userName = new URL(request.url).searchParams.get('userName');
-    if (!userName)
-      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    if (!userName) throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Invalid request');
     await setScimUserActive(orgId, userName, false);
     return new NextResponse(null, { status: 204 });
-  } catch (error) {
-    return scimError(error);
-  }
-}
+  },
+  { presentation: 'scim' },
+);

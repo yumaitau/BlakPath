@@ -1,6 +1,5 @@
-import { NextResponse } from 'next/server';
 import { runWithTenantContext, type TenantContext } from '@/lib/tenancy/context';
-import { AuthorizationError } from '@/lib/permissions/errors';
+import { currentRequestIds } from '@/lib/observability/correlation';
 import { ApiKeyError, parseBearer, resolveApiKeyContext } from '@/domains/api-keys';
 
 /**
@@ -18,23 +17,13 @@ export async function withApiKey<T>(
   const raw = parseBearer(request.headers.get('authorization'));
   if (!raw) throw new ApiKeyError();
 
+  const bound = currentRequestIds();
   const ctx = await resolveApiKeyContext(raw, {
-    correlationId: globalThis.crypto.randomUUID(),
-    requestId: globalThis.crypto.randomUUID(),
+    correlationId: bound?.correlationId ?? globalThis.crypto.randomUUID(),
+    requestId: bound?.requestId ?? globalThis.crypto.randomUUID(),
     ipAddress: request.headers.get('x-forwarded-for') ?? undefined,
     userAgent: request.headers.get('user-agent') ?? undefined,
   });
 
   return runWithTenantContext(ctx, () => fn(ctx));
-}
-
-/** Map an error thrown in an API route to a non-leaking JSON response. */
-export function apiErrorResponse(error: unknown): NextResponse {
-  if (error instanceof ApiKeyError) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (error instanceof AuthorizationError) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  return NextResponse.json({ error: 'Internal error' }, { status: 500 });
 }

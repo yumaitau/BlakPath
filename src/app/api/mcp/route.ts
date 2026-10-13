@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
-import { apiErrorResponse, withApiKey } from '@/lib/http/api-route';
+import { withApiKey } from '@/lib/http/api-route';
 import {
   handleMcpMessage,
   type JsonRpcRequest,
   type JsonRpcResponse,
 } from '@/domains/mcp';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * POST /api/mcp — Model Context Protocol endpoint (JSON-RPC 2.0 over HTTP).
@@ -16,30 +17,28 @@ import {
  */
 export const dynamic = 'force-dynamic';
 
-export async function POST(request: Request): Promise<Response> {
-  try {
-    const body = (await request.json().catch(() => undefined)) as
-      | JsonRpcRequest
-      | undefined;
+export const POST = tenantHandler(async function POST(
+  request: Request,
+): Promise<Response> {
+  const body = (await request.json().catch(() => undefined)) as
+    | JsonRpcRequest
+    | undefined;
 
-    const response = await withApiKey(
-      request,
-      async (): Promise<JsonRpcResponse | null> => {
-        if (!body || typeof body.method !== 'string') {
-          return {
-            jsonrpc: '2.0',
-            id: null,
-            error: { code: -32700, message: 'Parse error' },
-          };
-        }
-        return handleMcpMessage(body);
-      },
-    );
+  const response = await withApiKey(
+    request,
+    async (): Promise<JsonRpcResponse | null> => {
+      if (!body || typeof body.method !== 'string') {
+        return {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32700, message: 'Parse error' },
+        };
+      }
+      return handleMcpMessage(body);
+    },
+  );
 
-    // A notification (no id) yields no response body.
-    if (response === null) return new Response(null, { status: 202 });
-    return NextResponse.json(response);
-  } catch (error) {
-    return apiErrorResponse(error);
-  }
-}
+  // A notification (no id) yields no response body.
+  if (response === null) return new Response(null, { status: 202 });
+  return NextResponse.json(response);
+});

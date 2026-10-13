@@ -1,7 +1,8 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-import { FormTokenError, submitPublicResponse } from '@/domains/forms';
+import { submitPublicResponse } from '@/domains/forms';
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -21,38 +22,26 @@ import { isAuthorizationError } from '@/lib/permissions/errors';
 // Token-specific and side-effecting; never cached.
 export const dynamic = 'force-dynamic';
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await params;
-
-  let answers: unknown;
-  try {
-    const body = (await request.json()) as { answers?: unknown };
-    answers = body.answers;
-  } catch {
-    // Malformed JSON is treated as invalid answers rather than a server fault.
-    return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
-  }
 
   // First value of x-forwarded-for is the originating client (best-effort only).
   const forwardedFor = request.headers.get('x-forwarded-for');
   const ipAddress = forwardedFor?.split(',')[0]?.trim() || undefined;
 
   try {
-    await submitPublicResponse(token, answers, ipAddress);
+    const body = (await request.json()) as { answers?: unknown };
+    await submitPublicResponse(token, body.answers, ipAddress);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    if (error instanceof FormTokenError) {
-      return NextResponse.json(
-        { error: 'This form link is invalid or has expired.' },
-        { status: 404 },
-      );
+    // Malformed JSON and answer-policy failures share one message so the
+    // response does not reveal whether the token was usable.
+    if (error instanceof SyntaxError || isAuthorizationError(error)) {
+      throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Some answers are invalid.');
     }
-    if (isAuthorizationError(error)) {
-      return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
-    }
-    return NextResponse.json({ error: 'Something went wrong.' }, { status: 500 });
+    throw error;
   }
-}
+});

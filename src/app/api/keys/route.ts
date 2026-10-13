@@ -1,36 +1,31 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import { createApiKey, listApiKeys } from '@/domains/api-keys';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * API-key management (staff, session-authenticated).
  * - GET  — list the tenant's keys (never the secret).
  * - POST — create a key; the raw secret is returned ONCE.
  */
-export async function GET(): Promise<Response> {
-  try {
-    const items = await withRequestTenant(() => listApiKeys());
-    return NextResponse.json({ items });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const GET = tenantHandler(async function GET(): Promise<Response> {
+  const items = await withRequestTenant(() => listApiKeys());
+  return NextResponse.json({ items });
+});
 
-export async function POST(request: NextRequest): Promise<Response> {
-  try {
-    const body: unknown = await request.json();
-    const result = await withRequestTenant(() =>
-      createApiKey(body as { name: string; scopes: string[]; expiresInDays?: number }),
-    );
-    // The raw key is shown exactly once — the caller must store it now.
-    return NextResponse.json({
-      id: result.apiKey.id,
-      name: result.apiKey.name,
-      prefix: result.apiKey.prefix,
-      key: result.key,
-    });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
+  const body: unknown = await request.json();
+  const result = await withRequestTenant(() =>
+    createApiKey(body as { name: string; scopes: string[]; expiresInDays?: number }),
+  );
+  // The raw key is shown exactly once — the caller must store it now.
+  return NextResponse.json({
+    id: result.apiKey.id,
+    name: result.apiKey.name,
+    prefix: result.apiKey.prefix,
+    key: result.key,
+  });
+});

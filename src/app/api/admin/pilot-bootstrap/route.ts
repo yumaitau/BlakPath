@@ -15,6 +15,7 @@ import {
 } from '@/db/schema';
 import { env } from '@/lib/env';
 import { recordAudit } from '@/domains/audit/service';
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
 
 /**
  * POST /api/admin/pilot-bootstrap — one-time live-verification bootstrap.
@@ -42,21 +43,18 @@ const PILOT_ROLES = [
   'records-officer',
 ] as const;
 
-export async function POST(request: NextRequest): Promise<Response> {
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
   const expected = env.PILOT_BOOTSTRAP_TOKEN;
-  if (!expected) return NextResponse.json({ error: 'Not configured' }, { status: 503 });
-  let body: { token?: string };
-  try {
-    body = (await request.json()) as { token?: string };
-  } catch {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
+  if (!expected) throw new ClientSafeError(503, 'NOT_CONFIGURED', 'Not configured');
+  const body = (await request.json()) as { token?: string };
   const provided = createHash('sha256')
     .update(body.token ?? '')
     .digest();
   const wanted = createHash('sha256').update(expected).digest();
   if (provided.length !== wanted.length || !timingSafeEqual(provided, wanted)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    throw new ClientSafeError(403, 'FORBIDDEN', 'Forbidden');
   }
 
   const existingOrgs = await db
@@ -64,7 +62,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     .from(organisations)
     .limit(1);
   if (existingOrgs.length > 0) {
-    return NextResponse.json({ error: 'Already bootstrapped' }, { status: 409 });
+    throw new ClientSafeError(409, 'CONFLICT', 'Already bootstrapped');
   }
 
   const email = 'pilot-admin@blakpath.yumait.au';
@@ -139,4 +137,4 @@ export async function POST(request: NextRequest): Promise<Response> {
   });
 
   return NextResponse.json({ email, password, organisationId }, { status: 201 });
-}
+});

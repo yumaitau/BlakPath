@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { readinessReport } from '@/lib/health/checks';
 import { env } from '@/lib/env';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * Aggregate health endpoint.
@@ -13,7 +14,7 @@ import { env } from '@/lib/env';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+export const GET = tenantHandler(async function GET(): Promise<NextResponse> {
   const report = await readinessReport();
   const healthy = report.ready;
 
@@ -30,4 +31,4 @@ export async function GET(): Promise<NextResponse> {
       headers: { 'Cache-Control': 'no-store' },
     },
   );
-}
+});

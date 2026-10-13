@@ -1,7 +1,8 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { toErrorResponse } from '@/lib/http/tenant-route';
+
 import { createInvitedAccount } from '@/domains/memberships';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * POST /api/membership-invitations/create-account — invite-bound signup.
@@ -12,16 +13,14 @@ import { createInvitedAccount } from '@/domains/memberships';
  * by the shared auth rules; failures stay generic to avoid enumerating
  * invitations.
  */
-export async function POST(request: NextRequest): Promise<Response> {
-  try {
-    const body = (await request.json()) as {
-      token: string;
-      name: string;
-      password: string;
-    };
-    const result = await createInvitedAccount(body);
-    return NextResponse.json(result, { status: 201 });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
+  const body = (await request.json()) as {
+    token: string;
+    name: string;
+    password: string;
+  };
+  const result = await createInvitedAccount(body);
+  return NextResponse.json(result, { status: 201 });
+});

@@ -2,8 +2,10 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { env } from '@/lib/env';
+import { currentRequestIds } from '@/lib/observability/correlation';
 import { logger } from '@/lib/observability/logger';
 import { recordSuppression } from '@/domains/email';
+import { ClientSafeError, sanitiseError, tenantHandler } from '@/lib/http/error-response';
 
 /**
  * POST /api/email/events — SES bounce/complaint events via SNS.
@@ -45,26 +47,21 @@ function snsHostOk(url: string): boolean {
   }
 }
 
-export async function POST(request: NextRequest): Promise<Response> {
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
   const secret = env.EMAIL_WEBHOOK_SECRET;
-  if (!secret) return NextResponse.json({ error: 'Not configured' }, { status: 503 });
+  if (!secret) throw new ClientSafeError(503, 'NOT_CONFIGURED', 'Not configured');
   const url = new URL(request.url);
   const provided =
     url.searchParams.get('secret') ?? request.headers.get('x-email-webhook-secret');
-  if (provided !== secret) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  if (provided !== secret) throw new ClientSafeError(403, 'FORBIDDEN', 'Forbidden');
 
-  let envelope: z.infer<typeof snsEnvelope>;
-  try {
-    envelope = snsEnvelope.parse(await request.json());
-  } catch {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
+  const envelope = snsEnvelope.parse(await request.json());
 
   if (envelope.Type === 'SubscriptionConfirmation' && envelope.SubscribeURL) {
     if (!snsHostOk(envelope.SubscribeURL)) {
-      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+      throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Invalid request');
     }
     await fetch(envelope.SubscribeURL, { method: 'GET' });
     logger.info({ topic: envelope.TopicArn }, 'email events subscription confirmed');
@@ -75,12 +72,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ received: true });
   }
 
-  let message: z.infer<typeof sesMessage>;
-  try {
-    message = sesMessage.parse(JSON.parse(envelope.Message));
-  } catch {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
+  const message = sesMessage.parse(JSON.parse(envelope.Message));
 
   const targets: { address: string; kind: 'bounce' | 'complaint' }[] = [];
   if (message.notificationType === 'Bounce') {
@@ -103,9 +95,12 @@ export async function POST(request: NextRequest): Promise<Response> {
         ...(message.mail?.messageId ? { sourceMessageId: message.mail.messageId } : {}),
       });
     } catch (error) {
-      logger.error({ err: error }, 'failed to record email suppression');
+      logger.error(
+        { err: sanitiseError(error), requestId: currentRequestIds()?.requestId },
+        'failed to record email suppression',
+      );
     }
   }
   logger.info({ count: targets.length }, 'email suppressions recorded');
   return NextResponse.json({ suppressed: targets.length });
-}
+});
