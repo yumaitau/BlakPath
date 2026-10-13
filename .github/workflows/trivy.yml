@@ -46,3 +46,60 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy
+
+  # Blocking scan of the pinned Node/OS layers (before Corepack/pnpm). The
+  # upstream tags still bundle a vulnerable npm tree; these targets remove it
+  # and upgrade the OS. Alpine production images must be free of HIGH/CRITICAL.
+  # Debian slim still has unfixed distro findings with no package to upgrade to,
+  # so that scan fails only when a fix exists.
+  node-images:
+    name: Scan Node base images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build pinned Node images
+        run: |
+          docker build --target base -t blakpath-node-base:scan .
+          docker build --target runtime -t blakpath-node-runtime:scan .
+          docker build -f Dockerfile.dev --target os -t blakpath-node-dev:scan .
+
+      - name: Trivy production base
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: blakpath-node-base:scan
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          format: table
+
+      - name: Trivy production web runtime
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: blakpath-node-runtime:scan
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          format: table
+
+      - name: Trivy development base
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: blakpath-node-dev:scan
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table

@@ -126,7 +126,7 @@ read as the software making an identity determination, it does not ship.
 
 ## Quickstart
 
-Prerequisites: Node `>= 20.11`, `pnpm 9`, Docker + Docker Compose. Full detail
+Prerequisites: Node `24.21.0` (`.nvmrc`), `pnpm 9`, Docker + Docker Compose. Full detail
 in [`docs/local-development.md`](docs/local-development.md).
 
 ```bash
