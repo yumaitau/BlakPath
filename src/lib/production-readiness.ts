@@ -113,6 +113,13 @@ export function validateProductionReadiness(
       message: 'static S3 credentials must be unset; use a workload role',
     });
   }
+  if (environment.SMTP_USER || environment.SMTP_PASSWORD) {
+    issues.push({
+      key: 'SMTP_USER',
+      message:
+        'standing SMTP credentials must be unset; send mail with the workload role',
+    });
+  }
   if (
     !/^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i.test(
       environment.S3_KMS_KEY_ID ?? '',

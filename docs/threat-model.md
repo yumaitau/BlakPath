@@ -110,8 +110,10 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
     encryption (AES-256-GCM)** for sensitive fields and secrets; TLS in transit
     (Cloudflare Full (strict) to an HTTPS origin listener; HTTP only redirects);
     audit redaction (secrets/payloads never written to audit); least-privilege
-    RBAC; **no standing operator access** (break-glass only)
-    (`docs/tenant-isolation.md`, `docs/privacy-architecture.md`).
+    RBAC; **no standing operator access** (break-glass only); runtime secrets
+    sync only into the `blakpath` namespace
+    (`docs/tenant-isolation.md`, `docs/privacy-architecture.md`,
+    `docs/eks-runbook.md`).
 
 ### Denial of service
 
@@ -161,6 +163,7 @@ When something goes wrong, BlakPath **denies rather than exposes**:
 
 - Cultural governance and the correctness of human determinations sit with the
   organisation; BlakPath assures process integrity, not the merits of a decision.
-- Infrastructure hardening (network policy, secret management via KMS, backups,
-  patching) is assumed to be enforced in the `ap-southeast-2` deployment
-  environment and is out of scope for this application-level model.
+- Infrastructure hardening (network policy, node placement, backups, patching)
+  is enforced in the `ap-southeast-2` deployment. Secret sync and the API
+  endpoint contract are in `docs/eks-runbook.md`. The dedicated cluster is
+  `docs/adr/0001-dedicated-cluster.md`.

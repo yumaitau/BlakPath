@@ -14,6 +14,15 @@ region.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.
+- [ ] Apply `infra/aws/eks-boundary.example.yaml` and the workload trust policy
+      so `/blakpath/production/*` syncs only in the `blakpath` namespace.
+      Confirm a sync of that key from any other namespace is AccessDenied,
+      then rotate the runtime secret (`docs/eks-runbook.md`).
+- [ ] Retire IAM user `blakpath-ses-smtp`: no access keys and no
+      `AmazonSESFullAccess`. Production mail uses the workload role.
+- [ ] Keep the EKS API endpoint private, or limit public CIDRs to admin and CI
+      networks. `0.0.0.0/0` and `::/0` fail the release. See
+      `docs/adr/0001-dedicated-cluster.md`.
 - [ ] Terminate TLS at the origin listener (HTTP redirects to HTTPS), set the
       Cloudflare zone to Full (strict), verify the zone-level Authenticated
       Origin Pull certificate, attach the regional WAF web ACL, and set

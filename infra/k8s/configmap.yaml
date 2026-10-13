@@ -19,7 +19,8 @@ data:
   AUDIT_ANCHOR_OBJECT_LOCK: 'true'
   S3_KMS_KEY_ID: arn:aws:kms:ap-southeast-2:959038055523:key/737b7098-2c77-4a4e-b4c6-666597743651
   S3_FORCE_PATH_STYLE: 'false'
-  # SES SMTP interface in ap-southeast-2; credentials from Secrets Manager.
+  # Relay host for non-production SMTP. Production mail uses ses:SendEmail
+  # on the workload role; do not put SMTP credentials in the runtime secret.
   SMTP_HOST: email-smtp.ap-southeast-2.amazonaws.com
   SMTP_PORT: '587'
   SMTP_FROM: BlakPath <no-reply@blakpath.yumait.au>
