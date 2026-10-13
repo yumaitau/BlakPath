@@ -108,6 +108,8 @@ export const evidence = pgTable(
       onDelete: 'set null',
     }),
     classifiedAt: timestamp('classified_at', { withTimezone: true }),
+    /** Set once retention has anonymised this item. A later sweep skips it. */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
     ...rowVersion,
     ...softDelete,

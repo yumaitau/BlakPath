@@ -10,6 +10,7 @@ import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { RetentionTargetError } from '@/domains/retention';
 import { AuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -78,6 +79,12 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
+  }
+  if (error instanceof RetentionTargetError) {
+    return NextResponse.json(
+      { error: 'Legal hold target does not exist' },
+      { status: 404 },
+    );
   }
   if (error instanceof AuthorizationError || error instanceof TenantContextError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

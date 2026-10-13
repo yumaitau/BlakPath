@@ -211,6 +211,7 @@ export type AuditAction =
   | 'import.completed'
   // Retention / lifecycle of data.
   | 'retention.policy_applied'
+  | 'retention.policy_deleted'
   | 'retention.record_purged'
   | 'retention.record_anonymised'
   | 'retention.hold_placed'

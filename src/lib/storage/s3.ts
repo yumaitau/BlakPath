@@ -5,6 +5,8 @@ import {
   HeadBucketCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectVersionsCommand,
   type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -237,6 +239,96 @@ export async function deleteObject(params: {
   key: string;
 }): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: params.bucket, Key: params.key }));
+}
+
+const VERSION_DELETE_LIMIT = 1000;
+const VERSION_DELETE_PASSES = 10;
+
+interface ListedVersion {
+  Key?: string;
+  VersionId?: string;
+}
+
+/**
+ * Remove every stored version of one key, including delete markers.
+ *
+ * `DeleteObject` without a version id only adds a delete marker on a versioned
+ * bucket, so the bytes remain. This lists versions and deletes each version id.
+ * It throws if any version remains or the API returns a per-key error, so the
+ * caller can audit the failure and retry. A missing key is success.
+ */
+export async function deleteAllObjectVersions(params: {
+  bucket: string;
+  key: string;
+  client?: S3Client;
+}): Promise<void> {
+  if (!params.key) throw new Error('deleteAllObjectVersions requires a key');
+  const api = params.client ?? s3;
+
+  for (let pass = 0; pass < VERSION_DELETE_PASSES; pass += 1) {
+    const versionIds = await listVersionIds(api, params.bucket, params.key);
+    if (versionIds.length === 0) return;
+    for (let offset = 0; offset < versionIds.length; offset += VERSION_DELETE_LIMIT) {
+      const chunk = versionIds.slice(offset, offset + VERSION_DELETE_LIMIT);
+      const result = (await api.send(
+        new DeleteObjectsCommand({
+          Bucket: params.bucket,
+          Delete: {
+            Objects: chunk.map((versionId) => ({
+              Key: params.key,
+              VersionId: versionId,
+            })),
+            Quiet: false,
+          },
+        }),
+      )) as { Errors?: Array<{ Key?: string; VersionId?: string; Message?: string }> };
+      const errors = result.Errors ?? [];
+      if (errors.length > 0) {
+        const sample = errors[0]?.Message ?? 'delete failed';
+        throw new Error(
+          `Failed to delete ${errors.length} object version(s) for ${params.key}: ${sample}`,
+        );
+      }
+    }
+  }
+
+  const remaining = await listVersionIds(api, params.bucket, params.key);
+  if (remaining.length > 0) {
+    throw new Error(`Object versions remain for ${params.key}`);
+  }
+}
+
+async function listVersionIds(
+  api: S3Client,
+  bucket: string,
+  key: string,
+): Promise<string[]> {
+  const versionIds: string[] = [];
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+  do {
+    const page = (await api.send(
+      new ListObjectVersionsCommand({
+        Bucket: bucket,
+        Prefix: key,
+        KeyMarker: keyMarker,
+        VersionIdMarker: versionIdMarker,
+      }),
+    )) as {
+      Versions?: ListedVersion[];
+      DeleteMarkers?: ListedVersion[];
+      IsTruncated?: boolean;
+      NextKeyMarker?: string;
+      NextVersionIdMarker?: string;
+    };
+    for (const entry of [...(page.Versions ?? []), ...(page.DeleteMarkers ?? [])]) {
+      if (entry.Key === key && entry.VersionId) versionIds.push(entry.VersionId);
+    }
+    keyMarker = page.NextKeyMarker;
+    versionIdMarker = page.NextVersionIdMarker;
+    if (!page.IsTruncated) break;
+  } while (keyMarker);
+  return versionIds;
 }
 
 /** Reachability probe for readiness checks — verifies the evidence bucket. */

@@ -7,6 +7,9 @@ with resources owned by the production environment.
 - `workload-roles.example.yaml` separates web, worker and ECS execution roles.
   The application roles have no Secrets Manager permission and no access keys;
   the execution role can inject one named runtime secret into the tasks.
+  The worker role can list and delete object versions. Retention must remove
+  every version of a purged key. `s3:DeleteObject` alone only writes a delete
+  marker on a versioned bucket.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
 
