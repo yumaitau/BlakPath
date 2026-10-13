@@ -3,7 +3,11 @@ import { NextResponse } from 'next/server';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
 import { createPolicy, listPolicies, type CreatePolicyInput } from '@/domains/retention';
 
-/** Retention policies. GET list / POST create ({ resourceType, retentionDays, action }). */
+/**
+ * Retention policies.
+ * GET list / POST draft ({ resourceType, retentionDays, action, jurisdiction, authorityReference? }).
+ * A draft stays inactive until a different person activates it.
+ */
 export async function GET(): Promise<Response> {
   try {
     const items = await withRequestTenant(() => listPolicies());

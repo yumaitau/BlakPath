@@ -39,6 +39,11 @@ describe('dueForRetention (fail-safe on holds)', () => {
       dueForRetention({ recordDate: fresh, retentionDays: 30, isHeld: false, now }),
     ).toBe(false);
   });
+  it('never treats permanent retention as due', () => {
+    expect(
+      dueForRetention({ recordDate: old, retentionDays: null, isHeld: false, now }),
+    ).toBe(false);
+  });
 });
 
 describe('retention resource types + schemas', () => {
@@ -46,6 +51,7 @@ describe('retention resource types + schemas', () => {
     for (const t of RETENTION_RESOURCE_TYPES)
       expect(isRetentionResourceType(t)).toBe(true);
     expect(isRetentionResourceType('audit_event')).toBe(false);
+    expect(isRetentionResourceType('audit_chain')).toBe(false);
   });
 
   it('validates policy and hold input', () => {
@@ -54,13 +60,42 @@ describe('retention resource types + schemas', () => {
         resourceType: 'application',
         retentionDays: 365,
         action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: 'GA39 example',
+      }).success,
+    ).toBe(true);
+    // Longer than the old 10-year cap is a lawful keep, not a validation error.
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: 4000,
+        action: 'anonymise',
+        jurisdiction: 'vic',
       }).success,
     ).toBe(true);
     expect(
       createPolicySchema.safeParse({
-        resourceType: 'audit_event',
+        resourceType: 'certificate',
+        action: 'retain',
+        jurisdiction: 'qld',
+        retentionDays: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
         retentionDays: 365,
         action: 'purge',
+        jurisdiction: 'nsw',
+      }).success,
+    ).toBe(false);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'audit_chain',
+        retentionDays: 365,
+        action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: 'GA39 example',
       }).success,
     ).toBe(false);
     expect(
@@ -68,6 +103,8 @@ describe('retention resource types + schemas', () => {
         resourceType: 'application',
         retentionDays: 0,
         action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: 'GA39 example',
       }).success,
     ).toBe(false);
     expect(

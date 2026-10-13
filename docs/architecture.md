@@ -175,8 +175,9 @@ path:
 - **Notifications** — send email via SMTP.
 - **Audit integrity verification** — periodically re-walk the hash chain and
   write/verify integrity checkpoints (`docs/audit-log-design.md`).
-- **Retention & lifecycle** — apply retention/deletion policies where lawful,
-  respecting official-record obligations (`docs/privacy-architecture.md`).
+- **Retention & lifecycle** — apply retention/deletion policies where a signed
+  disposal authority and a second approver allow it (`docs/records-disposal.md`,
+  `docs/privacy-architecture.md`).
 
 Jobs run under the **same guarantees as web requests**: a job that touches
 tenant data establishes a tenant context, uses the tenant-scoped data layer, and

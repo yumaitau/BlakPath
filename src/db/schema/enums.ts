@@ -187,8 +187,15 @@ export const certificateStatus = pgEnum('certificate_status', [
   'revoked',
 ]);
 
-/** What a retention policy does to a record once it is past its retention period. */
-export const retentionAction = pgEnum('retention_action', ['purge', 'anonymise']);
+/**
+ * What a retention policy does once a record is past its keep period.
+ * `retain` is permanent: the sweep never destroys or anonymises the class.
+ */
+export const retentionAction = pgEnum('retention_action', [
+  'purge',
+  'anonymise',
+  'retain',
+]);
 
 /** Lifecycle of an export request. */
 export const exportStatus = pgEnum('export_status', [

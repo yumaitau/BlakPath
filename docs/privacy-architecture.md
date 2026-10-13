@@ -69,19 +69,34 @@ Consent is treated as a first-class, recorded fact, not an implicit assumption:
 
 ## Retention & deletion vs official records
 
-- **Tenant-set defaults.** Retention periods are organisation-configured
-  (`organisation_settings.retentionDefaults`).
+- **Disposal authority, not a software sentence.** Every resource type maps to a
+  disposal class. A records manager signs the authority reference for a class in
+  the organisation's jurisdiction. The software does not choose the statute, the
+  class number, or the keep period (`docs/records-disposal.md`).
+- **Two people to activate.** A retention policy is drafted inactive. A different
+  `retention:manage` holder has to activate it. The drafter cannot activate their
+  own policy.
+- **No purge without an authority.** A purge runs only when the policy cites a
+  current sign-off. Permanent retention (`retain`, no end date) is never due.
+  Each committed purge is written to the destruction register, which can be
+  exported.
+- **Tenant-set defaults.** Organisation settings still carry
+  `organisation_settings.retentionDefaults` for guidance. They do not by
+  themselves authorise destruction.
 - **Soft delete first.** The `softDelete` helper (`deletedAt`) supports
   reversible removal and grace periods before any hard deletion.
 - **Worker-driven lifecycle.** Retention/deletion runs as background jobs
   (`docs/architecture.md`), tenant-scoped and audited.
 - **Official records are protected.** A recorded determination or issued
-  certificate is an official record; it is not casually deleted. Where deletion of
-  ancillary data is lawful and requested, it happens without destroying the
-  official record or the audit trail.
+  certificate is an official record (`official_outcome`). It is not casually
+  deleted. A purge of that class needs a signed authority that is not marked
+  permanent. Where deletion of ancillary data is lawful and requested, it
+  happens without destroying the official record or the audit trail.
 - **The audit trail is not deletable per-row.** Deleting individual audit rows
   would defeat tamper-evidence; audit retention is handled by whole, verified,
-  archived periods, never by editing rows (`docs/audit-log-design.md`).
+  archived periods, never by editing rows (`docs/audit-log-design.md`). The
+  destruction register is the same kind of control record and is not a sweep
+  target.
 
 ## No automated determination — the guarantee
 
