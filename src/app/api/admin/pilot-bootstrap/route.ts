@@ -124,7 +124,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
     await db
       .insert(membershipRoles)
-      .values({ id: uuidv7(), membershipId, roleId: tenantRoleId })
+      .values({ id: uuidv7(), organisationId, membershipId, roleId: tenantRoleId })
       .onConflictDoNothing();
   }
 

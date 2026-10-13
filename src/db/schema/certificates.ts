@@ -1,5 +1,12 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -33,13 +40,9 @@ export const certificates = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     /** The finalised decision this certificate is issued from. */
-    decisionId: refId('decision_id')
-      .notNull()
-      .references(() => decisions.id, { onDelete: 'cascade' }),
+    decisionId: refId('decision_id').notNull(),
     /** Human-friendly per-organisation certificate reference (e.g. "CERT-2026-000123"). */
     reference: text('reference').notNull(),
     status: certificateStatus('status').notNull().default('draft'),
@@ -73,6 +76,16 @@ export const certificates = pgTable(
     ...softDelete,
   },
   (table) => [
+    foreignKey({
+      name: 'certificates_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'certificates_decision_same_org_fk',
+      columns: [table.organisationId, table.decisionId],
+      foreignColumns: [decisions.organisationId, decisions.id],
+    }).onDelete('cascade'),
     uniqueIndex('certificates_org_reference_unique').on(
       table.organisationId,
       table.reference,
@@ -83,6 +96,9 @@ export const certificates = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    index('certificates_org_decision_idx').on(table.organisationId, table.decisionId),
+    index('certificates_signed_by_idx').on(table.signedByUserId),
+    index('certificates_revoked_by_idx').on(table.revokedByUserId),
   ],
 );
 

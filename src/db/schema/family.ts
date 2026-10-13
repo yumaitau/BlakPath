@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { foreignKey, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -32,9 +32,7 @@ export const familyLinks = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').notNull(),
     requestedByUserId: refId('requested_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -57,11 +55,18 @@ export const familyLinks = pgTable(
     ...softDelete,
   },
   (table) => [
+    foreignKey({
+      name: 'family_links_application_same_org_fk',
+      columns: [table.organisationId, table.applicationId],
+      foreignColumns: [applications.organisationId, applications.id],
+    }).onDelete('cascade'),
     index('family_links_org_application_idx').on(
       table.organisationId,
       table.applicationId,
     ),
     index('family_links_org_status_idx').on(table.organisationId, table.status),
+    index('family_links_requested_by_idx').on(table.requestedByUserId),
+    index('family_links_decided_by_idx').on(table.decidedByUserId),
   ],
 );
 

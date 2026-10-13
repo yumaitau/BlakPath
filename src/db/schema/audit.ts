@@ -132,6 +132,8 @@ export const breakGlassRequests = pgTable(
   },
   (table) => [
     index('break_glass_requests_org_status_idx').on(table.organisationId, table.status),
+    index('break_glass_requests_requested_by_idx').on(table.requestedByUserId),
+    index('break_glass_requests_approved_by_idx').on(table.approvedByUserId),
   ],
 );
 

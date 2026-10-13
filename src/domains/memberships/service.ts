@@ -387,9 +387,12 @@ export async function addMember(input: {
           .delete(membershipRoles)
           .where(eq(membershipRoles.membershipId, membershipId));
       }
-      await tx
-        .insert(membershipRoles)
-        .values({ id: uuidv7(), membershipId, roleId: role.id });
+      await tx.insert(membershipRoles).values({
+        id: uuidv7(),
+        organisationId: scope.organisationId,
+        membershipId,
+        roleId: role.id,
+      });
     });
     await recordAudit({
       action: existing ? 'membership.role_assigned' : 'membership.invited',
@@ -754,6 +757,7 @@ export async function acceptMembershipInvitation(input: {
       }
       await tx.insert(membershipRoles).values({
         id: uuidv7(),
+        organisationId: invitation.organisationId,
         membershipId,
         roleId: invitation.roleId,
       });
@@ -858,9 +862,12 @@ export async function changeMemberRole(id: string, roleId: string): Promise<void
       .filter((name): name is string => Boolean(name));
     await db.transaction(async (tx) => {
       await tx.delete(membershipRoles).where(eq(membershipRoles.membershipId, id));
-      await tx
-        .insert(membershipRoles)
-        .values({ id: uuidv7(), membershipId: id, roleId: role.id });
+      await tx.insert(membershipRoles).values({
+        id: uuidv7(),
+        organisationId: scope.organisationId,
+        membershipId: id,
+        roleId: role.id,
+      });
     });
     await recordAudit({
       action: 'membership.role_assigned',

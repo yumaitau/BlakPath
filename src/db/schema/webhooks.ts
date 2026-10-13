@@ -1,12 +1,14 @@
 import { relations } from 'drizzle-orm';
 import {
   boolean,
+  foreignKey,
   integer,
   index,
   jsonb,
   pgTable,
   text,
   timestamp,
+  unique,
 } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
@@ -51,7 +53,11 @@ export const webhookEndpoints = pgTable(
     ...timestamps,
     ...softDelete,
   },
-  (table) => [index('webhook_endpoints_org_idx').on(table.organisationId)],
+  (table) => [
+    unique('webhook_endpoints_org_id_unique').on(table.organisationId, table.id),
+    index('webhook_endpoints_org_idx').on(table.organisationId),
+    index('webhook_endpoints_created_by_idx').on(table.createdByUserId),
+  ],
 );
 
 /** A single delivery attempt record for one event to one endpoint. */
@@ -62,9 +68,7 @@ export const webhookDeliveries = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    endpointId: refId('endpoint_id')
-      .notNull()
-      .references(() => webhookEndpoints.id, { onDelete: 'cascade' }),
+    endpointId: refId('endpoint_id').notNull(),
     event: text('event').notNull(),
     payload: jsonb('payload').notNull(),
     status: webhookDeliveryStatus('status').notNull().default('pending'),
@@ -75,6 +79,11 @@ export const webhookDeliveries = pgTable(
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: 'webhook_deliveries_endpoint_same_org_fk',
+      columns: [table.organisationId, table.endpointId],
+      foreignColumns: [webhookEndpoints.organisationId, webhookEndpoints.id],
+    }).onDelete('cascade'),
     index('webhook_deliveries_org_endpoint_idx').on(
       table.organisationId,
       table.endpointId,

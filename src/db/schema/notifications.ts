@@ -47,6 +47,7 @@ export const notifications = pgTable(
       table.userId,
       table.readAt,
     ),
+    index('notifications_user_idx').on(table.userId),
   ],
 );
 
