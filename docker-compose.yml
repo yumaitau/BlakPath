@@ -73,7 +73,8 @@ services:
 
   # --- Object storage (S3-compatible) --------------------------------------
   minio:
-    image: minio/minio:latest
+    # Last community MinIO release. Do not float this tag.
+    image: minio/minio:RELEASE.2025-10-15T17-29-55Z
     restart: unless-stopped
     command: ['server', '/data', '--console-address', ':9001']
     environment:
@@ -102,7 +103,7 @@ services:
   # freshly uploaded evidence lands until a malware scan passes — evidence is
   # NEVER served from quarantine.
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio:
         condition: service_healthy
@@ -118,7 +119,7 @@ services:
 
   # --- Malware scanning -----------------------------------------------------
   clamav:
-    image: clamav/clamav:latest
+    image: clamav/clamav:1.5.4
     # The upstream image currently publishes amd64 only. Docker Desktop can
     # emulate it on Apple Silicon for this local-development stack.
     platform: linux/amd64
@@ -144,7 +145,7 @@ services:
 
   # --- Email (dev mailbox) --------------------------------------------------
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.31.5
     restart: unless-stopped
     ports:
       - '${BLAKPATH_SMTP_PORT:-1025}:1025' # SMTP
@@ -268,7 +269,7 @@ services:
   # --- Observability (optional) --------------------------------------------
   # Enable with: docker compose --profile observability up -d
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.162.0
     profiles: ['observability']
     restart: unless-stopped
     command: ['--config=/etc/otel/config.yaml']

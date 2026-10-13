@@ -27,16 +27,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -52,6 +52,9 @@ jobs:
 
       - name: Format check
         run: pnpm format:check
+
+      - name: Unused dependencies
+        run: pnpm deps:check
 
   # ---------------------------------------------------------------------------
   # Unit + integration tests. Integration tests get real Postgres + Redis.
@@ -99,16 +102,16 @@ jobs:
       SMTP_HOST: localhost
       RUN_INTEGRATION: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -143,16 +146,16 @@ jobs:
       S3_ACCESS_KEY_ID: test
       S3_SECRET_ACCESS_KEY: test-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -200,12 +203,12 @@ jobs:
       SMTP_HOST: localhost
       RUN_EVIDENCE_E2E: 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -217,12 +220,12 @@ jobs:
             -p 9000:9000 \
             -e MINIO_ROOT_USER=test \
             -e MINIO_ROOT_PASSWORD=test-secret \
-            minio/minio:latest server /data
+            minio/minio:RELEASE.2025-10-15T17-29-55Z server /data
           for attempt in {1..30}; do
             curl -fsS http://localhost:9000/minio/health/ready && break
             sleep 1
           done
-          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest -c '
+          docker run --rm --network host --entrypoint /bin/sh minio/mc:RELEASE.2025-08-13T08-35-41Z -c '
             mc alias set local http://localhost:9000 test test-secret &&
             mc mb --ignore-existing local/blakpath-quarantine local/blakpath-evidence
           '
@@ -238,7 +241,7 @@ jobs:
       - run: pnpm test:e2e
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-report
           path: playwright-report/
@@ -251,7 +254,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
       - name: Build kustomization
         run: kubectl kustomize infra/k8s > /dev/null && echo "kustomize build OK"

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreDependencies": ["@testing-library/react", "pino-pretty"],
+  "rules": {
+    "files": "off",
+    "exports": "off",
+    "types": "off",
+    "nsExports": "off",
+    "nsTypes": "off",
+    "duplicates": "off",
+    "enumMembers": "off",
+    "namespaceMembers": "off",
+    "unresolved": "off",
+    "unlisted": "off"
+  }
+}

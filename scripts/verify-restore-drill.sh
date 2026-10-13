@@ -78,7 +78,7 @@ docker volume create "$backup_volume" >/dev/null
 docker run --rm \
   --network "${source_project}_default" \
   -v "${backup_volume}:/backup" \
-  --entrypoint /bin/sh minio/mc:latest -c '
+  --entrypoint /bin/sh minio/mc:RELEASE.2025-08-13T08-35-41Z -c '
     mkdir -p /backup/evidence /backup/quarantine &&
     mc alias set source http://minio:9000 blakpath blakpath-dev-secret >/dev/null &&
     mc mirror --overwrite source/blakpath-evidence /backup/evidence &&
@@ -108,7 +108,7 @@ target_compose exec -T postgres pg_restore \
 docker run --rm \
   --network "${target_project}_default" \
   -v "${backup_volume}:/backup:ro" \
-  --entrypoint /bin/sh minio/mc:latest -c '
+  --entrypoint /bin/sh minio/mc:RELEASE.2025-08-13T08-35-41Z -c '
     mc alias set target http://minio:9000 blakpath blakpath-dev-secret >/dev/null &&
     mc mirror --overwrite /backup/evidence target/blakpath-evidence &&
     mc mirror --overwrite /backup/quarantine target/blakpath-quarantine
