@@ -101,6 +101,12 @@ export const memberships = pgTable(
     invitedByUserId: refId('invited_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
+    /**
+     * When true, in-app notifications also send an email that only asks the
+     * member to sign in. The email never carries case content. In-app records
+     * are written either way.
+     */
+    emailNotifications: boolean('email_notifications').notNull().default(true),
     ...timestamps,
   },
   (table) => [

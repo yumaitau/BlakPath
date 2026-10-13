@@ -10,6 +10,7 @@ import {
   subjectFromContext,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { notifyWorkflowEvent } from '@/domains/notifications/dispatch';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
 import {
   castVoteSchema,
@@ -113,6 +114,17 @@ export async function proposeDecision(
     resourceId: row.id,
     result: 'success',
     after: { data: { applicationId }, allow: ['applicationId'] },
+  });
+
+  await notifyWorkflowEvent({
+    organisationId: ctx.organisationId,
+    correlationId: ctx.correlationId,
+    event: {
+      kind: 'vote_open',
+      applicationId,
+      decisionId: row.id,
+      actorUserId: ctx.userId,
+    },
   });
 
   return row;

@@ -12,6 +12,7 @@ import { AuthorizationError } from '@/lib/permissions/errors';
 import { addJob, QueueName } from '@/lib/queues';
 import { logger } from '@/lib/observability/logger';
 import { queueNotification } from '@/domains/notifications';
+import { notifyWorkflowEvent } from '@/domains/notifications/dispatch';
 import {
   deleteObject,
   EVIDENCE_BUCKET,
@@ -530,6 +531,15 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     resourceType: 'evidence',
     resourceId: evidenceId,
     result: 'success',
+  });
+  await notifyWorkflowEvent({
+    organisationId,
+    correlationId,
+    event: {
+      kind: 'evidence_clean',
+      applicationId: row.applicationId,
+      evidenceId,
+    },
   });
   logger.debug(
     { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },
