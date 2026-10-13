@@ -1,5 +1,6 @@
 export type {
   KeyCustodyMode,
+  KeyReplacement,
   KeyValidationFailureCode,
   OrganisationKeyRow,
   OrganisationKeyStatus,
@@ -17,3 +18,11 @@ export {
   toPublicOrganisationKey,
 } from './service';
 export { OrganisationActivationError, activateCurrentOrganisation } from './activation';
+export {
+  enqueueKeyRewrap,
+  processOrganisationKeyRewrap,
+  replaceOrganisationKey,
+  type PersistedRewrap,
+} from './rewrap-job';
+export { sweepOrganisationKeyHealth } from './health';
+export { recordDestructionCertificate, scheduleKeyDeletion } from './crypto-shred';

@@ -24,6 +24,7 @@ import { createCheckpoint, verifyChain } from '@/domains/audit';
 import { settleAuditChain } from '@/domains/audit/anchor';
 import { createS3AuditAnchorStore } from '@/domains/audit/anchor-s3';
 import { loadAnchorSigner } from '@/domains/audit/anchor-sign';
+import { processOrganisationKeyRewrap } from '@/domains/organisation-keys/rewrap-job';
 import { acceptTenantJob } from './tenant-job';
 
 /**
@@ -319,6 +320,34 @@ const keyHealthProcessor: ProcessorFn = async (job) => {
 };
 
 /**
+ * Key-replacement processor. Checkpoints live on the re-wrap row, so a kill
+ * retries from the cursor instead of starting over. A missing row is dropped.
+ */
+const keyRewrapProcessor: ProcessorFn = async (job, logger) => {
+  const { organisationId } = job.data;
+  const rewrapId = (job.data as { rewrapId?: unknown }).rewrapId;
+  if (typeof rewrapId !== 'string' || rewrapId.length === 0) {
+    logger.error({ jobId: job.id }, 'key-rewrap job missing rewrapId — dropping');
+    return;
+  }
+  const state = await processOrganisationKeyRewrap({ organisationId, rewrapId });
+  if (!state) {
+    logger.error({ jobId: job.id, organisationId }, 'key-rewrap row missing — dropping');
+    return;
+  }
+  logger.info(
+    {
+      jobId: job.id,
+      organisationId,
+      phase: state.phase,
+      fieldsDone: state.fieldsDone,
+      objectsDone: state.objectsDone,
+    },
+    'key re-wrap finished',
+  );
+};
+
+/**
  * Parse the payload and require an active organisation before the processor
  * opens a tenant scope. A rejected job returns normally so BullMQ does not
  * retry it.
@@ -348,6 +377,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Reminder]: withActiveTenant(reminderProcessor),
   [QueueName.EncryptionBackfill]: withActiveTenant(encryptionBackfillProcessor),
   [QueueName.KeyHealth]: withActiveTenant(keyHealthProcessor),
+  [QueueName.KeyRewrap]: withActiveTenant(keyRewrapProcessor),
 };
 
 /** All registered queue names, for iteration during worker bootstrap. */

@@ -15,9 +15,12 @@ export class TenantKeyUnavailableError extends Error {
   }
 }
 
-/** Shown to people. No key material, no ciphertext, no fallback offer. */
+/**
+ * Shown to staff. No key material, no ciphertext, no fallback offer.
+ * Public forms and verify pages use a separate, shorter degradation.
+ */
 export const TENANT_KEY_UNAVAILABLE_MESSAGE =
-  "This organisation's records are locked because its encryption key is unavailable. Nothing was read. A key custodian can restore access. Other organisations are unaffected.";
+  "Your organisation's encryption key is unavailable. Contact your key administrator.";
 
 export function isTenantKeyUnavailable(
   error: unknown,

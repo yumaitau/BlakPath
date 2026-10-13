@@ -40,9 +40,12 @@ Network boundaries expected by these templates:
   bucket-default customer-managed KMS key, and enable versioning and AWS
   Backup coverage. Objects for a tenant use that tenant's CMK with S3 Bucket
   Keys off. The example role allows tenant envelope calls for purpose `field`,
-  `platform`, and `blind-index`, and allows S3 to use a tenant CMK when
-  `kms:ViaService` is `s3.ap-southeast-2.amazonaws.com`. Apply the template
-  before expecting HeadObject to succeed against a real tenant key.
+  `platform`, `blind-index`, and `key_validation`, and allows S3 to use a
+  tenant CMK when `kms:ViaService` is `s3.ap-southeast-2.amazonaws.com`.
+  Backup copies of tenant objects remain ciphertext under that tenant's CMK.
+  Deleting the CMK makes those copies unreadable. A restored environment must
+  have the client key grant again before the application can decrypt. Apply
+  the template before expecting HeadObject to succeed against a real tenant key.
 
 Run `pnpm release:check` inside the exact web and worker task definitions before
 promoting a release. It deliberately rejects static S3 credentials; the AWS SDK

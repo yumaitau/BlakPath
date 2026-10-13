@@ -2,6 +2,7 @@ import { headers } from 'next/headers';
 import { HolderCheckForm } from '@/components/certificates/holder-check-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { verifyCertificate } from '@/domains/certificates';
+import { publicKeyDegradation } from '@/lib/encryption/public-degradation';
 import { clientIp } from '@/lib/http/client-ip';
 
 /**
@@ -23,14 +24,35 @@ export default async function VerifyCertificatePage({
 }) {
   const { code } = await params;
   const headerList = await headers();
-  const ipAddress = clientIp(headerList.get('x-forwarded-for'));
+  const ipAddress = clientIp({ headers: headerList });
   const userAgent = headerList.get('user-agent');
 
   let lookup: Awaited<ReturnType<typeof verifyCertificate>> | null = null;
+  let keyMessage: string | null = null;
   try {
     lookup = await verifyCertificate(code, { ipAddress, userAgent });
-  } catch {
+  } catch (error) {
+    keyMessage = publicKeyDegradation(error);
     lookup = null;
+  }
+
+  if (keyMessage) {
+    return (
+      <main
+        id="main-content"
+        className="mx-auto w-full max-w-xl px-4 py-16 sm:px-6"
+        tabIndex={-1}
+      >
+        <Card>
+          <CardHeader>
+            <CardTitle>Verification is unavailable</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground text-sm">{keyMessage}</p>
+          </CardContent>
+        </Card>
+      </main>
+    );
   }
 
   const result = lookup?.status === 'ok' ? lookup.verification : null;

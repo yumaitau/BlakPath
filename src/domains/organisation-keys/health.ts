@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { db, type Database } from '@/db/client';
 import { membershipRoles, memberships, organisationKeys, roles } from '@/db/schema';
 import { createNotification } from '@/domains/notifications';
 import { KEY_VALIDATION_PURPOSE } from '@/lib/encryption/key-handshake';
@@ -9,7 +9,18 @@ import { createKeyProvider } from '@/lib/encryption/provider';
 import { env } from '@/lib/env';
 import { sendEmail } from '@/lib/email/mailer';
 import { logger } from '@/lib/observability/logger';
-import { saveKeyHealthObservation, type OrganisationKeyStatus } from './service';
+import { sharedDekCache, type DekCache } from '@/lib/encryption/dek-cache';
+import {
+  probeKeyProvider,
+  runKeyHealth,
+  type KeyHealthResult,
+} from '@/lib/encryption/key-health';
+import {
+  markOrganisationKeyUnavailable,
+  saveKeyHealthObservation,
+  setOrganisationKeyStatus,
+  type OrganisationKeyStatus,
+} from './service';
 
 const ADMIN_SLUG = 'organisation-admin';
 
@@ -271,4 +282,47 @@ export async function checkTenantKeyHealth(input: {
     },
     input,
   );
+}
+
+/**
+ * Probe every registered tenant key. A revoked grant pauses that tenant.
+ * A key that answers again after `unavailable` is set back to `active` and
+ * the caller resumes its jobs. Other tenants are separate subjects.
+ */
+export async function sweepOrganisationKeyHealth(
+  options: {
+    database?: Database;
+    provider?: KeyProvider;
+    cache?: DekCache;
+    pause?: (organisationId: string) => Promise<void>;
+    resume?: (organisationId: string) => Promise<void>;
+  } = {},
+): Promise<KeyHealthResult[]> {
+  const database = options.database ?? db;
+  const provider = options.provider ?? createKeyProvider();
+  const cache = options.cache ?? sharedDekCache();
+  const rows = await database.select().from(organisationKeys);
+  return runKeyHealth({
+    subjects: rows.map((row) => ({
+      organisationId: row.organisationId,
+      kmsKeyArn: row.kmsKeyArn,
+      status: row.status,
+    })),
+    probe: (subject) =>
+      probeKeyProvider(provider, subject.kmsKeyArn, subject.organisationId),
+    setStatus: async (organisationId, status) => {
+      if (status === 'unavailable') {
+        await markOrganisationKeyUnavailable(
+          organisationId,
+          'KMS key access refused',
+          database,
+        );
+        return;
+      }
+      await setOrganisationKeyStatus(organisationId, 'active', database);
+    },
+    evict: (organisationId) => cache.evictOrganisation(organisationId),
+    pause: options.pause ?? (async () => {}),
+    resume: options.resume ?? (async () => {}),
+  });
 }

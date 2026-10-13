@@ -255,3 +255,10 @@ export const organisationKeyValidationStatus = pgEnum(
   'organisation_key_validation_status',
   ['pending', 'passed', 'failed'],
 );
+
+/** Background re-wrap of fields and objects onto a replacement CMK. */
+export const organisationKeyRewrapStatus = pgEnum('organisation_key_rewrap_status', [
+  'running',
+  'completed',
+  'failed',
+]);
