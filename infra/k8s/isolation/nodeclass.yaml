@@ -1,0 +1,26 @@
+# Apply only to the dedicated blakpath-prod cluster.
+# Do not apply to yumait-prod. See docs/adr/0064-isolation-boundary.md.
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata:
+  name: blakpath-private
+spec:
+  role: blakpath-eks-node
+  subnetSelectorTerms:
+    - tags:
+        blakpath.yumait.au/subnet-role: private-app
+  securityGroupSelectorTerms:
+    - tags:
+        blakpath.yumait.au/sg-role: nodes
+  # Pod ENIs use the pod security group. RDS and Redis allow that group only.
+  # EKS Auto Mode does not support the classic SecurityGroupPolicy CRD.
+  podSubnetSelectorTerms:
+    - tags:
+        blakpath.yumait.au/subnet-role: private-app
+  podSecurityGroupSelectorTerms:
+    - tags:
+        blakpath.yumait.au/sg-role: pods
+  advancedNetworking:
+    associatePublicIPAddress: false
+  ephemeralStorage:
+    size: 80Gi

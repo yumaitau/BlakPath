@@ -148,6 +148,9 @@ When something goes wrong, BlakPath **denies rather than exposes**:
 
 - Cultural governance and the correctness of human determinations sit with the
   organisation; BlakPath assures process integrity, not the merits of a decision.
-- Infrastructure hardening (network policy, secret management via KMS, backups,
-  patching) is assumed to be enforced in the `ap-southeast-2` deployment
-  environment and is out of scope for this application-level model.
+- Network isolation is decided in
+  [`adr/0064-isolation-boundary.md`](adr/0064-isolation-boundary.md): a dedicated
+  account, private subnets, a private EKS API, and data stores reachable only
+  from BlakPath pods. That boundary is not in force until the stack is applied.
+  Backups, patching, and secret management beyond the cluster's secrets key
+  remain deployment-owner work.

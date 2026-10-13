@@ -23,6 +23,11 @@ region.
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Apply the isolation boundary
+      ([`adr/0064-isolation-boundary.md`](adr/0064-isolation-boundary.md)):
+      dedicated account, no public node or pod IPs, private EKS API, Postgres
+      and Redis reachable only from the BlakPath pod security group, and the
+      VPC endpoints in `infra/aws/isolation-boundary.json`.
 
 ## Signals and response
 

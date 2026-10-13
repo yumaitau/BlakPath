@@ -1,0 +1,17 @@
+# Binds the public ingress to the load-balancer security group created by
+# infra/aws/isolation-boundary.json (output AlbSecurityGroupId).
+# Replace sg-BLAKPATH_ALB and the certificate id before apply.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blakpath
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/security-groups: sg-BLAKPATH_ALB
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-southeast-2:ACCOUNT_ID:certificate/CERTIFICATE_ID
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/healthcheck-path: /api/ready
+spec:
+  ingressClassName: alb

@@ -207,24 +207,25 @@ BlakPath/
 
 ## Documentation
 
-| Document                                                               | Contents                                                                                       |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| [`docs/architecture.md`](docs/architecture.md)                         | Modular monolith, domains, system-context & container diagrams, request lifecycle, worker role |
-| [`docs/tenant-isolation.md`](docs/tenant-isolation.md)                 | The isolation model end-to-end and the isolation tests that must pass                          |
-| [`docs/authentication.md`](docs/authentication.md)                     | Better Auth, MFA/passkeys/TOTP, sessions, step-up, SSO/SCIM future                             |
-| [`docs/authorization-matrix.md`](docs/authorization-matrix.md)         | Roles × permission keys, separation of duties, contextual policies                             |
-| [`docs/audit-log-design.md`](docs/audit-log-design.md)                 | Event schema, SHA-256 hash chaining, checkpoints, redaction                                    |
-| [`docs/threat-model.md`](docs/threat-model.md)                         | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |
-| [`docs/privacy-architecture.md`](docs/privacy-architecture.md)         | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
-| [`docs/production-readiness.md`](docs/production-readiness.md)         | Production release gate, monitoring, backups and restore drills                                |
-| [`docs/operations-runbook.md`](docs/operations-runbook.md)             | Alert signals and incident response actions                                                    |
-| [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md) | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |
-| [`docs/local-development.md`](docs/local-development.md)               | Setup, services, commands, testing, troubleshooting                                            |
-| [`docs/council-trust-model.md`](docs/council-trust-model.md)           | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
-| [`docs/calendar-vision.md`](docs/calendar-vision.md)                   | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                 |
-| [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                         | Full user-journey e2e matrix across auth, CoA, teams, calendar                                 |
-| [`docs/eks-runbook.md`](docs/eks-runbook.md)                           | EKS deploy, data services, SES, restore drill, alarms                                          |
-| [`docs/council-onboarding.md`](docs/council-onboarding.md)             | New council tenant: teams, identity/SSO, go-live gate, legacy import                           |
+| Document                                                                     | Contents                                                                                       |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [`docs/architecture.md`](docs/architecture.md)                               | Modular monolith, domains, system-context & container diagrams, request lifecycle, worker role |
+| [`docs/adr/0064-isolation-boundary.md`](docs/adr/0064-isolation-boundary.md) | Dedicated account, private VPC, private EKS API, pod security groups, VPC endpoints            |
+| [`docs/tenant-isolation.md`](docs/tenant-isolation.md)                       | The isolation model end-to-end and the isolation tests that must pass                          |
+| [`docs/authentication.md`](docs/authentication.md)                           | Better Auth, MFA/passkeys/TOTP, sessions, step-up, SSO/SCIM future                             |
+| [`docs/authorization-matrix.md`](docs/authorization-matrix.md)               | Roles × permission keys, separation of duties, contextual policies                             |
+| [`docs/audit-log-design.md`](docs/audit-log-design.md)                       | Event schema, SHA-256 hash chaining, checkpoints, redaction                                    |
+| [`docs/threat-model.md`](docs/threat-model.md)                               | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |
+| [`docs/privacy-architecture.md`](docs/privacy-architecture.md)               | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
+| [`docs/production-readiness.md`](docs/production-readiness.md)               | Production release gate, monitoring, backups and restore drills                                |
+| [`docs/operations-runbook.md`](docs/operations-runbook.md)                   | Alert signals and incident response actions                                                    |
+| [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md)       | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |
+| [`docs/local-development.md`](docs/local-development.md)                     | Setup, services, commands, testing, troubleshooting                                            |
+| [`docs/council-trust-model.md`](docs/council-trust-model.md)                 | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
+| [`docs/calendar-vision.md`](docs/calendar-vision.md)                         | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                 |
+| [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                               | Full user-journey e2e matrix across auth, CoA, teams, calendar                                 |
+| [`docs/eks-runbook.md`](docs/eks-runbook.md)                                 | EKS deploy, data services, SES, restore drill, alarms                                          |
+| [`docs/council-onboarding.md`](docs/council-onboarding.md)                   | New council tenant: teams, identity/SSO, go-live gate, legacy import                           |
 
 ## Licence & governance — open code, community authority
 

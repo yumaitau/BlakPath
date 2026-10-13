@@ -1,0 +1,2214 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dedicated BlakPath network boundary. Private VPC, private EKS API, no public node or pod IPs, pod security group for Postgres and Redis, required VPC endpoints. Does not create database instances. See docs/adr/0064-isolation-boundary.md.",
+  "Metadata": {
+    "BlakPathAdr": "docs/adr/0064-isolation-boundary.md",
+    "BlakPathIssue": "64"
+  },
+  "Rules": {
+    "SydneyOnly": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "AWS::Region"
+              },
+              "ap-southeast-2"
+            ]
+          },
+          "AssertDescription": "Deploy this stack only in ap-southeast-2."
+        }
+      ]
+    }
+  },
+  "Parameters": {
+    "KubernetesVersion": {
+      "Type": "String",
+      "Description": "EKS version supported in ap-southeast-2 on the day of deploy. No default.",
+      "AllowedPattern": "^1\\.[0-9]+$"
+    },
+    "ClusterAdminPrincipalArn": {
+      "Type": "String",
+      "Description": "IAM role allowed to call the private EKS API. A role, not a user and not the account root.",
+      "AllowedPattern": "^arn:aws:iam::[0-9]{12}:role\\/.+"
+    },
+    "BastionAmiId": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+    },
+    "BastionInstanceType": {
+      "Type": "String",
+      "Default": "t4g.nano",
+      "AllowedValues": ["t4g.nano", "t4g.micro"]
+    }
+  },
+  "Resources": {
+    "Vpc": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.64.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod"
+          }
+        ]
+      }
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-igw"
+          }
+        ]
+      }
+    },
+    "InternetGatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicSubnetAz0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "0",
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": "10.64.0.0/24",
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-public-0"
+          },
+          {
+            "Key": "blakpath.yumait.au/subnet-role",
+            "Value": "public"
+          },
+          {
+            "Key": "kubernetes.io/role/elb",
+            "Value": "1"
+          }
+        ]
+      }
+    },
+    "PublicSubnetAz1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "1",
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": "10.64.1.0/24",
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-public-1"
+          },
+          {
+            "Key": "blakpath.yumait.au/subnet-role",
+            "Value": "public"
+          },
+          {
+            "Key": "kubernetes.io/role/elb",
+            "Value": "1"
+          }
+        ]
+      }
+    },
+    "PrivateAppSubnetAz0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "0",
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": "10.64.16.0/20",
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-private-app-0"
+          },
+          {
+            "Key": "blakpath.yumait.au/subnet-role",
+            "Value": "private-app"
+          },
+          {
+            "Key": "kubernetes.io/role/internal-elb",
+            "Value": "1"
+          }
+        ]
+      }
+    },
+    "PrivateAppSubnetAz1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "1",
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": "10.64.32.0/20",
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-private-app-1"
+          },
+          {
+            "Key": "blakpath.yumait.au/subnet-role",
+            "Value": "private-app"
+          },
+          {
+            "Key": "kubernetes.io/role/internal-elb",
+            "Value": "1"
+          }
+        ]
+      }
+    },
+    "PrivateDataSubnetAz0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "0",
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": "10.64.64.0/24",
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-private-data-0"
+          },
+          {
+            "Key": "blakpath.yumait.au/subnet-role",
+            "Value": "private-data"
+          }
+        ]
+      }
+    },
+    "PrivateDataSubnetAz1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "1",
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": "10.64.65.0/24",
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-private-data-1"
+          },
+          {
+            "Key": "blakpath.yumait.au/subnet-role",
+            "Value": "private-data"
+          }
+        ]
+      }
+    },
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-public"
+          }
+        ]
+      }
+    },
+    "PublicDefaultRoute": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": ["InternetGatewayAttachment"],
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicSubnetAz0RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnetAz0"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "PublicSubnetAz1RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnetAz1"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "NatEipAz0": {
+      "Type": "AWS::EC2::EIP",
+      "DependsOn": ["InternetGatewayAttachment"],
+      "Properties": {
+        "Domain": "vpc",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-nat-0"
+          }
+        ]
+      }
+    },
+    "NatGatewayAz0": {
+      "Type": "AWS::EC2::NatGateway",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": ["NatEipAz0", "AllocationId"]
+        },
+        "SubnetId": {
+          "Ref": "PublicSubnetAz0"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-nat-0"
+          }
+        ]
+      }
+    },
+    "PrivateAppRouteTableAz0": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-private-app-0"
+          }
+        ]
+      }
+    },
+    "PrivateAppDefaultRouteAz0": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateAppRouteTableAz0"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NatGatewayId": {
+          "Ref": "NatGatewayAz0"
+        }
+      }
+    },
+    "PrivateAppSubnetAz0RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateAppSubnetAz0"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateAppRouteTableAz0"
+        }
+      }
+    },
+    "NatEipAz1": {
+      "Type": "AWS::EC2::EIP",
+      "DependsOn": ["InternetGatewayAttachment"],
+      "Properties": {
+        "Domain": "vpc",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-nat-1"
+          }
+        ]
+      }
+    },
+    "NatGatewayAz1": {
+      "Type": "AWS::EC2::NatGateway",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": ["NatEipAz1", "AllocationId"]
+        },
+        "SubnetId": {
+          "Ref": "PublicSubnetAz1"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-nat-1"
+          }
+        ]
+      }
+    },
+    "PrivateAppRouteTableAz1": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-private-app-1"
+          }
+        ]
+      }
+    },
+    "PrivateAppDefaultRouteAz1": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateAppRouteTableAz1"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NatGatewayId": {
+          "Ref": "NatGatewayAz1"
+        }
+      }
+    },
+    "PrivateAppSubnetAz1RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateAppSubnetAz1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateAppRouteTableAz1"
+        }
+      }
+    },
+    "PrivateDataRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-private-data"
+          }
+        ]
+      }
+    },
+    "PrivateDataSubnetAz0RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateDataSubnetAz0"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateDataRouteTable"
+        }
+      }
+    },
+    "PrivateDataSubnetAz1RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateDataSubnetAz1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateDataRouteTable"
+        }
+      }
+    },
+    "S3GatewayEndpoint": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.s3",
+        "VpcEndpointType": "Gateway",
+        "RouteTableIds": [
+          {
+            "Ref": "PrivateAppRouteTableAz0"
+          },
+          {
+            "Ref": "PrivateAppRouteTableAz1"
+          },
+          {
+            "Ref": "PrivateDataRouteTable"
+          }
+        ]
+      }
+    },
+    "EndpointSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "blakpath-endpoints",
+        "GroupDescription": "Interface endpoints. 443 from BlakPath nodes and pods. SMTP ports from pods only.",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "Description": "Replaces the default allow-all egress. Real egress is a separate rule.",
+            "IpProtocol": "-1",
+            "FromPort": -1,
+            "ToPort": -1,
+            "CidrIp": "127.0.0.1/32"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-endpoints"
+          },
+          {
+            "Key": "blakpath.yumait.au/sg-role",
+            "Value": "endpoints"
+          }
+        ]
+      }
+    },
+    "NodeSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "blakpath-nodes",
+        "GroupDescription": "EKS Auto Mode nodes. No public IP. No path to RDS or Redis.",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "Description": "Replaces the default allow-all egress. Real egress is a separate rule.",
+            "IpProtocol": "-1",
+            "FromPort": -1,
+            "ToPort": -1,
+            "CidrIp": "127.0.0.1/32"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-nodes"
+          },
+          {
+            "Key": "blakpath.yumait.au/sg-role",
+            "Value": "nodes"
+          }
+        ]
+      }
+    },
+    "PodSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "blakpath-pods",
+        "GroupDescription": "BlakPath pod ENIs. The only source allowed to reach RDS and Redis.",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "Description": "Replaces the default allow-all egress. Real egress is a separate rule.",
+            "IpProtocol": "-1",
+            "FromPort": -1,
+            "ToPort": -1,
+            "CidrIp": "127.0.0.1/32"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-pods"
+          },
+          {
+            "Key": "blakpath.yumait.au/sg-role",
+            "Value": "pods"
+          }
+        ]
+      }
+    },
+    "RdsSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "blakpath-rds",
+        "GroupDescription": "Postgres. Ingress 5432 from the BlakPath pod security group only.",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "Description": "Replaces the default allow-all egress. Real egress is a separate rule.",
+            "IpProtocol": "-1",
+            "FromPort": -1,
+            "ToPort": -1,
+            "CidrIp": "127.0.0.1/32"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-rds"
+          },
+          {
+            "Key": "blakpath.yumait.au/sg-role",
+            "Value": "rds"
+          }
+        ]
+      }
+    },
+    "RedisSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "blakpath-redis",
+        "GroupDescription": "Redis. Ingress 6379 from the BlakPath pod security group only.",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "Description": "Replaces the default allow-all egress. Real egress is a separate rule.",
+            "IpProtocol": "-1",
+            "FromPort": -1,
+            "ToPort": -1,
+            "CidrIp": "127.0.0.1/32"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-redis"
+          },
+          {
+            "Key": "blakpath.yumait.au/sg-role",
+            "Value": "redis"
+          }
+        ]
+      }
+    },
+    "AlbSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "blakpath-alb",
+        "GroupDescription": "Public load balancer. 443 from Cloudflare only. Targets pod port 3000.",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "Description": "Replaces the default allow-all egress. Real egress is a separate rule.",
+            "IpProtocol": "-1",
+            "FromPort": -1,
+            "ToPort": -1,
+            "CidrIp": "127.0.0.1/32"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-alb"
+          },
+          {
+            "Key": "blakpath.yumait.au/sg-role",
+            "Value": "alb"
+          }
+        ]
+      }
+    },
+    "BastionSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "blakpath-bastion",
+        "GroupDescription": "SSM bastion in a private subnet. No inbound rules. No public IP.",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "Description": "Replaces the default allow-all egress. Real egress is a separate rule.",
+            "IpProtocol": "-1",
+            "FromPort": -1,
+            "ToPort": -1,
+            "CidrIp": "127.0.0.1/32"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-bastion"
+          },
+          {
+            "Key": "blakpath.yumait.au/sg-role",
+            "Value": "bastion"
+          }
+        ]
+      }
+    },
+    "EndpointIngressNodes": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "Description": "Nodes to interface endpoints"
+      }
+    },
+    "EndpointIngressPods": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "Description": "Pods to interface endpoints"
+      }
+    },
+    "EndpointIngressSmtp465": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 465,
+        "ToPort": 465,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "EndpointIngressSmtp587": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 587,
+        "ToPort": 587,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "EndpointIngressSmtp2465": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 2465,
+        "ToPort": 2465,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "EndpointIngressSmtp2587": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 2587,
+        "ToPort": 2587,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "EndpointKms": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.kms",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointSecretsManager": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.secretsmanager",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointEcrApi": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.ecr.api",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointEcrDkr": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.ecr.dkr",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointLogs": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.logs",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointSts": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.sts",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointSesApi": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.email",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointSesSmtp": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.email-smtp",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointEc2": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.ec2",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "EndpointElb": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": "com.amazonaws.ap-southeast-2.elasticloadbalancing",
+        "VpcEndpointType": "Interface",
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EndpointSecurityGroup"
+          }
+        ],
+        "SubnetIds": [
+          {
+            "Ref": "PrivateAppSubnetAz0"
+          },
+          {
+            "Ref": "PrivateAppSubnetAz1"
+          }
+        ]
+      }
+    },
+    "NodeEgressEndpoints": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "Description": "Nodes to interface endpoints"
+      }
+    },
+    "NodeEgressNat": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "0.0.0.0/0",
+        "Description": "Nodes to the internet through the NAT gateway, port 443 only"
+      }
+    },
+    "NodeEgressCluster": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "DestinationSecurityGroupId": {
+          "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+        },
+        "Description": "Nodes to the private EKS API"
+      }
+    },
+    "NodeEgressPods": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "-1",
+        "FromPort": -1,
+        "ToPort": -1,
+        "DestinationSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "Description": "Kubelet probes and node-to-pod traffic"
+      }
+    },
+    "NodeIngressSelf": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "-1",
+        "FromPort": -1,
+        "ToPort": -1,
+        "SourceSecurityGroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "Description": "Node to node"
+      }
+    },
+    "NodeIngressCluster": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "-1",
+        "FromPort": -1,
+        "ToPort": -1,
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+        },
+        "Description": "Control plane to kubelet"
+      }
+    },
+    "NodeIngressPodDnstcp": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 53,
+        "ToPort": 53,
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "Description": "Pods to node DNS"
+      }
+    },
+    "NodeIngressPodDnsudp": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "IpProtocol": "udp",
+        "FromPort": 53,
+        "ToPort": 53,
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "Description": "Pods to node DNS"
+      }
+    },
+    "PodEgressPods": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "-1",
+        "FromPort": -1,
+        "ToPort": -1,
+        "DestinationSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "Description": "Pod to pod, including ClamAV and CoreDNS"
+      }
+    },
+    "PodEgressCluster": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "DestinationSecurityGroupId": {
+          "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+        },
+        "Description": "Pods to the private EKS API"
+      }
+    },
+    "PodEgressEndpoints": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "Description": "Pods to interface endpoints"
+      }
+    },
+    "PodEgressSmtp465": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 465,
+        "ToPort": 465,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "PodEgressSmtp587": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 587,
+        "ToPort": 587,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "PodEgressSmtp2465": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 2465,
+        "ToPort": 2465,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "PodEgressSmtp2587": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "EndpointSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 2587,
+        "ToPort": 2587,
+        "Description": "Pods to SES SMTP"
+      }
+    },
+    "PodEgressRds": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "RdsSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 5432,
+        "ToPort": 5432,
+        "Description": "Pods to Postgres"
+      }
+    },
+    "PodEgressRedis": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "RedisSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 6379,
+        "ToPort": 6379,
+        "Description": "Pods to Redis"
+      }
+    },
+    "PodEgressNat": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "0.0.0.0/0",
+        "Description": "Pods to the internet through the NAT gateway, port 443 only"
+      }
+    },
+    "PodEgressNodeDnstcp": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 53,
+        "ToPort": 53,
+        "DestinationSecurityGroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "Description": "Pods to node DNS"
+      }
+    },
+    "PodEgressNodeDnsudp": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "udp",
+        "FromPort": 53,
+        "ToPort": 53,
+        "DestinationSecurityGroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "Description": "Pods to node DNS"
+      }
+    },
+    "PodIngressPods": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "-1",
+        "FromPort": -1,
+        "ToPort": -1,
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "Description": "Pod to pod"
+      }
+    },
+    "PodIngressNodes": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "-1",
+        "FromPort": -1,
+        "ToPort": -1,
+        "SourceSecurityGroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "Description": "Kubelet to pods"
+      }
+    },
+    "PodIngressAlb": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 3000,
+        "ToPort": 3000,
+        "Description": "Load balancer to web pods"
+      }
+    },
+    "RdsIngressPods": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "RdsSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 5432,
+        "ToPort": 5432,
+        "Description": "Postgres from BlakPath pods only"
+      }
+    },
+    "RedisIngressPods": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "RedisSecurityGroup"
+        },
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 6379,
+        "ToPort": 6379,
+        "Description": "Redis from BlakPath pods only"
+      }
+    },
+    "AlbIngressCloudflare0": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "173.245.48.0/20",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare1": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "103.21.244.0/22",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare2": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "103.22.200.0/22",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare3": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "103.31.4.0/22",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare4": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "141.101.64.0/18",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare5": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "108.162.192.0/18",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare6": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "190.93.240.0/20",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare7": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "188.114.96.0/20",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare8": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "197.234.240.0/22",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare9": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "198.41.128.0/17",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare10": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "162.158.0.0/15",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare11": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "104.16.0.0/13",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare12": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "104.24.0.0/14",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare13": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "172.64.0.0/13",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbIngressCloudflare14": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "131.0.72.0/22",
+        "Description": "Cloudflare edge to the public load balancer"
+      }
+    },
+    "AlbEgressPods": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroup"
+        },
+        "DestinationSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 3000,
+        "ToPort": 3000,
+        "Description": "Load balancer to web pods"
+      }
+    },
+    "BastionEgressCluster": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "BastionSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "DestinationSecurityGroupId": {
+          "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+        },
+        "Description": "SSM port-forward to the private EKS API"
+      }
+    },
+    "BastionEgressNat": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "BastionSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "0.0.0.0/0",
+        "Description": "SSM agent through the NAT gateway"
+      }
+    },
+    "SecretsKmsKey": {
+      "Type": "AWS::KMS::Key",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": "Encrypts Kubernetes secrets for blakpath-prod. Not the shared-account EBS key.",
+        "EnableKeyRotation": true,
+        "PendingWindowInDays": 30,
+        "KeyPolicy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AccountAdmin",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:root"
+                }
+              },
+              "Action": "kms:*",
+              "Resource": "*"
+            },
+            {
+              "Sid": "ClusterRoleUse",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": ["ClusterRole", "Arn"]
+                }
+              },
+              "Action": [
+                "kms:Encrypt",
+                "kms:Decrypt",
+                "kms:ReEncrypt*",
+                "kms:GenerateDataKey*",
+                "kms:DescribeKey"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "ClusterRoleGrants",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": ["ClusterRole", "Arn"]
+                }
+              },
+              "Action": ["kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant"],
+              "Resource": "*",
+              "Condition": {
+                "Bool": {
+                  "kms:GrantIsForAWSResource": "true"
+                }
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-prod-secrets"
+          }
+        ]
+      }
+    },
+    "ClusterRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "blakpath-eks-cluster",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "eks.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
+          "arn:aws:iam::aws:policy/AmazonEKSComputePolicy",
+          "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicyV2",
+          "arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy",
+          "arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy"
+        ]
+      }
+    },
+    "NodeRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "blakpath-eks-node",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy",
+          "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
+        ]
+      }
+    },
+    "BastionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "blakpath-bastion",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": ["arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]
+      }
+    },
+    "BastionInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "InstanceProfileName": "blakpath-bastion",
+        "Roles": [
+          {
+            "Ref": "BastionRole"
+          }
+        ]
+      }
+    },
+    "Cluster": {
+      "Type": "AWS::EKS::Cluster",
+      "DependsOn": [
+        "EndpointKms",
+        "EndpointSecretsManager",
+        "EndpointEcrApi",
+        "EndpointEcrDkr",
+        "EndpointLogs",
+        "EndpointSts",
+        "EndpointSesApi",
+        "EndpointSesSmtp",
+        "EndpointEc2",
+        "EndpointElb",
+        "S3GatewayEndpoint",
+        "NatGatewayAz0",
+        "NatGatewayAz1"
+      ],
+      "Properties": {
+        "Name": "blakpath-prod",
+        "Version": {
+          "Ref": "KubernetesVersion"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": ["ClusterRole", "Arn"]
+        },
+        "BootstrapSelfManagedAddons": false,
+        "AccessConfig": {
+          "AuthenticationMode": "API",
+          "BootstrapClusterCreatorAdminPermissions": false
+        },
+        "ComputeConfig": {
+          "Enabled": true,
+          "NodePools": [],
+          "NodeRoleArn": {
+            "Fn::GetAtt": ["NodeRole", "Arn"]
+          }
+        },
+        "EncryptionConfig": [
+          {
+            "Resources": ["secrets"],
+            "Provider": {
+              "KeyArn": {
+                "Fn::GetAtt": ["SecretsKmsKey", "Arn"]
+              }
+            }
+          }
+        ],
+        "KubernetesNetworkConfig": {
+          "IpFamily": "ipv4",
+          "ElasticLoadBalancing": {
+            "Enabled": true
+          }
+        },
+        "Logging": {
+          "ClusterLogging": {
+            "EnabledTypes": [
+              {
+                "Type": "api"
+              },
+              {
+                "Type": "audit"
+              },
+              {
+                "Type": "authenticator"
+              },
+              {
+                "Type": "controllerManager"
+              },
+              {
+                "Type": "scheduler"
+              }
+            ]
+          }
+        },
+        "ResourcesVpcConfig": {
+          "SubnetIds": [
+            {
+              "Ref": "PrivateAppSubnetAz0"
+            },
+            {
+              "Ref": "PrivateAppSubnetAz1"
+            }
+          ],
+          "EndpointPrivateAccess": true,
+          "EndpointPublicAccess": false
+        },
+        "UpgradePolicy": {
+          "SupportType": "STANDARD"
+        }
+      }
+    },
+    "NodeAccessEntry": {
+      "Type": "AWS::EKS::AccessEntry",
+      "Properties": {
+        "ClusterName": {
+          "Ref": "Cluster"
+        },
+        "PrincipalArn": {
+          "Fn::GetAtt": ["NodeRole", "Arn"]
+        },
+        "Type": "EC2",
+        "AccessPolicies": [
+          {
+            "AccessScope": {
+              "Type": "cluster"
+            },
+            "PolicyArn": "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAutoNodePolicy"
+          }
+        ]
+      }
+    },
+    "ClusterAdminAccessEntry": {
+      "Type": "AWS::EKS::AccessEntry",
+      "Properties": {
+        "ClusterName": {
+          "Ref": "Cluster"
+        },
+        "PrincipalArn": {
+          "Ref": "ClusterAdminPrincipalArn"
+        },
+        "Type": "STANDARD",
+        "AccessPolicies": [
+          {
+            "AccessScope": {
+              "Type": "cluster"
+            },
+            "PolicyArn": "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          }
+        ]
+      }
+    },
+    "ClusterIngressFromNodes": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+        },
+        "IpProtocol": "-1",
+        "FromPort": -1,
+        "ToPort": -1,
+        "SourceSecurityGroupId": {
+          "Ref": "NodeSecurityGroup"
+        },
+        "Description": "Nodes to the private API and control-plane webhooks"
+      }
+    },
+    "ClusterIngressFromPods": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "SourceSecurityGroupId": {
+          "Ref": "PodSecurityGroup"
+        },
+        "Description": "Pods to the private API"
+      }
+    },
+    "ClusterIngressFromBastion": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "SourceSecurityGroupId": {
+          "Ref": "BastionSecurityGroup"
+        },
+        "Description": "Bastion port-forward to the private API"
+      }
+    },
+    "Bastion": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "InstanceType": {
+          "Ref": "BastionInstanceType"
+        },
+        "ImageId": {
+          "Ref": "BastionAmiId"
+        },
+        "IamInstanceProfile": {
+          "Ref": "BastionInstanceProfile"
+        },
+        "MetadataOptions": {
+          "HttpEndpoint": "enabled",
+          "HttpTokens": "required",
+          "HttpPutResponseHopLimit": 1
+        },
+        "NetworkInterfaces": [
+          {
+            "DeviceIndex": 0,
+            "AssociatePublicIpAddress": false,
+            "DeleteOnTermination": true,
+            "SubnetId": {
+              "Ref": "PrivateAppSubnetAz0"
+            },
+            "GroupSet": [
+              {
+                "Ref": "BastionSecurityGroup"
+              }
+            ]
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "blakpath-bastion"
+          }
+        ]
+      }
+    },
+    "DbSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupName": "blakpath-data",
+        "DBSubnetGroupDescription": "Isolated data subnets for BlakPath Postgres. No internet route.",
+        "SubnetIds": [
+          {
+            "Ref": "PrivateDataSubnetAz0"
+          },
+          {
+            "Ref": "PrivateDataSubnetAz1"
+          }
+        ]
+      }
+    },
+    "CacheSubnetGroup": {
+      "Type": "AWS::ElastiCache::SubnetGroup",
+      "Properties": {
+        "CacheSubnetGroupName": "blakpath-data",
+        "Description": "Isolated data subnets for BlakPath Redis. No internet route.",
+        "SubnetIds": [
+          {
+            "Ref": "PrivateDataSubnetAz0"
+          },
+          {
+            "Ref": "PrivateDataSubnetAz1"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "VpcId": {
+      "Description": "VPC for the BlakPath boundary.",
+      "Value": {
+        "Ref": "Vpc"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-VpcId"
+        }
+      }
+    },
+    "PrivateAppSubnetIds": {
+      "Description": "Private application subnets.",
+      "Value": {
+        "Fn::Join": [
+          ",",
+          [
+            {
+              "Ref": "PrivateAppSubnetAz0"
+            },
+            {
+              "Ref": "PrivateAppSubnetAz1"
+            }
+          ]
+        ]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-PrivateAppSubnetIds"
+        }
+      }
+    },
+    "PrivateDataSubnetIds": {
+      "Description": "Isolated data subnets.",
+      "Value": {
+        "Fn::Join": [
+          ",",
+          [
+            {
+              "Ref": "PrivateDataSubnetAz0"
+            },
+            {
+              "Ref": "PrivateDataSubnetAz1"
+            }
+          ]
+        ]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-PrivateDataSubnetIds"
+        }
+      }
+    },
+    "PodSecurityGroupId": {
+      "Description": "Security group for BlakPath pod ENIs.",
+      "Value": {
+        "Ref": "PodSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-PodSecurityGroupId"
+        }
+      }
+    },
+    "NodeSecurityGroupId": {
+      "Description": "Security group for EKS nodes.",
+      "Value": {
+        "Ref": "NodeSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-NodeSecurityGroupId"
+        }
+      }
+    },
+    "RdsSecurityGroupId": {
+      "Description": "Attach Postgres to this security group and no other.",
+      "Value": {
+        "Ref": "RdsSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-RdsSecurityGroupId"
+        }
+      }
+    },
+    "RedisSecurityGroupId": {
+      "Description": "Attach Redis to this security group and no other.",
+      "Value": {
+        "Ref": "RedisSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-RedisSecurityGroupId"
+        }
+      }
+    },
+    "AlbSecurityGroupId": {
+      "Description": "Public load balancer security group.",
+      "Value": {
+        "Ref": "AlbSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-AlbSecurityGroupId"
+        }
+      }
+    },
+    "ClusterName": {
+      "Description": "Private EKS cluster name.",
+      "Value": {
+        "Ref": "Cluster"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-ClusterName"
+        }
+      }
+    },
+    "ClusterSecurityGroupId": {
+      "Description": "EKS-managed cluster security group.",
+      "Value": {
+        "Fn::GetAtt": ["Cluster", "ClusterSecurityGroupId"]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-ClusterSecurityGroupId"
+        }
+      }
+    },
+    "BastionInstanceId": {
+      "Description": "Private SSM bastion. It has no Kubernetes permissions.",
+      "Value": {
+        "Ref": "Bastion"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-BastionInstanceId"
+        }
+      }
+    },
+    "NodeRoleName": {
+      "Description": "Node IAM role name.",
+      "Value": {
+        "Ref": "NodeRole"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-NodeRoleName"
+        }
+      }
+    },
+    "DbSubnetGroupName": {
+      "Description": "RDS subnet group on the isolated data subnets.",
+      "Value": {
+        "Ref": "DbSubnetGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-DbSubnetGroupName"
+        }
+      }
+    },
+    "CacheSubnetGroupName": {
+      "Description": "ElastiCache subnet group on the isolated data subnets.",
+      "Value": {
+        "Ref": "CacheSubnetGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-CacheSubnetGroupName"
+        }
+      }
+    }
+  }
+}
