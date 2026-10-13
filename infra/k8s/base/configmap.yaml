@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blakpath-config
+  namespace: blakpath
+data:
+  APP_REGION: ap-southeast-2
+  HOSTNAME: 0.0.0.0
+  PORT: '3000'
+  NODE_ENV: production
+  NEXT_TELEMETRY_DISABLED: '1'
+  LOG_LEVEL: info
+  S3_REGION: ap-southeast-2
+  S3_FORCE_PATH_STYLE: 'false'
+  # SES SMTP interface in ap-southeast-2. Credentials come from the runtime secret.
+  SMTP_HOST: email-smtp.ap-southeast-2.amazonaws.com
+  SMTP_PORT: '587'
+  # PaperBoy replaces direct SES SMTP. The API key lives in the runtime secret.
+  # Sender contract: POST {PAPERBOY_URL}/api/v1/emails, Bearer auth.
+  # Overlays set the app host, buckets and evidence KMS key.
+  PAPERBOY_URL: https://paperboy.yumait.au
+  CLAMAV_HOST: blakpath-clamav
+  CLAMAV_PORT: '3310'
+  AI_FEATURES_ENABLED: 'false'
+  OTEL_SERVICE_NAME: blakpath

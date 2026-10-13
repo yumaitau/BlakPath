@@ -26,7 +26,7 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-    - host: blakpath.yumait.au
+    - host: placeholder.invalid
       http:
         paths:
           - path: /

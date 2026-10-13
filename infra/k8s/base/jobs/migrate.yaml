@@ -1,10 +1,9 @@
-# Production seed: permission catalogue + system role templates only.
-# Developer bootstrap is refused when NODE_ENV=production (see src/db/seeds).
-#   kubectl apply -f infra/k8s/jobs/seed.yaml
+# One-shot migration. Not part of the main overlay. Render
+# infra/k8s/overlays/<environment>/jobs (docs/eks-runbook.md).
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: blakpath-seed
+  name: blakpath-migrate
   namespace: blakpath
 spec:
   backoffLimit: 2
@@ -13,10 +12,10 @@ spec:
       serviceAccountName: blakpath
       restartPolicy: Never
       containers:
-        - name: seed
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+        - name: migrate
+          image: blakpath/worker:unset
           imagePullPolicy: IfNotPresent
-          command: [pnpm, exec, tsx, src/db/seeds/index.ts]
+          command: [pnpm, exec, tsx, src/db/migrate.ts]
           envFrom:
             - configMapRef:
                 name: blakpath-config

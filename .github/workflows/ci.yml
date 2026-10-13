@@ -253,5 +253,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-kubectl@v4
-      - name: Build kustomization
-        run: kubectl kustomize infra/k8s > /dev/null && echo "kustomize build OK"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Render staging and production overlays
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/kustomize"
+          mkdir -p "$out"
+          kubectl kustomize infra/k8s/overlays/staging > "$out/staging.yaml"
+          kubectl kustomize infra/k8s/overlays/production > "$out/production.yaml"
+          kubectl kustomize infra/k8s/overlays/staging/jobs > "$out/staging-jobs.yaml"
+          kubectl kustomize infra/k8s/overlays/production/jobs > "$out/production-jobs.yaml"
+          node scripts/check-k8s-overlays.mjs "$out"

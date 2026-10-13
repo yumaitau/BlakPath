@@ -1,8 +1,10 @@
+# Environment-neutral base. Apply an overlay, not this directory.
+# Account id, bucket names and KMS key ARNs are supplied at deploy time.
+# See docs/eks-runbook.md.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: blakpath
 resources:
-  - namespace.yaml
   - configmap.yaml
   - serviceaccounts.yaml
   - externalsecret.yaml
@@ -10,8 +12,3 @@ resources:
   - worker-deployment.yaml
   - service-ingress.yaml
   - autoscaling.yaml
-images:
-  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
-    newTag: 7350f7c
-  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
-    newTag: 7350f7c
