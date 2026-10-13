@@ -35,6 +35,12 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
   versioning on, AWS Backup coverage. MinIO exists for local dev only.
+- S3 lifecycle: apply `infra/aws/s3-lifecycle/{evidence,quarantine}-bucket.json`
+  (exports 7 days, quarantine 2 days, noncurrent versions 30 days, stale
+  multipart 1 day) and verify with `get-bucket-lifecycle-configuration`. The
+  worker Pod Identity role also needs the export statements from
+  `infra/aws/workload-roles.example.yaml` (tagging, multipart abort, version
+  list/delete on `*/exports/*`). See `infra/aws/README.md`.
 - SES in ap-southeast-2 with SNS bounce/complaint topic wired to
   `POST /api/email/events` (shared-secret gated, persisted suppressions).
 - PaperBoy (`https://paperboy.yumait.au`) is the production mail sender:

@@ -15,6 +15,9 @@ incident ticket.
 4. For email/webhook/export, confirm whether the side effect happened before
    retrying. Processors are designed to be idempotent, but the operator must
    verify the external service response.
+   Exports recover on their own: the export maintenance sweep re-enqueues an
+   export stuck `processing` for 15 minutes (a dead worker) and marks it
+   `failed` after 3 interrupted attempts.
 5. Record the remediation and confirm the queue’s failed count returns to its
    expected baseline.
 
@@ -35,6 +38,9 @@ incident ticket.
    no unscanned object may be promoted or downloaded.
 3. Restore the scanner and watch BullMQ retries drain. Page if two consecutive
    five-minute periods report the signal.
+4. The quarantine bucket expires objects after 2 days. An outage longer than
+   that loses the affected uploads (records stay quarantined, never promoted);
+   ask uploaders to re-submit rather than restoring objects from backup.
 
 ## `readiness_dependency_down`
 

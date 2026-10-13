@@ -71,6 +71,20 @@ Resources:
                 Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
                 Resource: [!Sub '${EvidenceBucketArn}/*']
+              # Exports are streamed (multipart), tagged at creation for the
+              # bucket lifecycle rule, and purged version-by-version on expiry.
+              - Sid: ExportObjects
+                Effect: Allow
+                Action:
+                  [s3:PutObjectTagging, s3:AbortMultipartUpload, s3:DeleteObjectVersion]
+                Resource: [!Sub '${EvidenceBucketArn}/*/exports/*']
+              - Sid: ExportVersionListing
+                Effect: Allow
+                Action: s3:ListBucketVersions
+                Resource: [!Ref EvidenceBucketArn]
+                Condition:
+                  StringLike:
+                    s3:prefix: '*/exports/*'
               - Sid: EvidenceKms
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
