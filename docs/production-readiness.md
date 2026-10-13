@@ -23,6 +23,8 @@ region.
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] After ClamAV is applied, record 72 hours that include at least three
+      signature updates and zero `blakpath-clamav` container restarts.
 
 ## Signals and response
 
@@ -38,10 +40,12 @@ Alert on:
   the agreed handling target;
 - failed or dead-lettered email, export, retention and webhook jobs;
 - failed backup jobs or restore-drill failures;
-- sustained 5xx/readiness failures.
+- sustained 5xx/readiness failures;
+- ClamAV signature age above 48 hours.
 
 The stable log signals are `queue_job_exhausted`, `audit_integrity_failure`,
-`clamav_unavailable` and `readiness_dependency_down`. Response steps are in
+`clamav_unavailable`, `clamav_signature_age` and `readiness_dependency_down`.
+Response steps are in
 [`operations-runbook.md`](operations-runbook.md). Signal records contain only
 opaque ids and coarse dependency states; job payloads and applicant data are not
 included.

@@ -160,6 +160,60 @@ export function scanBuffer(
   });
 }
 
+/**
+ * Send one NUL-terminated clamd command and return the raw reply.
+ * Fails closed, the same way a scan does, when clamd does not answer.
+ */
+export function clamdTextCommand(
+  command: string,
+  options: ScanOptions = {},
+): Promise<string> {
+  const host = options.host ?? env.CLAMAV_HOST;
+  const port = options.port ?? env.CLAMAV_PORT;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const chunks: Buffer[] = [];
+    const socket = net.createConnection({ host, port });
+    socket.setTimeout(timeoutMs);
+
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      fn();
+    };
+
+    socket.on('connect', () => {
+      socket.write(`z${command}\0`);
+    });
+
+    socket.on('data', (buf: Buffer) => {
+      chunks.push(buf);
+      if (buf.includes(0)) {
+        done(() => resolve(Buffer.concat(chunks).toString('utf8')));
+      }
+    });
+
+    socket.on('timeout', () => {
+      done(() =>
+        reject(
+          new ClamAvUnavailableError(`clamd ${command} timed out after ${timeoutMs}ms`),
+        ),
+      );
+    });
+
+    socket.on('error', (err) => {
+      done(() => reject(new ClamAvUnavailableError('clamd connection error', err)));
+    });
+
+    socket.on('close', () => {
+      done(() => reject(new ClamAvUnavailableError('clamd closed before replying')));
+    });
+  });
+}
+
 /** Reachability probe (PING/PONG) for readiness checks. */
 export function pingClamd(options: ScanOptions = {}): Promise<boolean> {
   const host = options.host ?? env.CLAMAV_HOST;

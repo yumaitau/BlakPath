@@ -9,6 +9,8 @@ with resources owned by the production environment.
   the execution role can inject one named runtime secret into the tasks.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
+  `clamav_signature_age` carries `ageHours` and pages when the maximum in an
+  hour is greater than 48.
 
 Network boundaries expected by these templates:
 

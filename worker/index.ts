@@ -5,6 +5,7 @@ import { closeQueues, type TenantJob } from '@/lib/queues';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { startTenantScheduleSync } from './scheduler';
 import { queueFailureSignal } from './operational-signals';
+import { startSignatureAgeMonitor } from './signature-age-monitor';
 
 /**
  * BlakPath background worker bootstrap.
@@ -76,6 +77,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
 let shuttingDown = false;
 let stopTenantScheduleSync: (() => void) | null = null;
+let stopSignatureAgeMonitor: (() => void) | null = null;
 
 /**
  * Graceful shutdown: close every worker (waits for active jobs to settle),
@@ -98,6 +100,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   deadline.unref();
 
   try {
+    stopSignatureAgeMonitor?.();
     stopTenantScheduleSync?.();
     await Promise.all(workers.map((w) => w.close()));
     await closeQueues();
@@ -119,6 +122,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function main(): Promise<void> {
+  stopSignatureAgeMonitor = startSignatureAgeMonitor(workerLogger);
   // Create (or update) the durable per-tenant maintenance schedules before
   // accepting jobs. A startup failure is intentional: a worker without its
   // integrity/retention schedules is not healthy enough to serve.

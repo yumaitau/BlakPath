@@ -8,6 +8,8 @@ resources:
   - externalsecret.yaml
   - web-deployment.yaml
   - worker-deployment.yaml
+  - clamav.yaml
+  - clamav-mirror.yaml
   - service-ingress.yaml
   - autoscaling.yaml
 images:

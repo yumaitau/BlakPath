@@ -1,0 +1,208 @@
+# Private freshclam mirror. This is the only ClamAV pod that may reach the
+# public signature servers. It uses the same role-less ServiceAccount as the
+# scanner. Egress excepts the entire link-local range so the pod cannot read
+# node IMDS or the EKS Pod Identity agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blakpath-clamav-mirror-config
+  namespace: blakpath
+data:
+  freshclam.conf: |
+    DatabaseOwner clamav
+    UpdateLogFile /var/log/clamav/freshclam.log
+    DatabaseDirectory /var/lib/clamav
+    DNSDatabaseInfo current.cvd.clamav.net
+    ScriptedUpdates yes
+    Checks 12
+    DatabaseMirror database.clamav.net
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blakpath-clamav-mirror
+  namespace: blakpath
+spec:
+  accessModes: ['ReadWriteOnce']
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blakpath-clamav-mirror
+  namespace: blakpath
+  labels:
+    app.kubernetes.io/name: blakpath-clamav-mirror
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: blakpath-clamav-mirror
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blakpath-clamav-mirror
+  namespace: blakpath
+  labels:
+    app.kubernetes.io/name: blakpath-clamav-mirror
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: blakpath-clamav-mirror
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blakpath-clamav-mirror
+    spec:
+      serviceAccountName: blakpath-clamav
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: config
+          configMap:
+            name: blakpath-clamav-mirror-config
+        - name: signatures
+          persistentVolumeClaim:
+            claimName: blakpath-clamav-mirror
+      containers:
+        - name: freshclam
+          image: clamav/clamav-debian:1.4_base@sha256:66ea2d47620f5458702e31d793999b8f05cdd93327336136c36ef6dc52483217
+          imagePullPolicy: IfNotPresent
+          command: ['/init-unprivileged']
+          env:
+            - name: CLAMAV_NO_CLAMD
+              value: 'true'
+            - name: CLAMAV_NO_MILTERD
+              value: 'true'
+            - name: FRESHCLAM_CHECKS
+              value: '12'
+          volumeMounts:
+            - name: config
+              mountPath: /etc/clamav/freshclam.conf
+              subPath: freshclam.conf
+              readOnly: true
+            - name: signatures
+              mountPath: /var/lib/clamav
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - test -f /var/lib/clamav/main.cvd -o -f /var/lib/clamav/main.cld
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - test -f /var/lib/clamav/main.cvd -o -f /var/lib/clamav/main.cld
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 180
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              cpu: '1'
+              memory: 3Gi
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+        - name: http
+          image: nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: signatures
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: blakpath-clamav-mirror
+  namespace: blakpath
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: blakpath-clamav-mirror
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: blakpath-clamav
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
