@@ -5,8 +5,8 @@ import { createEndpoint, listEndpoints } from '@/domains/webhooks';
 
 /**
  * Webhook endpoint management (staff, `tenant:configure`).
- * - GET  — list endpoints (includes the signing secret so it can be configured).
- * - POST — register an endpoint; the generated signing secret is returned.
+ * - GET  — list endpoints. The signing secret is never included.
+ * - POST — register an endpoint; the generated signing secret is returned once.
  */
 export async function GET(): Promise<Response> {
   try {
@@ -20,14 +20,14 @@ export async function GET(): Promise<Response> {
 export async function POST(request: NextRequest): Promise<Response> {
   try {
     const body: unknown = await request.json();
-    const endpoint = await withRequestTenant(() =>
+    const created = await withRequestTenant(() =>
       createEndpoint(body as { url: string; events: string[] }),
     );
     return NextResponse.json({
-      id: endpoint.id,
-      url: endpoint.url,
-      events: endpoint.events,
-      secret: endpoint.secret,
+      id: created.id,
+      url: created.url,
+      events: created.events,
+      secret: created.secret,
     });
   } catch (error) {
     return toErrorResponse(error);

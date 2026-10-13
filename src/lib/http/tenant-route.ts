@@ -1,7 +1,6 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
-import { StaffMfaRequiredError } from '@/lib/auth/staff-policy';
 import {
   requireSession,
   StepUpRequiredError,
@@ -13,6 +12,7 @@ import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { WebhookDestinationError } from '@/domains/webhooks/destination';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { RateLimitedError, rateLimitResponse } from '@/lib/http/request-limits';
 
@@ -77,7 +77,10 @@ export function toErrorResponse(error: unknown): NextResponse {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   if (error instanceof StaffMfaRequiredError) {
-    return NextResponse.json({ error: 'MFA enrolment required' }, { status: 403 });
+    return NextResponse.json(
+      { error: 'A verified second factor is required', code: error.code },
+      { status: error.status },
+    );
   }
   if (error instanceof StepUpRequiredError) {
     return NextResponse.json({ error: 'Re-authentication required' }, { status: 401 });
@@ -85,13 +88,7 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof NoActiveOrganisationError) {
     return NextResponse.json({ error: 'No active organisation' }, { status: 409 });
   }
-  if (error instanceof StaffMfaRequiredError) {
-    return NextResponse.json(
-      { error: 'A verified second factor is required', code: error.code },
-      { status: error.status },
-    );
-  }
-  if (error instanceof ZodError) {
+  if (error instanceof ZodError || error instanceof WebhookDestinationError) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
   if (error instanceof ApplicationWorkflowError) {

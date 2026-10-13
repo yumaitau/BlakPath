@@ -141,6 +141,13 @@ When something goes wrong, BlakPath **denies rather than exposes**:
   `denied` result (audited), not a default-allow.
 - **Config invalid → don't boot.** `src/lib/env.ts` fails fast on malformed
   configuration rather than starting with unsafe defaults.
+- **Outbound webhook → public HTTPS only.** Endpoint URLs are refused unless
+  they are HTTPS names that resolve to global addresses. The same check runs
+  again when the worker opens the socket. Redirects are not followed. Signing
+  secrets are envelope-encrypted, returned once on create or rotation, and
+  omitted from list responses. Cluster-specific ranges can be added with
+  `WEBHOOK_DENY_CIDRS`. Network policy for the worker is reviewed before
+  production (`infra/k8s/network-policy.example.yaml`).
 - **AI off by default.** `AI_FEATURES_ENABLED` defaults to `false`, and even when
   on, AI can never decide, score or infer identity
   (`docs/privacy-architecture.md`).

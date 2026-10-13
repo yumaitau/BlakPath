@@ -14,7 +14,11 @@ incident ticket.
    service, then retry the existing job; never mark evidence clean manually.
 4. For email/webhook/export, confirm whether the side effect happened before
    retrying. Processors are designed to be idempotent, but the operator must
-   verify the external service response.
+   verify the external service response. A webhook marked `destination not allowed`
+   or `endpoint secret unavailable` will not succeed on retry: correct the
+   endpoint URL, or rotate the signing secret from the management API. The
+   secret is shown once at creation and once at rotation. Do not copy it into
+   the ticket.
 5. Record the remediation and confirm the queue’s failed count returns to its
    expected baseline.
 
