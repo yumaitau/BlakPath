@@ -1,3 +1,5 @@
+import { customAlphabet } from 'nanoid';
+
 /**
  * Certificate status rules — pure and testable.
  *
@@ -40,6 +42,27 @@ export function isValid(status: CertificateStatus): boolean {
   return status === 'signed';
 }
 
+/** What public verification established about a certificate. */
+export interface VerificationFacts {
+  status: CertificateStatus;
+  /** Migrated from the organisation's prior system; carries no BlakPath seal. */
+  issuedBeforeBlakpath: boolean;
+  payloadIntact: boolean;
+  signatureValid: boolean;
+}
+
+/**
+ * Is the certificate currently a valid credential? Revoked is never valid. A
+ * BlakPath-issued certificate must also carry an intact seal. A certificate
+ * issued before BlakPath has no seal to check — it is valid as a LEGACY record
+ * the organisation migrated, and verification must say so plainly.
+ */
+export function isValidOnVerification(facts: VerificationFacts): boolean {
+  if (!isValid(facts.status)) return false;
+  if (facts.issuedBeforeBlakpath) return true;
+  return facts.payloadIntact && facts.signatureValid;
+}
+
 /**
  * Build a human-friendly per-organisation certificate reference from a fresh id.
  * Uniqueness is guaranteed by the (organisation_id, reference) unique index; the
@@ -48,6 +71,17 @@ export function isValid(status: CertificateStatus): boolean {
 export function makeCertificateReference(id: string, year: number): string {
   const tail = id.replace(/-/g, '').slice(-8).toUpperCase();
   return `CERT-${year}-${tail}`;
+}
+
+/** URL-safe verification code alphabet (matches isWellFormedVerificationCode). */
+const codeGen = customAlphabet(
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
+  32,
+);
+
+/** Mint a fresh, unguessable public verification code. */
+export function generateVerificationCode(): string {
+  return codeGen();
 }
 
 /** A verification code is 24–48 url-safe chars (letters, digits, hyphen). */

@@ -207,8 +207,14 @@ export type AuditAction =
   | 'export.generated'
   | 'export.downloaded'
   | 'export.failed'
-  // Legacy data import.
+  // Legacy data import (records migrated from an organisation's prior system).
+  | 'import.validated'
+  | 'import.requested'
   | 'import.completed'
+  | 'import.failed'
+  | 'application.imported'
+  | 'decision.imported'
+  | 'certificate.imported'
   // Retention / lifecycle of data.
   | 'retention.policy_applied'
   | 'retention.record_purged'

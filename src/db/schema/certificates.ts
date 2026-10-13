@@ -1,5 +1,12 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -68,6 +75,12 @@ export const certificates = pgTable(
     }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     revokedReason: text('revoked_reason'),
+    /**
+     * Provenance: true for a certificate issued BEFORE BlakPath and migrated in
+     * by a legacy import. It carries no BlakPath digital seal (no PDF, payload
+     * hash or signature); public verification reports it as a legacy record.
+     */
+    issuedBeforeBlakpath: boolean('issued_before_blakpath').notNull().default(false),
     ...timestamps,
     ...rowVersion,
     ...softDelete,

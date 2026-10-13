@@ -4,7 +4,9 @@ import {
   canRevoke,
   canSign,
   eligibleDecision,
+  generateVerificationCode,
   isValid,
+  isValidOnVerification,
   isWellFormedVerificationCode,
   makeCertificateReference,
 } from '@/domains/certificates/status';
@@ -47,7 +49,55 @@ describe('certificate status rules', () => {
   });
 });
 
+describe('public verification validity', () => {
+  const sealed = { payloadIntact: true, signatureValid: true };
+  const unsealed = { payloadIntact: false, signatureValid: false };
+
+  it('a BlakPath certificate needs status signed AND an intact seal', () => {
+    expect(
+      isValidOnVerification({ status: 'signed', issuedBeforeBlakpath: false, ...sealed }),
+    ).toBe(true);
+    expect(
+      isValidOnVerification({
+        status: 'signed',
+        issuedBeforeBlakpath: false,
+        ...unsealed,
+      }),
+    ).toBe(false);
+    expect(
+      isValidOnVerification({
+        status: 'revoked',
+        issuedBeforeBlakpath: false,
+        ...sealed,
+      }),
+    ).toBe(false);
+  });
+
+  it('a legacy certificate verifies as such without a seal, unless revoked', () => {
+    expect(
+      isValidOnVerification({
+        status: 'signed',
+        issuedBeforeBlakpath: true,
+        ...unsealed,
+      }),
+    ).toBe(true);
+    expect(
+      isValidOnVerification({
+        status: 'revoked',
+        issuedBeforeBlakpath: true,
+        ...unsealed,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('reference + verification code helpers', () => {
+  it('mints well-formed, distinct verification codes', () => {
+    const a = generateVerificationCode();
+    expect(isWellFormedVerificationCode(a)).toBe(true);
+    expect(generateVerificationCode()).not.toBe(a);
+  });
+
   it('builds a stable, prefixed reference', () => {
     const ref = makeCertificateReference('018f5b3a-0000-7000-8000-0000000abcde', 2026);
     expect(ref).toMatch(/^CERT-2026-[0-9A-F]{8}$/);

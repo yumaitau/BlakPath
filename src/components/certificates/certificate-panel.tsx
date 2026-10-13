@@ -31,6 +31,10 @@ export interface PanelCertificate {
   status: string;
   decisionId: string;
   revokedReason: string | null;
+  /** Migrated from the organisation's prior system: no PDF, no BlakPath seal. */
+  issuedBeforeBlakpath: boolean;
+  /** Present for legacy certificates so staff can share the verification link. */
+  verificationCode: string | null;
 }
 
 const STATUS_CLASS: Record<string, string> = {
@@ -152,6 +156,11 @@ export function CertificatePanel({
                 >
                   {c.status}
                 </span>
+                {c.issuedBeforeBlakpath ? (
+                  <span className="text-muted-foreground mt-1 text-xs">
+                    Issued before BlakPath (migrated record, no digital seal)
+                  </span>
+                ) : null}
                 {c.revokedReason ? (
                   <span className="text-muted-foreground mt-1 text-xs">
                     Revoked: {c.revokedReason}
@@ -169,11 +178,18 @@ export function CertificatePanel({
                     {busy === `sign:${c.id}` ? 'Signing…' : 'Sign'}
                   </Button>
                 ) : null}
+                {c.issuedBeforeBlakpath && c.verificationCode ? (
+                  <Button asChild variant="outline" size="sm">
+                    <a href={`/verify/${c.verificationCode}`}>Verification page</a>
+                  </Button>
+                ) : null}
                 {c.status === 'signed' ? (
                   <>
-                    <Button asChild variant="outline" size="sm">
-                      <a href={`/api/certificates/${c.id}/download`}>Download</a>
-                    </Button>
+                    {c.issuedBeforeBlakpath ? null : (
+                      <Button asChild variant="outline" size="sm">
+                        <a href={`/api/certificates/${c.id}/download`}>Download</a>
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="destructive"
