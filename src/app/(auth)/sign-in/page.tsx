@@ -9,15 +9,17 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { signIn } from '@/lib/auth/client';
+import { safeReturnPath } from '@/lib/auth/return-path';
 
 /**
  * Email + password sign-in.
  *
- * On success we redirect to `/dashboard`. If the account has two-factor
- * enabled, the better-auth client's `onTwoFactorRedirect` hook takes over and
- * routes to `/sign-in/two-factor`, so we do not navigate ourselves in that
- * case — we simply keep the button in its pending state until the redirect
- * happens.
+ * On success we redirect to `/home`, which sends applicant-only accounts to
+ * the portal and everyone else to the staff dashboard. If the account has
+ * two-factor enabled, the better-auth client's `onTwoFactorRedirect` hook
+ * takes over and routes to `/sign-in/two-factor`, so we do not navigate
+ * ourselves in that case. We simply keep the button pending until that
+ * redirect happens.
  *
  * Error copy is deliberately generic: we never reveal whether an email address
  * has an account, only that the details didn't match.
@@ -26,12 +28,10 @@ import { signIn } from '@/lib/auth/client';
 const GENERIC_ERROR =
   'Those sign-in details didn’t match. Check your email and password and try again.';
 
-/** Keep invitation sign-in continuity without accepting arbitrary redirect URLs. */
-function safeReturnPath(): string {
+/** Keep invitation and portal return paths without accepting arbitrary URLs. */
+function returnPathFromLocation(): string {
   const requested = new URLSearchParams(window.location.search).get('returnTo');
-  return requested && /^\/join\/[A-Za-z0-9_-]{20,200}$/.test(requested)
-    ? requested
-    : '/dashboard';
+  return safeReturnPath(requested);
 }
 
 export default function SignInPage() {
@@ -53,7 +53,7 @@ export default function SignInPage() {
     setError(null);
     setPending(true);
 
-    const returnPath = safeReturnPath();
+    const returnPath = returnPathFromLocation();
     const { error: signInError } = await signIn.email({
       email,
       password,
@@ -86,7 +86,7 @@ export default function SignInPage() {
       return;
     }
 
-    window.location.href = safeReturnPath();
+    window.location.href = returnPathFromLocation();
   }
 
   return (

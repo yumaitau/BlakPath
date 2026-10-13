@@ -26,7 +26,10 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 
 1. Complete `docs/production-readiness.md` release gate in exact EKS images.
 2. Run EKS restore drill (`docs/eks-runbook.md`), attach record.
-3. Flip status to `active`, open `publicApplicationsOpen` when ready.
+3. Flip status to `active`, open `publicApplicationsOpen` when ready. Opening
+   that flag lists the organisation in the public directory and lets invited
+   members start an application. Applicant-facing copy still needs
+   community-partner review (`docs/applicant-portal.md`).
 4. Confirm audit chain clean, alarms firing to on-call, SES suppression flow
    wired (`POST /api/email/events` reachable from SNS).
 

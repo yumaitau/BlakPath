@@ -54,7 +54,7 @@ export default function TwoFactorPage() {
       return;
     }
 
-    window.location.href = '/dashboard';
+    window.location.href = '/home';
   }
 
   function switchMode(next: Mode) {

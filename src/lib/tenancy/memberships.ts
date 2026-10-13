@@ -1,6 +1,6 @@
 import { and, asc, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
-import { memberships } from '@/db/schema/membership';
+import { membershipRoles, memberships, roles } from '@/db/schema/membership';
 import { organisations } from '@/db/schema/tenancy';
 import type { ServerSession } from '@/lib/auth/session';
 
@@ -49,6 +49,30 @@ export async function listMembershipsForUser(userId: string): Promise<UserMember
     slug: row.slug,
     status: row.status,
   }));
+}
+
+/**
+ * Role slugs on the caller's active membership. `userId` comes from the
+ * session. Used to choose the applicant portal or the staff shell before any
+ * staff navigation is rendered.
+ */
+export async function listRoleSlugsForUserOrganisation(
+  userId: string,
+  organisationId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ slug: roles.slug })
+    .from(memberships)
+    .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
+    .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
+    .where(
+      and(
+        eq(memberships.userId, userId),
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.status, 'active'),
+      ),
+    );
+  return rows.map((row) => row.slug);
 }
 
 /**

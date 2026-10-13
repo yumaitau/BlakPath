@@ -2,9 +2,11 @@ import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { StaffShell } from '@/components/staff/staff-shell';
 import { getServerSession } from '@/lib/auth/session';
+import { isApplicantOnlyRoleSet } from '@/lib/permissions/roles';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,
+  listRoleSlugsForUserOrganisation,
 } from '@/lib/tenancy/memberships';
 
 /**
@@ -25,6 +27,14 @@ export default async function StaffLayout({ children }: { children: ReactNode })
   if (!organisations.some((org) => org.organisationId === activeOrganisationId)) {
     redirect('/select-organisation');
   }
+
+  // Redirect before the staff shell is rendered. An applicant-only membership
+  // must not receive staff navigation, even on a direct /dashboard request.
+  const roleSlugs = await listRoleSlugsForUserOrganisation(
+    session.user.id,
+    activeOrganisationId,
+  );
+  if (isApplicantOnlyRoleSet(roleSlugs)) redirect('/portal');
 
   return (
     <div className="flex min-h-dvh flex-col">

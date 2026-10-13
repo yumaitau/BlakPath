@@ -16,7 +16,12 @@ export const metadata: Metadata = {
 };
 
 /** A pre-tenant route, intentionally outside the guarded staff route group. */
-export default async function SelectOrganisationPage() {
+export default async function SelectOrganisationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ choose?: string }>;
+}) {
+  const { choose } = await searchParams;
   const session = await getServerSession();
   if (!session) {
     return (
@@ -38,10 +43,11 @@ export default async function SelectOrganisationPage() {
   const organisations = await listMembershipsForUser(session.user.id);
   const activeOrganisationId = getActiveOrganisationId(session);
   if (
+    choose !== '1' &&
     activeOrganisationId &&
     organisations.some((org) => org.organisationId === activeOrganisationId)
   ) {
-    redirect('/dashboard');
+    redirect('/home');
   }
 
   return (

@@ -260,3 +260,22 @@ export function permissionsForRole(slug: SystemRoleSlug): readonly Permission[] 
 export function isSystemRoleSlug(value: string): value is SystemRoleSlug {
   return Object.prototype.hasOwnProperty.call(SYSTEM_ROLES, value);
 }
+
+/**
+ * Roles that only use the applicant portal. A membership whose every role is
+ * in this set must never be shown the staff shell.
+ */
+export const APPLICANT_PORTAL_ROLE_SLUGS = [
+  'applicant',
+  'applicant-representative',
+] as const;
+
+/** True when the actor holds at least one role and every role is applicant-facing. */
+export function isApplicantOnlyRoleSet(roleSlugs: readonly string[]): boolean {
+  return (
+    roleSlugs.length > 0 &&
+    roleSlugs.every((slug) =>
+      (APPLICANT_PORTAL_ROLE_SLUGS as readonly string[]).includes(slug),
+    )
+  );
+}

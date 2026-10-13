@@ -8,6 +8,7 @@ import {
   clients,
   membershipRoles,
   memberships,
+  organisations,
   roles,
   teamMemberships,
   users,
@@ -22,6 +23,9 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { isPubliclyAcceptingApplications } from '@/domains/organisations/public-applications';
+import { applicantMayActOnCase } from '@/lib/auth/landing';
+import { isApplicantOnlyRoleSet } from '@/lib/permissions/roles';
 import { canReadApplication, readsAllApplications } from './policies';
 import {
   addNoteSchema,
@@ -278,11 +282,35 @@ export async function createApplication(
 
   const input = createApplicationSchema.parse(rawInput);
   const scope = currentScope();
+  const applicantOnly = isApplicantOnlyRoleSet(ctx.roles);
+
+  // Applicant accounts can start a matter only when the organisation has
+  // opened public applications. Staff intake is unchanged when the flag is off.
+  if (applicantOnly) {
+    const [org] = await scope.db
+      .select({
+        status: organisations.status,
+        publicApplicationsOpen: organisations.publicApplicationsOpen,
+      })
+      .from(organisations)
+      .where(eq(organisations.id, scope.organisationId))
+      .limit(1);
+    if (!org || !isPubliclyAcceptingApplications(org)) {
+      await recordAudit({
+        action: 'application.created',
+        resourceType: 'application',
+        result: 'denied',
+        reason: 'public applications are not open',
+      });
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+  }
 
   // Optional client link must belong to this tenant, else the matter could
-  // silently attach to another tenant's person record.
+  // silently attach to another tenant's person record. Applicants cannot
+  // attach a client or name a different person as the applicant.
   let clientId: string | null = null;
-  if (input.clientId) {
+  if (!applicantOnly && input.clientId) {
     const [client] = await scope.db
       .select({ id: clients.id })
       .from(clients)
@@ -308,9 +336,9 @@ export async function createApplication(
         id,
         reference,
         applicantName: input.applicantName,
-        applicantUserId: input.applicantUserId ?? null,
+        applicantUserId: applicantOnly ? ctx.userId : (input.applicantUserId ?? null),
         clientId,
-        priority: input.priority,
+        priority: applicantOnly ? 'normal' : input.priority,
         intake: input.intake ?? null,
         createdByUserId: ctx.userId,
         status: 'draft',
@@ -335,7 +363,7 @@ export async function createApplication(
     resourceId: id,
     result: 'success',
     after: {
-      data: { reference, status: 'draft', priority: input.priority },
+      data: { reference, status: 'draft', priority: row.priority },
       allow: ['reference', 'status', 'priority'],
     },
   });
@@ -475,6 +503,19 @@ export async function transitionApplication(
   const existing = await loadApplication(id);
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
+  // Applicant-only actors cannot move someone else's matter, even if a
+  // permission key such as application:create would otherwise match.
+  if (!applicantMayActOnCase(ctx.roles, ctx.userId, existing.applicantUserId)) {
+    await recordAudit({
+      action: TRANSITIONS[action].audit,
+      resourceType: 'application',
+      resourceId: id,
+      result: 'denied',
+      reason: 'applicant-only actor is not the applicant',
+    });
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+
   const from = existing.status as ApplicationStatus;
   // Throws ApplicationWorkflowError if the move is illegal from `from`.
   const to = nextStatus(action, from);
@@ -547,8 +588,11 @@ export async function listApplications(
     filters.push(eq(applications.applicantUserId, input.applicantUserId));
   }
 
-  // Narrow to own/assigned/team unless the actor may read the whole tenant.
-  if (!readsAllApplications(subject)) {
+  // Applicant-only accounts see their own matters and nothing else. Staff
+  // without read-any still see own, assigned, and team matters.
+  if (isApplicantOnlyRoleSet(ctx.roles)) {
+    filters.push(eq(applications.applicantUserId, subject.userId));
+  } else if (!readsAllApplications(subject)) {
     filters.push(
       or(
         eq(applications.applicantUserId, subject.userId),

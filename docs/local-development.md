@@ -70,11 +70,13 @@ pnpm db:migrate     # apply migrations (tsx src/db/migrate.ts)
 pnpm db:seed        # seed permission catalogue, system roles, dev org/user
 ```
 
-The non-production seed prints two synthetic test accounts. The administrator
+The non-production seed prints synthetic test accounts. The administrator
 combines the operational roles needed to exercise every staff screen locally.
 The spare staff account starts with no organisation membership so the Playwright
-suite can verify role assignment, suspension, restoration and revocation. These
-development-only role combinations are never a production onboarding model.
+suite can verify role assignment, suspension, restoration and revocation. The
+applicant account holds only the applicant role and is used by the portal
+suite. These development-only role combinations are never a production
+onboarding model.
 
 Working on the schema:
 

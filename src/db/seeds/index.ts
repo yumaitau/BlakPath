@@ -6,6 +6,10 @@ import { db, sqlClient } from '@/db/client';
 import { env } from '@/lib/env';
 import {
   accounts,
+  applicationNotes,
+  applicationStatusHistory,
+  applications,
+  evidenceRequests,
   memberships,
   membershipRoles,
   organisations,
@@ -228,6 +232,194 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
     });
   }
   console.info(`         spare:    ${staffEmail} / ${staffPassword} (no membership)`);
+
+  await seedApplicantPortalFixture({
+    organisationId,
+    adminUserId: userId,
+    applicantRoleId: roleIdBySlug.get('applicant'),
+  });
+}
+
+/**
+ * Non-production applicant account plus one own case and one other case.
+ * The portal end-to-end test uses these references. Re-running the seed does
+ * not duplicate them.
+ */
+async function seedApplicantPortalFixture(input: {
+  organisationId: string;
+  adminUserId: string;
+  applicantRoleId: string | undefined;
+}): Promise<void> {
+  const applicantEmail = 'applicant@blakpath.local';
+  const applicantPassword = 'blakpath-dev-applicant-2026';
+  const [existingApplicant] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, applicantEmail))
+    .limit(1);
+  const applicantUserId = existingApplicant?.id ?? uuidv7();
+  if (!existingApplicant) {
+    await db.insert(users).values({
+      id: applicantUserId,
+      name: 'Dev Applicant',
+      email: applicantEmail,
+      emailVerified: true,
+    });
+    await db.insert(accounts).values({
+      id: uuidv7(),
+      userId: applicantUserId,
+      providerId: 'credential',
+      accountId: applicantUserId,
+      password: await argon2Hash(applicantPassword, ARGON2_OPTIONS),
+    });
+  }
+
+  const [existingMembership] = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, input.organisationId),
+        eq(memberships.userId, applicantUserId),
+      ),
+    )
+    .limit(1);
+  const membershipId = existingMembership?.id ?? uuidv7();
+  if (!existingMembership) {
+    await db.insert(memberships).values({
+      id: membershipId,
+      organisationId: input.organisationId,
+      userId: applicantUserId,
+      status: 'active',
+    });
+  }
+  if (!input.applicantRoleId) {
+    throw new Error('Seed requires the applicant system role.');
+  }
+  await db
+    .insert(membershipRoles)
+    .values({ id: uuidv7(), membershipId, roleId: input.applicantRoleId })
+    .onConflictDoNothing({
+      target: [membershipRoles.membershipId, membershipRoles.roleId],
+    });
+
+  const [ownCase] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.organisationId, input.organisationId),
+        eq(applications.reference, 'APP-OWN-CASE'),
+      ),
+    )
+    .limit(1);
+  if (!ownCase) {
+    const applicationId = uuidv7();
+    await db.insert(applications).values({
+      id: applicationId,
+      organisationId: input.organisationId,
+      reference: 'APP-OWN-CASE',
+      applicantUserId,
+      applicantName: 'Dev Applicant',
+      status: 'awaiting_evidence',
+      createdByUserId: input.adminUserId,
+      submittedAt: new Date('2026-09-02T01:00:00.000Z'),
+    });
+    await db.insert(applicationStatusHistory).values([
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: null,
+        toStatus: 'draft',
+        action: 'create',
+        actorUserId: applicantUserId,
+        createdAt: new Date('2026-09-01T01:00:00.000Z'),
+      },
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: 'draft',
+        toStatus: 'submitted',
+        action: 'submit',
+        actorUserId: applicantUserId,
+        createdAt: new Date('2026-09-02T01:00:00.000Z'),
+      },
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: 'submitted',
+        toStatus: 'awaiting_evidence',
+        action: 'request_evidence',
+        actorUserId: input.adminUserId,
+        createdAt: new Date('2026-09-03T01:00:00.000Z'),
+      },
+    ]);
+    await db.insert(applicationNotes).values([
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        authorUserId: input.adminUserId,
+        body: 'Please bring a birth certificate if you have one.',
+        visibility: 'shared',
+      },
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        authorUserId: input.adminUserId,
+        body: 'Internal staffing note not for the applicant.',
+        visibility: 'staff',
+      },
+    ]);
+    await db.insert(evidenceRequests).values({
+      id: uuidv7(),
+      organisationId: input.organisationId,
+      applicationId,
+      requestedByUserId: input.adminUserId,
+      description: 'A photo of a birth certificate, if you have one.',
+      status: 'open',
+    });
+  }
+
+  const [otherCase] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.organisationId, input.organisationId),
+        eq(applications.reference, 'APP-OTHER-CASE'),
+      ),
+    )
+    .limit(1);
+  if (!otherCase) {
+    await db.insert(applications).values({
+      id: uuidv7(),
+      organisationId: input.organisationId,
+      reference: 'APP-OTHER-CASE',
+      applicantUserId: input.adminUserId,
+      applicantName: 'Someone Else',
+      status: 'submitted',
+      createdByUserId: input.adminUserId,
+    });
+  }
+
+  await db
+    .insert(organisations)
+    .values({
+      id: uuidv7(),
+      legalName: 'Closed Directory Organisation',
+      slug: 'closed-org',
+      status: 'active',
+      publicApplicationsOpen: false,
+    })
+    .onConflictDoNothing({ target: organisations.slug });
+
+  console.info(`         applicant: ${applicantEmail} / ${applicantPassword}`);
+  console.info('         portal:    APP-OWN-CASE (own) and APP-OTHER-CASE (not theirs)');
 }
 
 async function main(): Promise<void> {
