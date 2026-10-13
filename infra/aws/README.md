@@ -9,6 +9,13 @@ with resources owned by the production environment.
   the execution role can inject one named runtime secret into the tasks.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
+- `escrow-vault.example.yaml` is the optional key escrow vault. Deploy it only
+  in a dedicated escrow account, never the workload account. Its RSA-4096 key
+  only decrypts sealed escrow items, under dual control (officer A enables the
+  key and reads packages; officer B decrypts). Packages sit in an Object Lock
+  (compliance) bucket. Key and bucket policies deny the workload account and
+  every principal outside the vault account; an Access Analyzer gives the
+  evidence. See [`docs/key-escrow-runbook.md`](../../docs/key-escrow-runbook.md).
 
 Network boundaries expected by these templates:
 

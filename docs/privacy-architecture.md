@@ -53,7 +53,10 @@ database. These are protected with **envelope encryption**:
   production.
 - `organisation_keys` records custody mode, key ARN, version, status
   (`active`, `disabled`, `pending_deletion`, `unavailable`) and whether an
-  escrow copy exists. Changes are appended to the platform audit chain.
+  escrow copy exists. Escrow is opt-in, needs a signed consent reference and
+  the escrow package digest, and is cleared on rotation
+  ([`key-escrow-runbook.md`](key-escrow-runbook.md)). Changes are appended to
+  the platform audit chain.
 - A disabled or unreachable key fails closed (`TenantKeyUnavailableError`).
   The API returns 423 or 503 with code `TENANT_KEY_UNAVAILABLE`. There is no
   plaintext fallback. Unwrapped data keys stay in a process-local cache for at

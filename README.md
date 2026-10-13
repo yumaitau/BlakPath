@@ -218,6 +218,7 @@ BlakPath/
 | [`docs/privacy-architecture.md`](docs/privacy-architecture.md)         | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
 | [`docs/production-readiness.md`](docs/production-readiness.md)         | Production release gate, monitoring, backups and restore drills                                |
 | [`docs/operations-runbook.md`](docs/operations-runbook.md)             | Alert signals and incident response actions                                                    |
+| [`docs/key-escrow-runbook.md`](docs/key-escrow-runbook.md)             | Optional key escrow: offline ceremony CLI, escrow vault, dual-control release, drills          |
 | [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md) | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |
 | [`docs/local-development.md`](docs/local-development.md)               | Setup, services, commands, testing, troubleshooting                                            |
 | [`docs/council-trust-model.md`](docs/council-trust-model.md)           | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
