@@ -46,6 +46,7 @@ Key local defaults (see `.env.example`):
 | `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                                  |
 | `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                                        |
 | `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — external tool access stays hidden. Must never decide/score/infer |
+| `STAFF_IDLE_TIMEOUT_MINUTES`                  | `30`                                                   | Staff UI inactivity sign-out (5-720)                                              |
 
 ## Local services (Docker)
 

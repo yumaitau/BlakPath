@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { CURRENT_PATH_HEADER } from '@/lib/auth/return-to';
 import { env } from '@/lib/env';
 import { clientIpForLimits, originRequestAllowed } from '@/lib/http/client-ip';
 import {
@@ -20,7 +21,21 @@ import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
  * probes stay open. Cookie-authenticated `/api` mutations must come from the
  * app origin with a JSON content type. Authorisation still happens in the
  * route handlers.
+ *
+ * Page requests also get the requested path forwarded as a request header, so
+ * a server-side redirect to sign-in (expired session) can carry `returnTo` and
+ * bring the user back. That header makes no access decision; any
+ * client-supplied value is dropped here, and every consumer still passes it
+ * through `safeReturnTo` before use.
  */
+
+/** `pathname?search` for the current page, minus the RSC cache-buster. */
+function currentPagePath(url: URL): string {
+  const search = new URLSearchParams(url.search);
+  search.delete('_rsc');
+  const query = search.toString();
+  return query ? `${url.pathname}?${query}` : url.pathname;
+}
 
 function subjectFrom(pathname: string, prefix: string): string | null {
   if (!pathname.startsWith(`${prefix}/`)) return null;
@@ -105,6 +120,10 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-nonce', nonce);
+  requestHeaders.delete(CURRENT_PATH_HEADER);
+  if (!pathname.startsWith('/api/')) {
+    requestHeaders.set(CURRENT_PATH_HEADER, currentPagePath(request.nextUrl));
+  }
   requestHeaders.set('Content-Security-Policy', contentSecurityPolicy);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set('Content-Security-Policy', contentSecurityPolicy);

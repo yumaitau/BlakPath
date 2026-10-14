@@ -90,6 +90,19 @@ when that value stays above 48.
    returns 200, then confirm the alarm returns to OK. Cached readiness can lag
    the recovery by about five seconds.
 
+## Error page reference (`request error`)
+
+Staff who hit the branded 500 page see a **Reference** to quote to support.
+
+1. A numeric reference is the Next.js error `digest`. Search the structured logs
+   for the `request error` event with that `digest`; it carries the route
+   pattern (`routePath`, never the concrete URL), `routeType`, method and the
+   correlation/request ids.
+2. A reference starting `web-` was raised in the browser and has no server log
+   line. Ask for the page and the time it happened instead.
+3. A 403 ("Error 403") is an access decision, not an outage: it never produces a
+   `request error` event. Check the person's role and membership instead.
+
 ## Backup or restore failure
 
 Stop the drill or recovery, preserve its target, and do not promote a partial
