@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EVIDENCE_RECEIPT_CHANNELS } from '@/db/schema/enums';
 import { isAllowedContentType, MAX_EVIDENCE_BYTES } from './status';
 
 /**
@@ -37,16 +38,82 @@ const fileNameSchema = z
     { message: 'Filename contains path separators or control characters.' },
   );
 
-/** Request a presigned upload slot for a new piece of evidence. */
-export const requestUploadSchema = z.object({
-  fileName: fileNameSchema,
-  contentType: z.string().refine(isAllowedContentType, {
-    message: 'This file type is not accepted.',
-  }),
-  sizeBytes: z.coerce.number().int().positive().max(MAX_EVIDENCE_BYTES),
-  /** Optional link to the staff request this upload fulfils. */
-  fulfilsRequestId: z.uuid().optional(),
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** True when `value` is a real civil date, not just well-shaped digits. */
+function isRealCalendarDate(value: string): boolean {
+  const match = ISO_DATE.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  return (
+    utc.getUTCFullYear() === year &&
+    utc.getUTCMonth() === month - 1 &&
+    utc.getUTCDate() === day
+  );
+}
+
+/**
+ * Latest civil date that may be recorded as "date received". Sydney is the
+ * zone the organisations using BlakPath record receipt in. A date-only value
+ * has no time, so the comparison is the calendar day, not an instant.
+ */
+export function latestReceiptDate(now = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+const receivedOnSchema = z
+  .string()
+  .regex(ISO_DATE, 'Enter the date received as YYYY-MM-DD.')
+  .refine(isRealCalendarDate, { message: 'That date received is not a real date.' })
+  .refine((value) => value <= latestReceiptDate(), {
+    message: 'Date received cannot be in the future.',
+  });
+
+const receiptChannelSchema = z.enum(EVIDENCE_RECEIPT_CHANNELS);
+
+/**
+ * Channel and date for evidence a staff member received for an applicant.
+ * Both are required together. Applicant uploads omit them.
+ */
+export const onBehalfReceiptSchema = z.object({
+  receiptChannel: receiptChannelSchema,
+  receivedOn: receivedOnSchema,
 });
+
+/** Request a presigned upload slot for a new piece of evidence. */
+export const requestUploadSchema = z
+  .object({
+    fileName: fileNameSchema,
+    contentType: z.string().refine(isAllowedContentType, {
+      message: 'This file type is not accepted.',
+    }),
+    sizeBytes: z.coerce.number().int().positive().max(MAX_EVIDENCE_BYTES),
+    /** Optional link to the staff request this upload fulfils. */
+    fulfilsRequestId: z.uuid().optional(),
+    /** Set only when recording evidence received for an applicant. */
+    receiptChannel: receiptChannelSchema.optional(),
+    /** Civil date received. Required together with `receiptChannel`. */
+    receivedOn: receivedOnSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    const hasChannel = value.receiptChannel !== undefined;
+    const hasDate = value.receivedOn !== undefined;
+    if (hasChannel !== hasDate) {
+      context.addIssue({
+        code: 'custom',
+        path: [hasChannel ? 'receivedOn' : 'receiptChannel'],
+        message: 'Receipt channel and date received must be provided together.',
+      });
+    }
+  });
 export type RequestUploadInput = z.input<typeof requestUploadSchema>;
 
 /** Record an administrative classification on a piece of evidence. */

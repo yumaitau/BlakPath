@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
+import { SessionWatch } from '@/components/auth/session-watch';
 import { StaffShell } from '@/components/staff/staff-shell';
 import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
+import { env } from '@/lib/env';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { visibleStaffTools } from '@/lib/navigation/staff-tools';
 import { loadStaffShell } from '@/lib/tenancy/staff-shell';
@@ -32,6 +34,7 @@ export default async function KeyCustodyLayout({ children }: { children: ReactNo
       <main id="main-content" tabIndex={-1} className="flex-1">
         {children}
       </main>
+      <SessionWatch idleTimeoutMinutes={env.STAFF_IDLE_TIMEOUT_MINUTES} />
     </div>
   );
 }

@@ -246,6 +246,13 @@
       "when": 1791987841280,
       "tag": "0034_audit_free_text_off_chain",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791989775691,
+      "tag": "0035_evidence_receipt_channel",
+      "breakpoints": true
     }
   ]
 }

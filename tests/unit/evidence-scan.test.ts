@@ -44,12 +44,24 @@ vi.mock('@/lib/queues', () => ({ addJob: vi.fn(), QueueName: { MalwareScan: 'sca
 
 let objectBytes: Buffer = Buffer.alloc(0);
 let storedLength: number | undefined;
+let quarantineMissing = false;
+let promotedHead: { contentLength: number; contentType: string; etag: string } | null =
+  null;
+const notFound = () => Object.assign(new Error('NotFound'), { name: 'NotFound' });
 const storage = {
-  headObject: vi.fn(async () => ({
-    contentLength: storedLength,
-    contentType: 'application/octet-stream',
-    etag: '"etag-1"',
-  })),
+  headObject: vi.fn(async (params: { bucket: string }) => {
+    if (params.bucket === 'evidence') {
+      if (!promotedHead) throw notFound();
+      return promotedHead;
+    }
+    if (quarantineMissing) throw notFound();
+    return {
+      contentLength: storedLength,
+      contentType: 'application/octet-stream',
+      etag: '"etag-1"',
+    };
+  }),
+  isMissingObject: (err: unknown) => (err as { name?: string })?.name === 'NotFound',
   getObjectStream: vi.fn(async () => Readable.from([objectBytes])),
   deleteObject: vi.fn(async () => undefined),
   moveQuarantineToEvidence: vi.fn(async (params: { key: string }) => ({
@@ -110,6 +122,8 @@ const run = () =>
   });
 
 beforeEach(() => {
+  quarantineMissing = false;
+  promotedHead = null;
   patches.length = 0;
   scanned.length = 0;
   vi.clearAllMocks();
@@ -188,5 +202,72 @@ describe('processEvidenceScan integrity checks', () => {
     ]);
     expect(scanned).toEqual([]);
     expect(storage.moveQuarantineToEvidence).not.toHaveBeenCalled();
+  });
+});
+
+describe('processEvidenceScan missing quarantine object', () => {
+  it('rejects instead of retrying when nothing was promoted', async () => {
+    upload({
+      fixtureName: 'letter.doc',
+      fileName: 'letter.doc',
+      declaredContentType: 'application/msword',
+    });
+    quarantineMissing = true;
+    await run();
+    expect(patches).toEqual([
+      expect.objectContaining({
+        status: 'rejected',
+        scanResult: 'rejected:missing-object',
+      }),
+    ]);
+    expect(scanned).toEqual([]);
+    expect(storage.moveQuarantineToEvidence).not.toHaveBeenCalled();
+  });
+
+  it('settles a copy promoted before a crash as clean without rescanning', async () => {
+    upload({
+      fixtureName: 'letter.doc',
+      fileName: 'letter.doc',
+      declaredContentType: 'application/msword',
+    });
+    quarantineMissing = true;
+    promotedHead = {
+      contentLength: objectBytes.length,
+      contentType: 'application/msword',
+      etag: '"etag-2"',
+    };
+    await run();
+    expect(storage.getObjectStream).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket: 'evidence', ifMatch: '"etag-2"' }),
+    );
+    expect(patches).toEqual([
+      expect.objectContaining({
+        status: 'clean',
+        detectedContentType: 'application/msword',
+        sha256: createHash('sha256').update(objectBytes).digest('hex'),
+      }),
+    ]);
+    expect(scanned).toEqual([]);
+  });
+
+  it('does not treat a promoted copy of the wrong size as clean', async () => {
+    upload({
+      fixtureName: 'letter.doc',
+      fileName: 'letter.doc',
+      declaredContentType: 'application/msword',
+    });
+    quarantineMissing = true;
+    promotedHead = {
+      contentLength: objectBytes.length + 1,
+      contentType: 'application/msword',
+      etag: '"etag-2"',
+    };
+    await run();
+    expect(patches).toEqual([
+      expect.objectContaining({
+        status: 'rejected',
+        scanResult: 'rejected:missing-object',
+      }),
+    ]);
   });
 });
