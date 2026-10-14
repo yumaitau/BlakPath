@@ -14,6 +14,8 @@ import {
 import { getOrganisationKey } from '@/domains/organisation-keys';
 import { env } from '@/lib/env';
 import { clientIp } from '@/lib/http/client-ip';
+import { withRequestTenant } from '@/lib/http/tenant-route';
+import { visibleStaffTools } from '@/lib/navigation/staff-tools';
 import { loadStaffShell } from '@/lib/tenancy/staff-shell';
 
 /**
@@ -50,11 +52,21 @@ export default async function StaffLayout({ children }: { children: ReactNode })
   const key = await getOrganisationKey(activeOrganisationId);
   const locked = key && key.status !== 'active' ? key.status : null;
 
+  let tools: { href: string; label: string }[] = [];
+  try {
+    tools = await withRequestTenant((ctx) =>
+      visibleStaffTools(ctx.permissions).map(({ href, label }) => ({ href, label })),
+    );
+  } catch {
+    tools = [];
+  }
+
   return (
     <div className="flex min-h-dvh flex-col">
       <StaffShell
         organisations={organisations}
         activeOrganisationId={activeOrganisationId}
+        tools={tools}
       />
       <main id="main-content" tabIndex={-1} className="flex-1">
         {locked ? <TenantKeyUnavailable status={locked} /> : children}

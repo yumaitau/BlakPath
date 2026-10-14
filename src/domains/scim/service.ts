@@ -244,7 +244,10 @@ async function auditRoleChanges(
       organisationId,
       actorUserId: null,
       actingRole: 'scim',
-      after: { data: { role: slug, credentialId }, allow: ['role', 'credentialId'] },
+      after: {
+        data: { role: slug, scimAuthId: credentialId },
+        allow: ['role', 'scimAuthId'],
+      },
     });
   }
   for (const slug of changes.added) {
@@ -257,7 +260,10 @@ async function auditRoleChanges(
       organisationId,
       actorUserId: null,
       actingRole: 'scim',
-      after: { data: { role: slug, credentialId }, allow: ['role', 'credentialId'] },
+      after: {
+        data: { role: slug, scimAuthId: credentialId },
+        allow: ['role', 'scimAuthId'],
+      },
     });
   }
 }
@@ -400,13 +406,14 @@ export async function provisionScimUser(
       resourceType: 'membership',
       resourceId: outcome.membershipId,
       result: 'success',
-      reason: 'scim provision',
+      reason: 'scim.provision',
       organisationId,
       actorUserId: null,
       actingRole: 'scim',
       after: {
-        data: { credentialId: auth.credentialId, status: nextStatus },
-        allow: ['credentialId', 'status'],
+        // `credential*` keys are denylisted; this is the credential row id.
+        data: { scimAuthId: auth.credentialId, status: nextStatus },
+        allow: ['scimAuthId', 'status'],
       },
     });
   }

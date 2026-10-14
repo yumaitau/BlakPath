@@ -69,7 +69,7 @@ export async function POST(request: Request): Promise<Response> {
             resourceType: 'api_key',
             resourceId: keyId,
             result: 'denied',
-            reason: 'mcp:endpoint',
+            reason: 'mcp.scope_denied',
             after: mcpAuditAfter({ keyId, tool: 'endpoint', piiDisclosed: false }),
           });
           throw new AuthorizationError('POLICY_DENIED');
