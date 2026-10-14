@@ -1,6 +1,14 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { reviews, reviewComments } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import {
+  beforeConditionalWrite,
+  nextRowVersion,
+  takeVersionText,
+  versionedSelection,
+  versionMatches,
+} from '@/lib/concurrency/claim';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -34,15 +42,26 @@ function must<T>(row: T | undefined, what: string): T {
 
 /** Load a live review within the active tenant scope. */
 async function loadReview(id: string): Promise<ReviewRow | null> {
+  const loaded = await loadReviewClaim(id);
+  return loaded?.row ?? null;
+}
+
+async function loadReviewClaim(
+  id: string,
+): Promise<{ row: ReviewRow; versionText: string } | null> {
   const scope = currentScope();
   const rows = await scope.db
-    .select()
+    .select(versionedSelection(reviews))
     .from(reviews)
     .where(
       scope.where(reviews.organisationId, eq(reviews.id, id), isNull(reviews.deletedAt)),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) return null;
+  const split = takeVersionText(owned);
+  if (!split) return null;
+  return { row: split.record as ReviewRow, versionText: split.versionText };
 }
 
 /** Create a draft review on an application the actor may read. */
@@ -125,18 +144,37 @@ export async function finaliseReview(reviewId: string): Promise<ReviewRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'review:finalise');
 
-  const review = await loadReview(reviewId);
-  if (!review) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadReviewClaim(reviewId);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const review = loaded.row;
   if (!canFinalise(review.status as ReviewStatus)) {
     throw new AuthorizationError('POLICY_DENIED', 'This review cannot be finalised.');
   }
 
   const scope = currentScope();
+  await beforeConditionalWrite();
   const updated = await scope.db
     .update(reviews)
-    .set({ status: 'finalised', finalisedAt: new Date(), finalisedByUserId: ctx.userId })
-    .where(scope.where(reviews.organisationId, eq(reviews.id, reviewId)))
+    .set({
+      status: 'finalised',
+      finalisedAt: new Date(),
+      finalisedByUserId: ctx.userId,
+      version: nextRowVersion(),
+    })
+    .where(
+      scope.where(
+        reviews.organisationId,
+        eq(reviews.id, reviewId),
+        eq(reviews.status, 'draft'),
+        versionMatches(reviews.version, loaded.versionText),
+      ),
+    )
     .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError(
+      'This review changed while you were working. Refresh and try again.',
+    );
+  }
   const row = must(updated[0], 'review');
 
   await recordAudit({
@@ -156,18 +194,32 @@ export async function reopenReview(reviewId: string): Promise<ReviewRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'review:finalise');
 
-  const review = await loadReview(reviewId);
-  if (!review) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadReviewClaim(reviewId);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const review = loaded.row;
   if (!canReopen(review.status as ReviewStatus)) {
     throw new AuthorizationError('POLICY_DENIED', 'This review is not finalised.');
   }
 
   const scope = currentScope();
+  await beforeConditionalWrite();
   const updated = await scope.db
     .update(reviews)
-    .set({ status: 'draft', reopenedAt: new Date() })
-    .where(scope.where(reviews.organisationId, eq(reviews.id, reviewId)))
+    .set({ status: 'draft', reopenedAt: new Date(), version: nextRowVersion() })
+    .where(
+      scope.where(
+        reviews.organisationId,
+        eq(reviews.id, reviewId),
+        eq(reviews.status, 'finalised'),
+        versionMatches(reviews.version, loaded.versionText),
+      ),
+    )
     .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError(
+      'This review changed while you were working. Refresh and try again.',
+    );
+  }
   const row = must(updated[0], 'review');
 
   await recordAudit({

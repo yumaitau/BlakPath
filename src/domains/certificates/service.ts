@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull, ne } from 'drizzle-orm';
+import {
+  beforeConditionalWrite,
+  nextRowVersion,
+  takeVersionText,
+  versionedSelection,
+  versionMatches,
+} from '@/lib/concurrency/claim';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { customAlphabet } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
@@ -116,9 +124,16 @@ function postgresError(error: unknown): { code?: string; constraint?: string } {
 }
 
 async function loadCertificate(id: string): Promise<CertificateRow | null> {
+  const loaded = await loadCertificateClaim(id);
+  return loaded?.row ?? null;
+}
+
+async function loadCertificateClaim(
+  id: string,
+): Promise<{ row: CertificateRow; versionText: string } | null> {
   const scope = currentScope();
   const rows = await scope.db
-    .select()
+    .select(versionedSelection(certificates))
     .from(certificates)
     .where(
       scope.where(
@@ -128,7 +143,11 @@ async function loadCertificate(id: string): Promise<CertificateRow | null> {
       ),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) return null;
+  const split = takeVersionText(owned);
+  if (!split) return null;
+  return { row: split.record as CertificateRow, versionText: split.versionText };
 }
 
 /**
@@ -469,8 +488,9 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'certificate:sign');
 
-  const existing = await loadCertificate(id);
-  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadCertificateClaim(id);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const existing = loaded.row;
   if (!canSign(existing.status as CertificateStatus)) {
     throw new AuthorizationError('POLICY_DENIED', 'This certificate cannot be signed.');
   }
@@ -501,6 +521,7 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   const seal = await signCoaPayload(canonical);
   // Public half first: no stored seal may reference a key /verify cannot load.
   if (seal.publicKey) await recordSigningKey(seal.publicKey);
+  await beforeConditionalWrite();
   const updated = await scope.db
     .update(certificates)
     .set({
@@ -512,12 +533,25 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
       signature: seal.signatureB64,
       signingAlgorithm: seal.algorithm,
       signingKeyId: seal.keyId,
+      version: nextRowVersion(),
       holderBindingSalt: binding.salt,
       holderNameHash: binding.nameHash,
       holderDobHash: binding.dobHash,
     })
-    .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
+    .where(
+      scope.where(
+        certificates.organisationId,
+        eq(certificates.id, id),
+        eq(certificates.status, 'draft'),
+        versionMatches(certificates.version, loaded.versionText),
+      ),
+    )
     .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError(
+      'This certificate was already signed or changed. Refresh and try again.',
+    );
+  }
   const row = must(updated[0], 'certificate');
 
   await recordAudit({
@@ -555,8 +589,9 @@ export async function revokeCertificate(
   requirePermission(subjectFromContext(ctx), 'certificate:revoke');
 
   const input = revokeCertificateSchema.parse(rawInput);
-  const existing = await loadCertificate(id);
-  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadCertificateClaim(id);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const existing = loaded.row;
   if (!canRevoke(existing.status as CertificateStatus)) {
     throw new AuthorizationError(
       'POLICY_DENIED',
@@ -565,6 +600,7 @@ export async function revokeCertificate(
   }
 
   const scope = currentScope();
+  await beforeConditionalWrite();
   const updated = await scope.db
     .update(certificates)
     .set({
@@ -572,9 +608,22 @@ export async function revokeCertificate(
       revokedByUserId: ctx.userId,
       revokedAt: new Date(),
       revokedReason: input.reason,
+      version: nextRowVersion(),
     })
-    .where(scope.where(certificates.organisationId, eq(certificates.id, id)))
+    .where(
+      scope.where(
+        certificates.organisationId,
+        eq(certificates.id, id),
+        eq(certificates.status, 'signed'),
+        versionMatches(certificates.version, loaded.versionText),
+      ),
+    )
     .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError(
+      'This certificate was already revoked or changed. Refresh and try again.',
+    );
+  }
   const row = must(updated[0], 'certificate');
 
   await recordAudit({
@@ -585,8 +634,9 @@ export async function revokeCertificate(
     reason: 'certificate.revocation_reason',
   });
 
-  // Tell integrators the credential is no longer valid. The free-text reason
-  // stays in the audit trail only; the payload carries ids and the timestamp.
+  // Tell integrators the credential is no longer valid. Fires only after the
+  // conditional revoke above succeeded. The free-text reason stays on the
+  // certificate row; the payload carries ids and the timestamp.
   await emitWebhookEventSafe({
     organisationId: ctx.organisationId,
     event: 'certificate.revoked',

@@ -81,6 +81,14 @@ beforeEach(() => {
   state.requeued = [];
 });
 
+/** A signed certificate as the versioned claim read returns it. */
+const SIGNED_CERT = {
+  id: 'cert-1',
+  status: 'signed',
+  deletedAt: null,
+  versionText: '2026-10-14 00:00:00+00',
+};
+
 describe('certificate revocation webhook', () => {
   it('emits certificate.revoked with ids only (never the free-text reason)', async () => {
     const webhooks = await import('@/domains/webhooks');
@@ -93,7 +101,7 @@ describe('certificate revocation webhook', () => {
     state.permissions = new Set(['certificate:revoke']);
     const revokedAt = new Date('2026-10-14T00:00:00Z');
     state.results.push(
-      [{ id: 'cert-1', status: 'signed', deletedAt: null }],
+      [{ ...SIGNED_CERT }],
       [
         {
           id: 'cert-1',
@@ -121,6 +129,24 @@ describe('certificate revocation webhook', () => {
     });
     expect(JSON.stringify(state.emitted[0])).not.toContain('sensitive detail');
     expect(webhooks.isWebhookEvent('certificate.revoked')).toBe(true);
+    emit.mockRestore();
+  });
+
+  it('does not emit when the conditional revoke loses a race', async () => {
+    const webhooks = await import('@/domains/webhooks');
+    const emit = vi
+      .spyOn(webhooks, 'emitWebhookEventSafe')
+      .mockImplementation(async () => {});
+    const { revokeCertificate } = await import('@/domains/certificates/service');
+    state.permissions = new Set(['certificate:revoke']);
+    // Read sees a signed row; the versioned update then matches nothing.
+    state.results.push([{ ...SIGNED_CERT }], []);
+
+    await expect(
+      revokeCertificate('cert-1', { reason: 'Issued in error' }),
+    ).rejects.toThrow(/already revoked or changed/);
+    expect(emit).not.toHaveBeenCalled();
+    expect(state.audits).toEqual([]);
     emit.mockRestore();
   });
 });
