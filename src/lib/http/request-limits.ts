@@ -25,6 +25,15 @@ export interface RequestLimitPolicy {
 export const REQUEST_LIMITS = {
   createAccount: { scope: 'create-account', windowSec: 60, ipMax: 5, subjectMax: 5 },
   publicFormPost: { scope: 'public-form', windowSec: 60, ipMax: 20, subjectMax: 10 },
+  // Draft autosave fires after a 1.5s pause in typing, so it gets more room.
+  publicFormDraft: {
+    scope: 'public-form-draft',
+    windowSec: 60,
+    ipMax: 120,
+    subjectMax: 60,
+  },
+  // Two calls per file (presign + complete).
+  publicFormFile: { scope: 'public-form-file', windowSec: 60, ipMax: 30, subjectMax: 20 },
   formPage: { scope: 'form-page', windowSec: 60, ipMax: 60, subjectMax: 30 },
   verifyPage: { scope: 'verify-page', windowSec: 60, ipMax: 30, subjectMax: 15 },
   invitationAccept: {

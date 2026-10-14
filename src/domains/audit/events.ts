@@ -109,6 +109,9 @@ export type AuditAction =
   | 'form.invitation_opened'
   | 'form.invitation_revoked'
   | 'form.response_submitted'
+  | 'form.draft_saved'
+  | 'form.response_case_created'
+  | 'form.response_attached'
   // Search.
   | 'search.performed'
   | 'search.result_opened'

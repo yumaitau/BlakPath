@@ -6,7 +6,7 @@ import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { ApiKeyError } from '@/domains/api-keys';
 import { BreakGlassError } from '@/domains/break-glass';
 import { CalendarConflictError } from '@/domains/calendar/errors';
-import { FormTokenError } from '@/domains/forms';
+import { FormResponseLinkError, FormTokenError } from '@/domains/forms';
 import { StaffMfaRequiredError } from '@/lib/auth/staff-policy';
 import { StepUpRequiredError, UnauthenticatedError } from '@/lib/auth/session';
 import {
@@ -166,6 +166,7 @@ describe('errorResponse', () => {
       [new ConcurrencyConflictError(), 409, CONCURRENCY_CONFLICT_MESSAGE],
       [new EvidenceUploadIncompleteError('missing'), 409, 'Upload incomplete'],
       [new RetentionTargetError(), 404, 'Legal hold target does not exist'],
+      [new FormResponseLinkError(), 409, 'This response is already linked to a case.'],
       [
         new RetentionError(
           'SIGN_OFF_REQUIRED',

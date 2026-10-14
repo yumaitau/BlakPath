@@ -14,6 +14,10 @@ import {
 } from '@/components/certificates/certificate-panel';
 import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import {
+  CaseFormResponses,
+  type CaseFormResponseView,
+} from '@/components/forms/case-form-responses';
+import {
   availableActions,
   getApplicationCaseRecord,
   permissionsForAction,
@@ -22,6 +26,7 @@ import {
 import { listCertificates } from '@/domains/certificates';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
+import { listResponsesForApplication } from '@/domains/forms';
 import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
 import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
@@ -34,6 +39,7 @@ interface LoadedData {
   governance: CaseGovernanceWorkspaceProps;
   decisions: PanelDecision[];
   certificates: PanelCertificate[];
+  formResponses: CaseFormResponseView[];
 }
 
 const actionLabels: Record<string, string> = {
@@ -62,15 +68,23 @@ export default async function ApplicationDetailPage({
     // A malformed id cannot exist: refuse it like any unreadable record.
     if (!isRecordId(id)) throw new AuthorizationError('POLICY_DENIED');
     data = await withRequestTenant(async (ctx) => {
-      const [record, evidence, evidenceRequests, reviews, decisions, certificates] =
-        await Promise.all([
-          getApplicationCaseRecord(id),
-          listForApplication(id),
-          listRequestsForApplication(id),
-          listReviewsForApplication(id),
-          listDecisions(id),
-          listCertificates(id),
-        ]);
+      const [
+        record,
+        evidence,
+        evidenceRequests,
+        reviews,
+        decisions,
+        certificates,
+        formResponses,
+      ] = await Promise.all([
+        getApplicationCaseRecord(id),
+        listForApplication(id),
+        listRequestsForApplication(id),
+        listReviewsForApplication(id),
+        listDecisions(id),
+        listCertificates(id),
+        listResponsesForApplication(id),
+      ]);
       const subject = subjectFromContext(ctx);
       const application = record.application;
       const decisionDetails = await Promise.all(
@@ -190,6 +204,16 @@ export default async function ApplicationDetailPage({
           decisionId: certificate.decisionId,
           revokedReason: certificate.revokedReason,
         })),
+        formResponses: formResponses.map((response) => ({
+          id: response.id,
+          formId: response.formId,
+          formTitle: response.formTitle,
+          fields: response.fields,
+          respondentName: response.respondentName,
+          respondentEmail: response.respondentEmail,
+          submittedAt: response.submittedAt.toISOString(),
+          answers: response.answers,
+        })),
       };
     });
   } catch (error) {
@@ -226,6 +250,8 @@ export default async function ApplicationDetailPage({
         <p className="text-muted-foreground mt-4 text-sm font-medium">Case workspace</p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">{data.reference}</h1>
       </header>
+
+      <CaseFormResponses responses={data.formResponses} />
 
       <ApplicationCaseWorkspace
         key={`case:${data.workspace.status}`}

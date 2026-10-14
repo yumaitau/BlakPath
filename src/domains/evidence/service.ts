@@ -251,6 +251,187 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
 }
 
 /**
+ * Start a public form file upload. The caller has already resolved the
+ * invitation token. Bytes are presigned into quarantine, same as a case upload.
+ * `applicationId` is set only when the form is already linked to a case in the
+ * same organisation; otherwise the row waits on `formInvitationId` until staff
+ * link the response.
+ */
+export async function requestFormFileUpload(input: {
+  organisationId: string;
+  applicationId: string | null;
+  formInvitationId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+}): Promise<{ evidence: EvidenceRow; upload: PresignedUpload }> {
+  const scope = scopeFor(input.organisationId);
+  const id = uuidv7();
+  const key = objectKey(
+    scope.organisationId,
+    ...(input.applicationId
+      ? (['applications', input.applicationId, 'evidence', id] as const)
+      : (['forms', input.formInvitationId, 'evidence', id] as const)),
+  );
+
+  const inserted = await scope.db
+    .insert(evidence)
+    .values(
+      scope.insertValues({
+        id,
+        applicationId: input.applicationId,
+        formInvitationId: input.formInvitationId,
+        uploadedByUserId: null,
+        fileName: input.fileName,
+        declaredContentType: input.contentType,
+        sizeBytes: input.sizeBytes,
+        status: 'pending',
+        quarantineKey: key,
+      }),
+    )
+    .returning();
+  const row = must(inserted[0], 'evidence');
+
+  const upload = await presignUpload({
+    organisationId: scope.organisationId,
+    key,
+    contentType: input.contentType,
+    contentLength: input.sizeBytes,
+  });
+
+  return { evidence: row, upload };
+}
+
+/**
+ * Confirm a public form file landed in quarantine and enqueue the same malware
+ * scan as every other upload. Idempotent once the row has left `pending`. A
+ * missing object or size mismatch leaves the row `pending`, like a case upload.
+ */
+export async function completeFormFileUpload(input: {
+  organisationId: string;
+  formInvitationId: string;
+  evidenceId: string;
+  correlationId: string;
+}): Promise<EvidenceRow> {
+  const scope = scopeFor(input.organisationId);
+  const rows = await scope.db
+    .select()
+    .from(evidence)
+    .where(
+      scope.where(
+        evidence.organisationId,
+        eq(evidence.id, input.evidenceId),
+        eq(evidence.formInvitationId, input.formInvitationId),
+        isNull(evidence.deletedAt),
+      ),
+    )
+    .limit(1);
+  const existing = rows[0];
+  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  if (existing.status !== 'pending') return existing;
+  if (!existing.quarantineKey) {
+    throw new EvidenceUploadIncompleteError('missing');
+  }
+
+  const head = await headObject({
+    bucket: QUARANTINE_BUCKET,
+    key: existing.quarantineKey,
+    organisationId: scope.organisationId,
+  }).catch((err: unknown) => {
+    if (isMissingObject(err)) return null;
+    throw err;
+  });
+  const problem = quarantineUploadProblem(existing.sizeBytes, head);
+  if (problem) throw new EvidenceUploadIncompleteError(problem);
+
+  const publicActor = {
+    organisationId: scope.organisationId,
+    actorUserId: null,
+    actingRole: 'public',
+    sessionId: null,
+    correlationId: input.correlationId,
+  } as const;
+
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({ status: 'quarantined' })
+      .where(
+        scope.where(
+          evidence.organisationId,
+          eq(evidence.id, input.evidenceId),
+          eq(evidence.status, 'pending'),
+        ),
+      )
+      .returning();
+    const saved = updated[0];
+    if (!saved) return null;
+
+    // Ids only. Never the file name.
+    const after: Record<string, string> = { formInvitationId: input.formInvitationId };
+    if (saved.applicationId) after.applicationId = saved.applicationId;
+    await recordAudit(
+      {
+        ...publicActor,
+        action: 'evidence.uploaded',
+        resourceType: 'evidence',
+        resourceId: input.evidenceId,
+        result: 'success',
+        after: { data: after, allow: ['applicationId', 'formInvitationId'] },
+      },
+      tx,
+    );
+    await recordAudit(
+      {
+        ...publicActor,
+        action: 'evidence.scan_started',
+        resourceType: 'evidence',
+        resourceId: input.evidenceId,
+        result: 'success',
+      },
+      tx,
+    );
+    return saved;
+  });
+  // A concurrent complete already moved it on.
+  if (!row) return existing;
+
+  // Enqueue only after the quarantine and its audit have committed. A lost
+  // enqueue is redriven by the stuck-scan sweeper.
+  await enqueueMalwareScan({
+    organisationId: scope.organisationId,
+    correlationId: input.correlationId,
+    evidenceId: input.evidenceId,
+    jobId: input.evidenceId,
+  });
+
+  return row;
+}
+
+/**
+ * Point form-file evidence that has no case yet at the case staff just linked.
+ * Rows already attached to a case are left alone.
+ */
+export async function attachFormEvidenceToApplication(
+  formInvitationId: string,
+  applicationId: string,
+  tx?: AuditTransaction,
+): Promise<void> {
+  const scope = currentScope();
+  await (tx ?? scope.db)
+    .update(evidence)
+    .set({ applicationId })
+    .where(
+      scope.where(
+        evidence.organisationId,
+        eq(evidence.formInvitationId, formInvitationId),
+        isNull(evidence.applicationId),
+        isNull(evidence.deletedAt),
+      ),
+    );
+}
+
+/**
  * Mint a short-lived download URL for a piece of evidence. Only CLEAN,
  * promoted objects are ever servable, and only to a caller with
  * `evidence:download` who may read the parent application.
@@ -264,8 +445,11 @@ export async function getDownloadUrl(
   const row = await loadEvidence(evidenceId);
   if (!row) throw new AuthorizationError('POLICY_DENIED');
 
-  // Enforce readability of the parent application (audits the view).
-  await getApplication(row.applicationId);
+  // A case upload is readable only when the parent application is. A form file
+  // that is not on a case yet stays inside the tenant and this download permission.
+  if (row.applicationId) {
+    await getApplication(row.applicationId);
+  }
 
   if (!isServable(row.status) || !row.evidenceKey) {
     // Never reveal that an infected/unscanned object exists.
