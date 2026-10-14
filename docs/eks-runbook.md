@@ -5,7 +5,9 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 ## Deploy
 
-1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
+1. Build web + worker images from the same commit, push to ECR
+   ap-southeast-2, and record both digests. The migrate Job uses the **app**
+   image digest, not a separate tag and not the worker image.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
    `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
@@ -18,6 +20,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    encryption backfill has completed for every organisation. Create a separate secret at
    `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
    `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
+   Apply `infra/postgres/audit-roles.sql` once as the RDS master before the
+   first migrate (see [Database roles](#database-roles)).
    The runtime secret also needs `COA_SIGNING_KEY_ID` (KMS key ARN or alias in
    ap-southeast-2). Do not set `COA_SIGNING_LOCAL_KEY_PEM`.
 3. In `infra/aws/eks-boundary.example.yaml`, replace `OIDC_ID` with the cluster
@@ -32,16 +36,23 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    for service accounts `blakpath-web` and `blakpath-worker` only. ClamAV and
    the migrate/seed jobs have no AWS role and mount no API token.
 5. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-6. Roll out with the Deploy workflow or `scripts/eks-deploy.sh <tag>` after
+6. Roll out with the Deploy workflow or `scripts/eks-deploy.sh` after
    replacing `ACCOUNT_ID`, host, role ARNs, certificate ARN, trust store ARN
-   and WAF ACL ARN. The script applies namespace, config and ExternalSecrets,
-   runs the release-check Job (`node release-check.cjs`) in the candidate web
-   and worker images, and applies `infra/k8s` only after the Job exits 0. A
-   failed gate does not roll the workloads. `kubectl apply -k infra/k8s` alone
-   skips that gate. Complete the edge section below first.
-   Rolling the app before the origin-verify header is live makes production
-   requests return 403. The namespace enforces Pod Security `restricted`;
-   every pod runs non-root with a read-only root filesystem.
+   and WAF ACL ARN. Pass `IMAGE` and `WORKER_IMAGE` as `@sha256` digests and
+   `RELEASE_ID` as the git sha. The script applies namespace, config and
+   ExternalSecrets, then runs three steps in order, each only after the
+   previous one succeeds:
+   1. the release-check Job (`node release-check.cjs`) in the candidate web
+      and worker images;
+   2. the per-release migrate Job (`blakpath-migrate-<git sha>`,
+      `ttlSecondsAfterFinished` 86400) from the app digest;
+   3. the web and worker Deployments at those digests.
+      A failed gate or migration does not roll the workloads. `DRY_RUN=1`
+      renders without applying. `kubectl apply -k infra/k8s` alone skips the
+      gate and the migration. Complete the edge section below first.
+      Rolling the app before the origin-verify header is live makes production
+      requests return 403. The namespace enforces Pod Security `restricted`;
+      every pod runs non-root with a read-only root filesystem.
 7. Moving from the shared `blakpath` service account: deploy step 4 before
    step 6, so the new associations exist when web and worker restart. Then
    delete the pod identity association for `blakpath/blakpath` and retire
@@ -53,7 +64,7 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    `COA_SIGNING_LOCAL_KEY_PEM`, and requires the SES sender config. SDK uses
    the EKS Pod Identity role. Do not put `PILOT_BOOTSTRAP_TOKEN` in the
    runtime secret.
-9. Apply the migrate job, then the seed job, then
+9. After the first release, apply the seed job, then
    `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
    The job emails an organisation-administrator invitation and does not create
    a password. That person enrols a passkey or authenticator before the
@@ -61,6 +72,42 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 10. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
     Liveness and startup use `/api/live`. A public request to `/api/health` is
     refused; read that report from inside the VPC.
+
+Image tags in `infra/k8s/kustomization.yaml` are local defaults. A release
+replaces them with digests. Do not `kubectl apply` `infra/k8s/jobs/migrate.yaml`
+by hand.
+
+## Rollback
+
+Migrations are forward-only. Roll back code by redeploying the previous image
+digest. Do not write a down migration. Point-in-time recovery is only for
+data corruption, and never into the live namespace.
+
+Release N-1 must still run on schema N. That is the expand/contract rule in
+`docs/database-migrations.md`: a release may add tables, nullable columns,
+concurrent indexes and `NOT VALID` foreign keys. It may not drop, rename or
+tighten columns the previous release still uses. The contract (drop the old
+shape) waits until N-1 is gone.
+
+1. If the migrate Job failed, stop. `scripts/eks-deploy.sh` has not changed
+   Deployments. Transactional DDL rolled back. Fix the migration forward and
+   release again. A lock wait aborts in under five seconds
+   (`lock_timeout` 4s) instead of stalling the rollout.
+2. If the new code is up and misbehaving but the data is intact, point the
+   web and worker Deployments back at the previous digests. Do not run a
+   migrate Job for that rollback. Schema stays at N. The previous digest
+   still works because N was expand-only. Confirm `/api/ready`, sign-in and
+   one staff flow.
+3. If a migration committed bad or destroyed data, stop writes, take a fresh
+   recovery point, and restore into a new isolated namespace using the
+   restore drill below. Promote that namespace only after sign-in, tenant
+   records, evidence authorisation and the audit chain verify. Do not restore
+   over the live database.
+
+Staging still needs one human rehearsal of steps 1 and 2 against the staging
+cluster. A disposable-Postgres rehearsal of the same steps is recorded in
+`docs/migration-drills/` when it has been run. The cluster rehearsal is not
+something this repository can apply by itself.
 
 ## Edge and origin
 
@@ -174,6 +221,8 @@ Record who rotated, when, and which keys. Do not record the values.
 ## Data services
 
 - RDS Postgres with point-in-time recovery. Proxy in front for failover.
+  Two roles: `blakpath_migrator` (owner, migrate Job only) and
+  `blakpath_app` (runtime DML). See `infra/postgres/audit-roles.sql`.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS,
   versioning on, AWS Backup coverage. The bucket default CMK is

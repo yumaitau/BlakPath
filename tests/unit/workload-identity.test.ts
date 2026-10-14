@@ -111,7 +111,8 @@ describe('pod security and workload identities', () => {
   const pods = podFiles.flatMap((path) =>
     documents(read(path))
       .filter((doc) => podKinds.has(kindOf(doc) ?? ''))
-      .map((doc) => ({ path, doc, name: nameOf(doc) })),
+      // The migrate Job is named per release (blakpath-migrate-<git sha>).
+      .map((doc) => ({ path, doc, name: nameOf(doc)?.replace(/-__RELEASE_ID__$/, '') })),
   );
 
   it('enforces restricted Pod Security Admission on the namespace', () => {
