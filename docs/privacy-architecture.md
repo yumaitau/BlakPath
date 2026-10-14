@@ -245,10 +245,20 @@ and both lookups and name checks are rate-limited.
   reversible removal and grace periods before any hard deletion.
 - **Worker-driven lifecycle.** Retention/deletion runs as background jobs
   (`docs/architecture.md`), tenant-scoped and audited.
-- **Official records are protected.** A recorded determination or issued
-  certificate is an official record; it is not casually deleted. Where deletion of
-  ancillary data is lawful and requested, it happens without destroying the
-  official record or the audit trail.
+- **Official records are protected.** A recorded determination (`decided`
+  application or finalised decision) or an issued certificate is an official
+  record. The retention sweep will not anonymise or purge it, or its evidence
+  and form responses, unless the active policy carries a disposal authority
+  reference. That reference is the interim gate; dual-control approval of the
+  reference is a separate records control. The audit trail is never a target.
+- **Retention floor and grace.** A policy cannot be shorter than 30 days. Purge
+  tombstones the database row, removes every S3 object version immediately, and
+  hard-deletes the row only after a further 30-day grace. Anonymised rows are
+  marked and are not rewritten on later sweeps.
+- **Legal holds cascade.** A hold on an application also shields its evidence,
+  form responses, notes and family links. A hold on evidence or a form response
+  keeps that record, and its parent application, out of the sweep. Holds can
+  only be placed on a record that exists.
 - **The audit trail is not deletable per-row.** Deleting individual audit rows
   would defeat tamper-evidence; audit retention is handled by whole, verified,
   archived periods, never by editing rows (`docs/audit-log-design.md`).

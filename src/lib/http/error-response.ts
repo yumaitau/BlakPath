@@ -84,6 +84,12 @@ const BY_NAME: Record<string, { status: number; code: string; error: string }> =
     code: 'INVALID_TRANSITION',
     error: 'Invalid transition',
   },
+  // A legal hold named a record that is not in this organisation.
+  RetentionTargetError: {
+    status: 404,
+    code: 'RETENTION_TARGET_MISSING',
+    error: 'Legal hold target does not exist',
+  },
   // The row stays pending. Do not echo object keys or sizes.
   EvidenceUploadIncompleteError: {
     status: 409,

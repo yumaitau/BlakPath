@@ -1,15 +1,26 @@
 name: Deploy
 
+# Operator-triggered. scripts/eks-deploy.sh runs the release gate Job, then
+# the release-pinned migrate Job, then rolls web and worker. Every step uses
+# the same image digests; a failed step leaves the Deployments unchanged.
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: Immutable ECR tag already pushed for the web and worker images
+      image_digest:
+        description: 'App image digest (sha256 hex, without the sha256: prefix)'
+        required: true
+        type: string
+      worker_image_digest:
+        description: 'Worker image digest (sha256 hex, without the sha256: prefix)'
+        required: true
+        type: string
+      release_id:
+        description: Git commit SHA
         required: true
         type: string
 
-# One rollout at a time. A failed release gate must not be cancelled into a
-# partial apply.
+# One rollout at a time. A failed release gate or migration must not be
+# cancelled into a partial apply.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
@@ -17,16 +28,34 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NODE_VERSION: '24.21.0'
+  PNPM_VERSION: '9.12.0'
+  IMAGE_REPOSITORY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath
+
 jobs:
   rollout:
-    name: Release gate then roll out
+    name: Release gate, migrate, then roll out
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
       - uses: azure/setup-kubectl@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Configure cluster access
         env:
@@ -40,7 +69,9 @@ jobs:
           printf '%s\n' "${KUBECONFIG_CONTENT}" > "${HOME}/.kube/config"
           chmod 600 "${HOME}/.kube/config"
 
-      - name: Run release gate and block rollout on failure
+      - name: Release gate, migrate, then roll web and worker
         env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: bash scripts/eks-deploy.sh "${IMAGE_TAG}"
+          IMAGE: ${{ env.IMAGE_REPOSITORY }}/app@sha256:${{ inputs.image_digest }}
+          WORKER_IMAGE: ${{ env.IMAGE_REPOSITORY }}/worker@sha256:${{ inputs.worker_image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: bash scripts/eks-deploy.sh
