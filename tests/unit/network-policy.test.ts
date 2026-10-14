@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -200,35 +200,64 @@ describe('blakpath network policy', () => {
   });
 
   it('selects every workload in infra/k8s with at least one allow policy', () => {
-    const manifests = [
-      'web-deployment.yaml',
-      'worker-deployment.yaml',
-      'clamav.yaml',
-      'clamav-mirror.yaml',
-      'jobs/migrate.yaml',
-      'jobs/seed.yaml',
-      'jobs/invite-admin.yaml',
-    ];
-    const allPolicies = [
+    // Every manifest under infra/k8s, including the jobs/ and release-check/
+    // directories that are applied outside the main kustomization.
+    const manifests = readdirSync(resolve(root, 'infra/k8s'), { recursive: true })
+      .map(String)
+      .filter((file) => file.endsWith('.yaml'));
+    // Pod selectors of every allow policy other than default-deny and DNS.
+    const selectors = [
       read('infra/k8s/network-policy.yaml'),
       read('infra/k8s/clamav.yaml'),
       read('infra/k8s/clamav-mirror.yaml'),
-    ].join('\n');
+    ]
+      .join('\n---\n')
+      .split(/^---$/m)
+      .filter((doc) => /^kind: (Application)?NetworkPolicy$/m.test(doc))
+      .filter((doc) => !/name: blakpath-(default-deny|dns)$/m.test(doc))
+      .map((doc) =>
+        doc.slice(doc.indexOf('  podSelector:'), doc.indexOf('  policyTypes:')),
+      );
+    const seen: string[] = [];
     for (const file of manifests) {
-      const body = read(`infra/k8s/${file}`);
-      const workloads = body
+      const workloads = read(`infra/k8s/${file}`)
         .split(/^---$/m)
-        .filter((doc) => /^kind: (Deployment|StatefulSet|Job)$/m.test(doc));
-      expect(workloads.length, file).toBeGreaterThan(0);
+        .filter((doc) =>
+          /^kind: (Deployment|StatefulSet|DaemonSet|Job|CronJob)$/m.test(doc),
+        );
       for (const doc of workloads) {
+        seen.push(file);
         const template = doc.slice(doc.indexOf('  template:'));
         const label = template.match(/app\.kubernetes\.io\/name: (\S+)/)?.[1];
         expect(label, `${file} pod template label`).toBeTruthy();
         expect(policy('blakpath-dns'), `${file} DNS`).toContain(`- ${label}\n`);
-        expect(allPolicies, `${file} selected`).toContain(
-          `app.kubernetes.io/name: ${label}`,
+        const selected = selectors.some(
+          (sel) =>
+            sel.includes(`app.kubernetes.io/name: ${label}\n`) ||
+            sel.includes(`- ${label}\n`),
         );
+        expect(selected, `${file} (${label}) selected by an allow policy`).toBe(true);
       }
     }
+    expect(seen).toEqual(
+      expect.arrayContaining([
+        'web-deployment.yaml',
+        'worker-deployment.yaml',
+        'clamav.yaml',
+        'clamav-mirror.yaml',
+        'jobs/migrate.yaml',
+        'jobs/seed.yaml',
+        'jobs/invite-admin.yaml',
+        'release-check/job.yaml',
+      ]),
+    );
+  });
+
+  it('lets the release-check gate reach only DNS and Postgres', () => {
+    const job = policy('blakpath-job-egress');
+    expect(job).toContain('- blakpath-release-check\n');
+    expect(policy('blakpath-pod-identity')).not.toContain('blakpath-release-check');
+    expect(policy('blakpath-web-egress')).not.toContain('blakpath-release-check');
+    expect(policy('blakpath-worker-egress')).not.toContain('blakpath-release-check');
   });
 });

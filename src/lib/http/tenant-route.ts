@@ -15,9 +15,11 @@ import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status'
 import { clientIp } from '@/lib/http/client-ip';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { RetentionTargetError } from '@/domains/retention';
 import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { CertificateConflictError } from '@/domains/certificates/errors';
 import { DecisionWorkflowError } from '@/domains/decisions/errors';
+import { EvidenceUploadIncompleteError } from '@/domains/evidence/errors';
 import {
   OrganisationActivationError,
   OrganisationKeyInputError,
@@ -117,6 +119,16 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof ApplicationWorkflowError) {
     return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
+  }
+  if (error instanceof RetentionTargetError) {
+    return NextResponse.json(
+      { error: 'Legal hold target does not exist' },
+      { status: 404 },
+    );
+  }
+  if (error instanceof EvidenceUploadIncompleteError) {
+    // The row is still pending. Say so without echoing object keys or sizes.
+    return NextResponse.json({ error: 'Upload incomplete' }, { status: 409 });
   }
   if (error instanceof ConcurrencyConflictError) {
     return NextResponse.json({ error: error.message }, { status: 409 });

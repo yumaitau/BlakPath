@@ -102,6 +102,7 @@ const podFiles = [
   'infra/k8s/jobs/migrate.yaml',
   'infra/k8s/jobs/seed.yaml',
   'infra/k8s/jobs/invite-admin.yaml',
+  'infra/k8s/release-check/job.yaml',
 ];
 
 const podKinds = new Set(['Deployment', 'StatefulSet', 'Job']);
@@ -126,6 +127,7 @@ describe('pod security and workload identities', () => {
       'blakpath-clamav-mirror',
       'blakpath-invite-admin',
       'blakpath-migrate',
+      'blakpath-release-check',
       'blakpath-seed',
       'blakpath-worker',
     ]);
@@ -189,7 +191,7 @@ describe('pod security and workload identities', () => {
       expect(pod?.doc, name).toContain('runAsUser: 1000');
     }
 
-    for (const name of ['blakpath-migrate', 'blakpath-seed']) {
+    for (const name of ['blakpath-migrate', 'blakpath-seed', 'blakpath-release-check']) {
       const job = pods.find((pod) => pod.name === name);
       expect(job?.doc, name).toContain('serviceAccountName: blakpath-migrate');
       expect(job?.doc, name).toContain('automountServiceAccountToken: false');
@@ -271,8 +273,10 @@ describe('EKS Pod Identity roles', () => {
       'kms:GetPublicKey',
       'kms:Sign',
       's3:DeleteObject',
+      's3:DeleteObjectVersion',
       's3:GetObject',
       's3:ListBucket',
+      's3:ListBucketVersions',
       's3:PutObject',
     ]);
     const signers = [...workerStatements.entries()].filter(

@@ -8,6 +8,42 @@ export interface QueueFailureSignal {
   maxAttempts: number;
 }
 
+export interface AuditIntegrityFailureSignal {
+  signal: 'audit_integrity_failure';
+  alert: true;
+  /** Metric name published by the audit-integrity log metric filter. */
+  metric: 'AuditIntegrityFailures';
+  chain: 'platform' | 'tenant';
+  organisationId: string | null;
+  /** Null when the break is an anchor mismatch rather than a recomputed event. */
+  eventId: string | null;
+  index: number | null;
+  reason: string;
+  eventCount: number;
+}
+
+/**
+ * Stable divergence signal. The CloudWatch metric filter in
+ * `infra/aws/operational-alerts.example.yaml` matches `signal` + `alert` and
+ * publishes `AuditIntegrityFailures`, which pages the on-call alarm.
+ * Do not add event bodies, metadata or secrets to this object.
+ */
+export function auditIntegrityFailureSignal(
+  input: Omit<AuditIntegrityFailureSignal, 'signal' | 'alert' | 'metric'>,
+): AuditIntegrityFailureSignal {
+  return {
+    signal: 'audit_integrity_failure',
+    alert: true,
+    metric: 'AuditIntegrityFailures',
+    chain: input.chain,
+    organisationId: input.organisationId,
+    eventId: input.eventId,
+    index: input.index,
+    reason: input.reason,
+    eventCount: input.eventCount,
+  };
+}
+
 /** Build a stable, machine-readable alert signal without including job payloads. */
 export function queueFailureSignal(
   job: Pick<Job<TenantJob>, 'attemptsMade' | 'opts'> | undefined,

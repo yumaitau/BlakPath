@@ -175,8 +175,9 @@ path:
   promote clean files or hold/reject infected ones (`docs/evidence-scanning-design.md`).
 - **Notifications** — send email via the SES API under the workload role
   (Mailpit SMTP locally; see `docs/adr/0090-production-email-sender.md`).
-- **Audit integrity verification** — periodically re-walk the hash chain and
-  write/verify integrity checkpoints (`docs/audit-log-design.md`).
+- **Audit integrity verification** — page each active tenant chain and the
+  platform chain from the latest checkpoint, compare the chain to the signed
+  external anchors, then checkpoint or alarm (`docs/audit-log-design.md`).
 - **Retention & lifecycle** — apply retention/deletion policies where lawful,
   respecting official-record obligations (`docs/privacy-architecture.md`).
 

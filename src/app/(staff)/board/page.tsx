@@ -1,4 +1,6 @@
 import { TaskBoard, type BoardTask } from '@/components/board/task-board';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { listBoardTasks } from '@/domains/tasks';
 
@@ -6,13 +8,12 @@ import { listBoardTasks } from '@/domains/tasks';
  * Work board (RSC).
  *
  * Loads the tenant's live tasks inside a DB-verified tenant context and renders
- * the drag-and-drop Kanban board. If the caller is not signed in or has no
- * active organisation, a friendly prompt is shown instead of an error.
+ * the drag-and-drop Kanban board. An expired session or missing organisation
+ * redirects; a role without board access sees a 403 state; anything else
+ * surfaces as the 500 error page.
  */
 export default async function BoardPage() {
-  let tasks: BoardTask[] = [];
-  let error: string | null = null;
-
+  let tasks: BoardTask[];
   try {
     tasks = await withRequestTenant(async () => {
       const rows = await listBoardTasks();
@@ -25,18 +26,15 @@ export default async function BoardPage() {
         dueAt: row.dueAt ? row.dueAt.toISOString() : null,
       }));
     });
-  } catch {
-    error = 'Sign in and select your organisation to view and manage the work board.';
+  } catch (error) {
+    await handlePageError(error);
+    return <ForbiddenNotice title="You do not have access to the work board" />;
   }
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">Work board</h1>
-      {error ? (
-        <p className="text-muted-foreground">{error}</p>
-      ) : (
-        <TaskBoard initialTasks={tasks} />
-      )}
+      <TaskBoard initialTasks={tasks} />
     </div>
   );
 }

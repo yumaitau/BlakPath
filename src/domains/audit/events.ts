@@ -88,6 +88,7 @@ export type AuditAction =
   | 'evidence.scan_clean'
   | 'evidence.scan_infected'
   | 'evidence.scan_failed'
+  | 'evidence.scan_requeued'
   | 'evidence.rejected'
   | 'evidence.deleted'
   | 'evidence.quarantined'
@@ -217,6 +218,7 @@ export type AuditAction =
   | 'import.completed'
   // Retention / lifecycle of data.
   | 'retention.policy_applied'
+  | 'retention.policy_deleted'
   | 'retention.record_purged'
   | 'retention.record_anonymised'
   | 'retention.hold_placed'

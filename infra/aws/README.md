@@ -12,7 +12,10 @@ with resources owned by the production environment.
   used only with encryption-context purpose `field`, `platform`,
   `blind-index`, or `key_validation` (plus `key_health` for the web role's key
   check). The worker signs audit anchors with its own key and is denied
-  `kms:Sign` on every other key. The matching statement for a client's own key
+  `kms:Sign` on every other key. The worker can list and delete object
+  versions of evidence and quarantine keys: retention must remove every version
+  of a purged key, and `s3:DeleteObject` alone only writes a delete marker on a
+  versioned bucket. The matching statement for a client's own key
   policy is in `docs/customer-held-keys.md`.
 - `unused-access-analyzer.example.yaml` creates an account unused-access
   analyzer when one does not already exist. Review findings per role using
