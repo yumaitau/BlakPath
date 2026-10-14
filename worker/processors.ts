@@ -209,22 +209,19 @@ const auditVerifyProcessor: ProcessorFn = async (job, logger) => {
  */
 const webhookProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
+  if (job.name === 'sweep') {
+    // Scheduled stale-delivery sweep (see worker/scheduler.ts). It shares the
+    // webhook queue so it adds no worker or DB-pool slots of its own.
+    const result = await sweepStaleWebhookDeliveries({ organisationId, correlationId });
+    logger.info({ jobId: job.id, organisationId, ...result }, 'webhook sweep finished');
+    return;
+  }
   const deliveryId = (job.data as { deliveryId?: unknown }).deliveryId;
   if (typeof deliveryId !== 'string' || deliveryId.length === 0) {
     logger.error({ jobId: job.id }, 'webhook job missing deliveryId — dropping');
     return;
   }
   await processWebhookDelivery({ organisationId, correlationId, deliveryId });
-};
-
-/**
- * Webhook sweep processor. Re-queues the tenant's `pending` deliveries that have
- * no live job (e.g. the enqueue after insert failed). Tenant-bound; enqueued by
- * a scheduler.
- */
-const webhookSweepProcessor: ProcessorFn = async (job) => {
-  const { organisationId, correlationId } = job.data;
-  await sweepStaleWebhookDeliveries({ organisationId, correlationId });
 };
 
 /**
@@ -375,7 +372,6 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.Retention]: withActiveTenant(retentionProcessor),
   [QueueName.Export]: withActiveTenant(exportProcessor),
   [QueueName.Webhook]: withActiveTenant(webhookProcessor),
-  [QueueName.WebhookSweep]: withActiveTenant(webhookSweepProcessor),
   [QueueName.Reminder]: withActiveTenant(reminderProcessor),
   [QueueName.EncryptionBackfill]: withActiveTenant(encryptionBackfillProcessor),
   [QueueName.KeyHealth]: withActiveTenant(keyHealthProcessor),
