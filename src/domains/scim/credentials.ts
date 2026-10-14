@@ -57,11 +57,10 @@ export async function createScimCredential(
     result: 'success',
     after: {
       data: {
-        name: input.name,
         prefix: credential.prefix,
         allowOrganisationAdmin: credential.allowOrganisationAdmin,
       },
-      allow: ['name', 'prefix', 'allowOrganisationAdmin'],
+      allow: ['prefix', 'allowOrganisationAdmin'],
     },
   });
 

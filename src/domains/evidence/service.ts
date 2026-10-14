@@ -3,7 +3,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { evidence, evidenceRequests } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type AuditMetaInput } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -176,8 +176,8 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     resourceId: evidenceId,
     result: 'success',
     after: {
-      data: { applicationId: row.applicationId, fileName: row.fileName },
-      allow: ['applicationId', 'fileName'],
+      data: { applicationId: row.applicationId },
+      allow: ['applicationId'],
     },
   });
   await recordAudit({
@@ -214,7 +214,7 @@ export async function getDownloadUrl(
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'denied',
-      reason: 'evidence not clean or not promoted',
+      reason: 'evidence.not_servable',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
@@ -453,6 +453,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     detected: string | null,
     scanResult: string,
     reason: string,
+    after: AuditMetaInput,
   ) => {
     await deleteObject({ bucket: QUARANTINE_BUCKET, key });
     await settle({
@@ -467,6 +468,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       resourceId: evidenceId,
       result: 'failure',
       reason,
+      after,
     });
   };
 
@@ -474,11 +476,13 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
   // should retry, so let it throw.
   const head = await headObject({ bucket: QUARANTINE_BUCKET, key, organisationId });
   if (!head.etag || !uploadSizeAcceptable(row.sizeBytes, head.contentLength)) {
-    await rejectUpload(
-      null,
-      'rejected:size',
-      `declared ${row.sizeBytes} bytes, stored ${head.contentLength ?? 'unknown'}`,
-    );
+    await rejectUpload(null, 'rejected:size', 'evidence.size_mismatch', {
+      data: {
+        declaredSizeBytes: row.sizeBytes,
+        storedSizeBytes: head.contentLength ?? null,
+      },
+      allow: ['declaredSizeBytes', 'storedSizeBytes'],
+    });
     return;
   }
   const etag = head.etag;
@@ -501,7 +505,14 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     await rejectUpload(
       detected ?? null,
       'rejected:content-type',
-      `declared ${row.declaredContentType}, detected ${detected ?? 'unknown'}`,
+      'evidence.content_type_mismatch',
+      {
+        data: {
+          declaredContentType: row.declaredContentType,
+          detectedContentType: detected ?? 'unknown',
+        },
+        allow: ['declaredContentType', 'detectedContentType'],
+      },
     );
     return;
   }
@@ -524,7 +535,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'failure',
-      reason: 'scanner unavailable',
+      reason: 'evidence.scanner_unavailable',
     });
     // Stays quarantined. Rethrow so BullMQ retries with backoff.
     throw err;
@@ -546,7 +557,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'failure',
-      reason: verdict.signature ?? 'malware detected',
+      reason: 'evidence.malware_detected',
     });
 
     // Let the uploader know, calmly and without file details. Best-effort: a

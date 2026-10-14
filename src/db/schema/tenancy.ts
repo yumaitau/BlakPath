@@ -44,6 +44,11 @@ export const organisations = pgTable(
     abn: text('abn'),
     slug: text('slug').notNull(),
     status: organisationStatus('status').notNull().default('draft'),
+    /**
+     * Operator's free-text reason for the last status change. Mutable, so it
+     * can be corrected or erased; the audit trail stores a code only.
+     */
+    statusReason: text('status_reason'),
     /** Data-residency region. Australian residency: ap-southeast-2. */
     region: text('region').notNull().default('ap-southeast-2'),
     /** Whether the public may start an application with this organisation. */

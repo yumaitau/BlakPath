@@ -22,6 +22,11 @@ export const emailSuppressions = pgTable(
     /** SES message id that triggered suppression, if any. */
     sourceMessageId: text('source_message_id'),
     clearedAt: timestamp('cleared_at', { withTimezone: true }),
+    /**
+     * Operator's free-text reason for clearing. Mutable, so it can be
+     * corrected or erased. The audit trail stores `email.suppression_note` only.
+     */
+    clearedReason: text('cleared_reason'),
     ...timestamps,
   },
   (table) => [index('email_suppressions_hash_idx').on(table.addressHash)],

@@ -80,12 +80,11 @@ export async function createApiKey(
     result: 'success',
     after: {
       data: {
-        name: input.name,
         prefix: apiKey.prefix,
         purpose: input.purpose ?? null,
         destination: input.destination ?? null,
       },
-      allow: ['name', 'prefix', 'purpose', 'destination'],
+      allow: ['prefix', 'purpose', 'destination'],
     },
   });
 

@@ -6,6 +6,7 @@ import {
   featureFlags,
 } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -352,7 +353,8 @@ export async function inviteAttendees(eventId: string): Promise<{ invited: numbe
     resourceType: 'calendar_event',
     resourceId: eventId,
     result: 'success',
-    reason: `invited ${invited} attendee(s)`,
+    reason: 'calendar.attendees_invited',
+    after: { data: { invited }, allow: ['invited'] },
   });
   return { invited };
 }
@@ -435,7 +437,7 @@ export async function countUpcoming(): Promise<number> {
     resourceType: 'calendar_event',
     resourceId: row.eventId,
     result: 'success',
-    reason: `rsvp ${responseStatus}`,
+    reason: auditReason('calendar.rsvp', responseStatus),
   });
   return updatedRow;
 }

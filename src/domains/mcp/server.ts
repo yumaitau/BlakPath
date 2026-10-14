@@ -83,7 +83,7 @@ async function callTool(
       resourceType: 'api_key',
       resourceId: keyId,
       result: 'denied',
-      reason: `mcp:${name}`,
+      reason: 'mcp.scope_denied',
       after: mcpAuditAfter({ keyId, tool: name, piiDisclosed: false }),
     });
     return text('Forbidden: the API key lacks the required scope for this tool.', true);
@@ -95,7 +95,7 @@ async function callTool(
     resourceType: 'api_key',
     resourceId: keyId,
     result: 'success',
-    reason: `mcp:${name}`,
+    reason: 'mcp.tool',
     after: mcpAuditAfter({ keyId, tool: name, piiDisclosed: allowPii }),
   });
 

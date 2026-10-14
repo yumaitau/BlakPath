@@ -6,6 +6,7 @@ import { auditEvents } from '@/db/schema';
 import { getTenantContext } from '@/lib/tenancy/context';
 import type { AuditAction, AuditResult, ResourceType } from './events';
 import {
+  assertCodedAuditReason,
   computeEventHash,
   redactMeta,
   toIsoTimestamp,
@@ -42,6 +43,10 @@ export interface RecordAuditInput {
   readonly resourceType: ResourceType;
   readonly resourceId?: string | null;
   readonly result: AuditResult;
+  /**
+   * Coded reason (`code` or `code:recordId`). Free text stays on the mutable
+   * record the id points at. Never a name, note, email, phone or file name.
+   */
   readonly reason?: string | null;
   /**
    * Tenant this event belongs to. Optional: when omitted, it is taken from the
@@ -141,6 +146,7 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
     ? redactMeta(input.before.data, input.before.allow)
     : null;
   const afterMeta = input.after ? redactMeta(input.after.data, input.after.allow) : null;
+  const reason = assertCodedAuditReason(input.reason);
 
   const lockKey = chainLockKey(organisationId);
 
@@ -190,7 +196,7 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
       resourceType: input.resourceType,
       resourceId: input.resourceId ?? null,
       result: input.result,
-      reason: input.reason ?? null,
+      reason,
       ipAddress,
       userAgent,
       correlationId,
@@ -212,7 +218,7 @@ export async function recordAudit(input: RecordAuditInput): Promise<RecordedAudi
       resourceType: input.resourceType,
       resourceId: input.resourceId ?? null,
       result: input.result,
-      reason: input.reason ?? null,
+      reason,
       ipAddress,
       userAgent,
       correlationId,

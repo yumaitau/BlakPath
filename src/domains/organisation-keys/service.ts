@@ -2,6 +2,7 @@ import { and, eq, ne } from 'drizzle-orm';
 import { db, type Database } from '@/db/client';
 import { organisationKeyRewraps, organisationKeys } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit';
+import { assertCodedAuditReason } from '@/domains/audit/hash';
 import { sharedDekCache } from '@/lib/encryption/dek-cache';
 import {
   runKeyHandshake,
@@ -514,7 +515,9 @@ export async function recordEscrowOptIn(
 }
 
 /**
- * Record that the client withdrew from escrow. The consent reference stays
+ * Record that the client withdrew from escrow. `reason` is a coded value such
+ * as `escrow.client_notice`; the written notice
+ * itself is kept outside the audit chain. The consent reference stays
  * for history. The vault package stays inert until its Object Lock retention
  * ends; the runbook pairs withdrawal with a rotation to un-escrowed material.
  */
@@ -524,6 +527,9 @@ export async function withdrawEscrow(
   reason: string,
   database: Database = db,
 ): Promise<OrganisationKeyRow> {
+  // Reject free text before the write, so a bad reason cannot leave escrow
+  // withdrawn without its audit event.
+  assertCodedAuditReason(reason);
   const updated = await database
     .update(organisationKeys)
     .set({ escrow: false, escrowPackageDigest: null })
