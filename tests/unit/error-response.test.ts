@@ -274,38 +274,48 @@ describe('tenantHandler', () => {
   });
 
   it('replaces a request id that could forge a log line', async () => {
+    // A minted id is a UUIDv7. The forged values use the non-hex marker
+    // "injected" so a random id can never contain it by chance.
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     const spy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const forgedId = 'injected\nlevel=info msg=forged';
     const forged = errorResponse(new Error('boom person@example.com'), {
-      requestId: 'bad\nid',
+      requestId: forgedId,
     });
     const forgedBody = await forged.json();
     expect(forged.status).toBe(500);
-    expect(forgedBody.requestId).not.toContain('\n');
-    expect(forgedBody.requestId).not.toContain('bad');
+    expect(forgedBody.requestId).not.toBe(forgedId);
+    expect(forgedBody.requestId).toMatch(UUID);
+    expect(forgedBody.requestId).not.toMatch(/[\r\n]/);
+    expect(forgedBody.requestId).not.toContain('injected');
     const directLog = JSON.stringify(spy.mock.calls[0]);
     expect(directLog).toContain(forgedBody.requestId);
     expect(directLog).not.toContain('person@example.com');
-    expect(directLog).not.toContain('bad\nid');
+    expect(directLog).not.toContain('injected');
+    expect(directLog).not.toContain('forged');
     spy.mockClear();
 
     // Fetch rejects a raw newline in a header. A space is legal on the wire
     // and still fails the identifier pattern, so the handler mints a new id.
+    const headerId = 'injected id';
     const handler = tenantHandler(async (_request: Request) => {
       throw new Error('boom person@example.com');
     });
     const response = await handler(
       new Request('http://localhost/api', {
-        headers: { 'x-request-id': 'bad id' },
+        headers: { 'x-request-id': headerId },
       }),
     );
     expect(response.status).toBe(500);
     const body = await response.json();
+    expect(body.requestId).not.toBe(headerId);
+    expect(body.requestId).toMatch(UUID);
     expect(body.requestId).not.toContain(' ');
-    expect(body.requestId).not.toContain('bad');
+    expect(body.requestId).not.toContain('injected');
     const logged = JSON.stringify(spy.mock.calls[0]);
     expect(logged).toContain(body.requestId);
     expect(logged).not.toContain('person@example.com');
-    expect(logged).not.toContain('bad id');
+    expect(logged).not.toContain('injected');
   });
 
   it('renders SCIM provisioning errors in the RFC envelope', async () => {
