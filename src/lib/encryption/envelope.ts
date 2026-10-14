@@ -15,9 +15,11 @@ import type { EncryptionContext } from './key-provider';
  * Additional authenticated data binds the ciphertext to its table, column,
  * row and organisation, so a swapped row or a swapped tenant fails closed.
  *
- * Version 1 is the previous single-master-key format. The reader below exists
- * only so those values can be migrated. New writes are version 2 and go
- * through `scopeFor`. Version 1 has no tenant binding and no AAD.
+ * Version 1 is the previous single-master-key format. Nothing writes it any
+ * more. The reader below exists only so the backfill can migrate old rows;
+ * once every tenant is backfilled, ENCRYPTION_MASTER_KEY can be removed.
+ * New writes are version 2 and go through `scopeFor`. Version 1 has no tenant
+ * binding and no AAD.
  */
 
 const ALGO = 'aes-256-gcm';
@@ -138,44 +140,10 @@ function masterKey(): Buffer {
   return key;
 }
 
-function gcmEncrypt(
-  key: Buffer,
-  plaintext: Buffer,
-): { iv: Buffer; tag: Buffer; data: Buffer } {
-  const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv(ALGO, key, iv);
-  const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return { iv, tag: cipher.getAuthTag(), data };
-}
-
 function gcmDecrypt(key: Buffer, iv: Buffer, tag: Buffer, data: Buffer): Buffer {
   const decipher = createDecipheriv(ALGO, key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(data), decipher.final()]);
-}
-
-/**
- * Migration-only writer. Production writes go through `scopeFor`.
- * Kept so tests and a one-shot migration can still produce version 1 blobs.
- */
-export function encryptFieldV1(plaintext: string): EncryptedFieldV1 {
-  const kek = masterKey();
-  const dek = randomBytes(KEY_BYTES);
-  const value = gcmEncrypt(dek, Buffer.from(plaintext, 'utf8'));
-  const wrap = gcmEncrypt(kek, dek);
-  dek.fill(0);
-  return {
-    v: 1,
-    iv: value.iv.toString('base64'),
-    tag: value.tag.toString('base64'),
-    wrappedDek: Buffer.concat([wrap.iv, wrap.tag, wrap.data]).toString('base64'),
-    ciphertext: value.data.toString('base64'),
-  };
-}
-
-/** Platform-key sealer kept for invitation tokens and webhook secrets. */
-export function encryptField(plaintext: string): EncryptedFieldV1 {
-  return encryptFieldV1(plaintext);
 }
 
 /** Migration-only reader. No AAD and no tenant check. Do not use for new data. */
@@ -200,14 +168,6 @@ export function decryptFieldV1(field: EncryptedFieldV1): string {
   } finally {
     dek.fill(0);
   }
-}
-
-/** Opens a platform-key envelope. Tenant envelopes must go through `scopeFor`. */
-export function decryptField(field: EncryptedField): string {
-  if (isEnvelopeV2(field)) {
-    throw new Error('decryptField only opens version 1 envelopes');
-  }
-  return decryptFieldV1(field);
 }
 
 /**

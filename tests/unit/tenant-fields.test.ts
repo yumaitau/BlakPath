@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DekCache } from '@/lib/encryption/dek-cache';
 import { TenantKeyUnavailableError } from '@/lib/encryption/errors';
-import { encryptFieldV1 } from '@/lib/encryption/envelope';
 import {
   countPlaintextResidue,
   isPlaintextResidue,
@@ -13,7 +12,9 @@ import {
 } from '@/lib/encryption/field-codec';
 import { LocalKeyProvider } from '@/lib/encryption/local-provider';
 import { scopeFor } from '@/lib/encryption/scope';
+import { openInvitationToken, sealInvitationToken } from '@/lib/encryption/tenant-fields';
 import { __resetEnvCache } from '@/lib/env';
+import { encryptFieldV1 } from '../helpers/legacy-envelope';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const ARN =
@@ -119,5 +120,38 @@ describe('tenant field codec', () => {
         (scope) => sealText(scope, binding, 'Jane'),
       ),
     ).rejects.toBeInstanceOf(TenantKeyUnavailableError);
+  });
+});
+
+describe('invitation token seals', () => {
+  const ORG_B = '22222222-2222-4222-8222-222222222222';
+
+  it('are version-2 envelopes bound to the table, invitation row and tenant', async () => {
+    rows.set(ORG_B, { ...rows.get(ORG)!, id: 'key-2', organisationId: ORG_B });
+    const seal = await sealInvitationToken(ORG, 'form_invitations', 'inv-1', 'tok-123');
+    expect(isTenantCiphertext(seal)).toBe(true);
+    expect(JSON.stringify(seal)).not.toContain('tok-123');
+    expect(await openInvitationToken(ORG, 'form_invitations', 'inv-1', seal)).toBe(
+      'tok-123',
+    );
+    await expect(
+      openInvitationToken(ORG, 'form_invitations', 'inv-2', seal),
+    ).rejects.toThrow();
+    await expect(
+      openInvitationToken(ORG, 'membership_invitations', 'inv-1', seal),
+    ).rejects.toThrow();
+    await expect(
+      openInvitationToken(ORG_B, 'form_invitations', 'inv-1', seal),
+    ).rejects.toThrow();
+  });
+
+  it('still open a version-1 seal and refuse anything that is not an envelope', async () => {
+    const legacy = encryptFieldV1('tok-legacy');
+    expect(
+      await openInvitationToken(ORG, 'membership_invitations', 'inv-1', legacy),
+    ).toBe('tok-legacy');
+    await expect(
+      openInvitationToken(ORG, 'membership_invitations', 'inv-1', 'tok-legacy'),
+    ).rejects.toThrow(/not ciphertext/);
   });
 });

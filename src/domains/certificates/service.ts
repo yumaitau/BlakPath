@@ -43,6 +43,7 @@ import {
 } from './schemas';
 import { allowCertificateLookup, allowHolderCheck } from './verify-limit';
 import { renderCertificatePdf } from './render';
+import { loadSigningKey, recordSigningKey } from './signing-keys';
 import { CertificateConflictError } from './errors';
 import {
   canRevoke,
@@ -498,6 +499,8 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   });
   const { signCoaPayload } = await import('@/lib/kms/sign');
   const seal = await signCoaPayload(canonical);
+  // Public half first: no stored seal may reference a key /verify cannot load.
+  if (seal.publicKey) await recordSigningKey(seal.publicKey);
   const updated = await scope.db
     .update(certificates)
     .set({
@@ -643,6 +646,52 @@ export async function findDecisionOutcome(
   return rows[0]?.outcome ?? null;
 }
 
+/** Stored fields a seal's canonical bytes are rebuilt from. */
+export interface SealedCertificateFields {
+  id: string;
+  organisationId: string;
+  reference: string;
+  applicationId: string;
+  decisionId: string;
+  verificationCode: string;
+  signedAt: Date;
+  payloadVersion: string;
+  holderNameHash: string | null;
+  holderDobHash: string | null;
+  /** PDF SHA-256 (`certificates.sha256`), sealed by version 2. */
+  sha256: string | null;
+}
+
+/**
+ * Rebuild the canonical bytes a sealed certificate attests, from the stored
+ * row and its decision's recorded outcome, or null when the row cannot.
+ * Root client: used by the public verifier and the operator signing-key
+ * backfill, both outside a tenant scope.
+ */
+export async function rebuildCanonicalPayload(
+  cert: SealedCertificateFields,
+): Promise<string | null> {
+  const decisionRows = await db
+    .select({ outcome: decisions.finalOutcome })
+    .from(decisions)
+    .where(eq(decisions.id, cert.decisionId))
+    .limit(1);
+  return canonicalPayloadForVersion({
+    payloadVersion: cert.payloadVersion,
+    certificateId: cert.id,
+    organisationId: cert.organisationId,
+    reference: cert.reference,
+    applicationId: cert.applicationId,
+    decisionId: cert.decisionId,
+    outcome: decisionRows[0]?.outcome ?? 'unknown',
+    verificationCode: cert.verificationCode,
+    signedAt: cert.signedAt.toISOString(),
+    holderNameHash: cert.holderNameHash,
+    holderDobHash: cert.holderDobHash,
+    pdfSha256: cert.sha256,
+  });
+}
+
 /** Public, non-personal authenticity check by verification code. Unauthenticated. */
 export interface CertificateVerification {
   valid: boolean;
@@ -768,34 +817,23 @@ async function checkSeal(cert: CertificateByCode): Promise<SealCheck> {
   ) {
     return { payloadIntact: false, signatureValid: false, canonical: null };
   }
-  const decisionRows = await db
-    .select({ outcome: decisions.finalOutcome })
-    .from(decisions)
-    .where(eq(decisions.id, cert.decisionId))
-    .limit(1);
-  const canonical = canonicalPayloadForVersion({
-    payloadVersion: cert.payloadVersion,
-    certificateId: cert.id,
-    organisationId: cert.organisationId,
-    reference: cert.reference,
-    applicationId: cert.applicationId,
-    decisionId: cert.decisionId,
-    outcome: decisionRows[0]?.outcome ?? 'unknown',
-    verificationCode: cert.verificationCode,
-    signedAt: cert.signedAt.toISOString(),
-    holderNameHash: cert.holderNameHash,
-    holderDobHash: cert.holderDobHash,
-    pdfSha256: cert.sha256,
-  });
+  const canonical = await rebuildCanonicalPayload({ ...cert, signedAt: cert.signedAt });
   if (!canonical) return { payloadIntact: false, signatureValid: false, canonical: null };
-  const { coaPayloadHash, verifyCoaSignature } = await import('@/lib/kms/sign');
+  const { coaPayloadHash, verifyCoaSignature, LOCAL_DEV_KEY_ID } =
+    await import('@/lib/kms/sign');
   const payloadIntact = coaPayloadHash(canonical) === cert.payloadHash;
   if (!payloadIntact) return { payloadIntact: false, signatureValid: false, canonical };
+  // Offline: the stored public half, never a KMS call per public request.
+  const stored =
+    cert.signingKeyId === LOCAL_DEV_KEY_ID
+      ? null
+      : await loadSigningKey(cert.signingKeyId);
   const result = await verifyCoaSignature({
     canonical,
     signatureB64: cert.signature,
     algorithm: cert.signingAlgorithm,
     keyId: cert.signingKeyId,
+    publicKeySpki: stored?.publicKeySpki ?? null,
   });
   return { payloadIntact: true, signatureValid: result.signatureValid, canonical };
 }

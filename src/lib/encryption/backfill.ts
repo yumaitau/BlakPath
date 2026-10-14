@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, sql } from 'drizzle-orm';
 import { db } from '@/db/client';
 import {
   applicationNotes,
@@ -8,7 +8,9 @@ import {
   decisions,
   encryptionBackfillRuns,
   familyLinks,
+  formInvitations,
   formResponses,
+  membershipInvitations,
   organisationSettings,
   webhookEndpoints,
 } from '@/db/schema';
@@ -16,8 +18,14 @@ import { recordAudit } from '@/domains/audit/service';
 import { scopeFor as tenantScope } from '@/db/tenant-db';
 import { addJob, QueueName } from '@/lib/queues';
 import { blindIndex, blindIndexTokens } from './blind-index';
-import { isTenantCiphertext, openText, resaveJson, resaveText } from './field-codec';
-import type { FieldBinding } from './envelope';
+import {
+  isTenantCiphertext,
+  openText,
+  parseStoredEnvelope,
+  resaveJson,
+  resaveText,
+} from './field-codec';
+import type { EncryptedFieldV2, FieldBinding } from './envelope';
 import { scopeFor, type EncryptionScope } from './scope';
 
 /**
@@ -38,6 +46,8 @@ const ORDER = [
   'decisions',
   'webhook_endpoints',
   'consent_records',
+  'membership_invitations',
+  'form_invitations',
 ] as const;
 
 type BackfillTable = (typeof ORDER)[number];
@@ -516,6 +526,100 @@ async function backfillConsent(
   return { count, lastId: rows.at(-1)?.id ?? null, full: rows.length === BATCH };
 }
 
+/**
+ * `token_seal` holds the raw token inside a JSONB envelope, not JSON text.
+ * A value that is not an envelope could never be sent, so it is cleared.
+ */
+async function resealToken(
+  scope: EncryptionScope,
+  binding: FieldBinding,
+  stored: unknown,
+): Promise<EncryptedFieldV2 | null> {
+  const parsed = parseStoredEnvelope(stored);
+  if (!parsed) return null;
+  return scope.encrypt(await scope.decrypt(parsed, binding), binding);
+}
+
+async function backfillMembershipInvitations(
+  organisationId: string,
+  afterId: string | null,
+  scope: EncryptionScope,
+): Promise<Step> {
+  const tenant = tenantScope(organisationId);
+  const rows = await tenant.db
+    .select({ id: membershipInvitations.id, tokenSeal: membershipInvitations.tokenSeal })
+    .from(membershipInvitations)
+    .where(
+      tenant.where(
+        membershipInvitations.organisationId,
+        isNotNull(membershipInvitations.tokenSeal),
+        afterId ? gt(membershipInvitations.id, afterId) : undefined,
+      ),
+    )
+    .orderBy(asc(membershipInvitations.id))
+    .limit(BATCH);
+  let count = 0;
+  for (const row of rows) {
+    if (isTenantCiphertext(row.tokenSeal)) continue;
+    const tokenSeal = await resealToken(
+      scope,
+      bind('membership_invitations', 'token_seal', row.id),
+      row.tokenSeal,
+    );
+    await tenant.db
+      .update(membershipInvitations)
+      .set({ tokenSeal })
+      .where(
+        and(
+          eq(membershipInvitations.organisationId, organisationId),
+          eq(membershipInvitations.id, row.id),
+        ),
+      );
+    count += 1;
+  }
+  return { count, lastId: rows.at(-1)?.id ?? null, full: rows.length === BATCH };
+}
+
+async function backfillFormInvitations(
+  organisationId: string,
+  afterId: string | null,
+  scope: EncryptionScope,
+): Promise<Step> {
+  const tenant = tenantScope(organisationId);
+  const rows = await tenant.db
+    .select({ id: formInvitations.id, tokenSeal: formInvitations.tokenSeal })
+    .from(formInvitations)
+    .where(
+      tenant.where(
+        formInvitations.organisationId,
+        isNotNull(formInvitations.tokenSeal),
+        afterId ? gt(formInvitations.id, afterId) : undefined,
+      ),
+    )
+    .orderBy(asc(formInvitations.id))
+    .limit(BATCH);
+  let count = 0;
+  for (const row of rows) {
+    if (isTenantCiphertext(row.tokenSeal)) continue;
+    const tokenSeal = await resealToken(
+      scope,
+      bind('form_invitations', 'token_seal', row.id),
+      row.tokenSeal,
+    );
+    await tenant.db
+      .update(formInvitations)
+      .set({ tokenSeal })
+      .where(
+        and(
+          eq(formInvitations.organisationId, organisationId),
+          eq(formInvitations.id, row.id),
+        ),
+      );
+    count += 1;
+  }
+  return { count, lastId: rows.at(-1)?.id ?? null, full: rows.length === BATCH };
+}
+
 async function runStep(
   table: BackfillTable,
   organisationId: string,
@@ -539,6 +643,10 @@ async function runStep(
       return backfillWebhooks(organisationId, afterId, scope);
     case 'consent_records':
       return backfillConsent(organisationId, afterId, scope);
+    case 'membership_invitations':
+      return backfillMembershipInvitations(organisationId, afterId, scope);
+    case 'form_invitations':
+      return backfillFormInvitations(organisationId, afterId, scope);
     default: {
       const unreachable: never = table;
       return unreachable;

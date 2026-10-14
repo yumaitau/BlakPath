@@ -3,7 +3,9 @@
 > **Public code. Open for audit.** This repository is public under
 > [`yumaitau`](https://github.com/yumaitau) so any community member, council,
 > auditor or researcher can read, review and verify exactly what the software
-> does. No hidden logic. No hidden determination. See
+> does. No hidden logic. No hidden determination. The source is licensed under
+> the GNU Affero General Public License, version 3 only
+> ([`LICENSE`](LICENSE)). See
 > [`docs/threat-model.md`](docs/threat-model.md),
 > [`docs/privacy-architecture.md`](docs/privacy-architecture.md) and
 > [`docs/audit-log-design.md`](docs/audit-log-design.md) to verify.
@@ -185,6 +187,8 @@ documented in [`docs/accessibility-acceptance.md`](docs/accessibility-acceptance
 
 ```text
 BlakPath/
+├── LICENSE                       Source licence, AGPL-3.0-only
+├── SECURITY.md                   Private vulnerability reporting
 ├── README.md                     This file
 ├── docs/                         Architecture & security documentation (below)
 ├── src/
@@ -234,13 +238,36 @@ BlakPath/
 | [`docs/eks-runbook.md`](docs/eks-runbook.md)                                 | EKS deploy, secret sync, origin edge, restore drill, alarms                                    |
 | [`docs/adr/0001-dedicated-cluster.md`](docs/adr/0001-dedicated-cluster.md)   | Dedicated EKS cluster for BlakPath; shared-cluster rules until cutover                         |
 | [`docs/council-onboarding.md`](docs/council-onboarding.md)                   | New council tenant: teams, identity/SSO, go-live gate, legacy import                           |
+| --------------------------------------------------------------------------   | ---------------------------------------------------------------------------------------------- |
+| [`docs/branch-protection.md`](docs/branch-protection.md)                     | `main` ruleset, merge queue, required checks and code owners                                   |
+| [`SECURITY.md`](SECURITY.md)                                                 | Private vulnerability reporting, response targets and safe harbour                             |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)                                         | Contribution rules, including the ban on software determining identity                         |
 
 ## Licence & governance — open code, community authority
 
-BlakPath code is public and auditable. Data governance and cultural authority
-stay with the relevant Aboriginal and Torres Strait Islander organisations,
-councils and communities. The software is a custodial tool, not a
-decision-maker.
+BlakPath source code is licensed under the GNU Affero General Public License,
+version 3 only ([`LICENSE`](LICENSE), SPDX `AGPL-3.0-only`). Copyright (C)
+2026 Yuma IT. That licence is the legal grant behind "public code, open for
+audit": you may run, study, modify and share the program, including when a
+modified version is offered as a network service, and corresponding source
+stays available to its users.
+
+Version 3 only. Later versions of the GNU licence do not apply unless the
+copyright holder adds that permission. This README is not legal advice; the
+`LICENSE` text controls.
+
+The licence covers source code in this repository. It does not cover, and
+does not give anyone the right to collect, publish or reuse:
+
+- Confirmation of Aboriginality records, or any other personal information
+- genealogy, evidence, correspondence or audit contents
+- cultural knowledge, or a community's authority over its own decisions
+
+Data governance and cultural authority stay with the relevant Aboriginal and
+Torres Strait Islander organisations, councils and communities. The software
+is a custodial tool, not a decision-maker. It must not score, rank, predict,
+infer, auto-approve or auto-reject Aboriginality. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 - **Use by any local council:** any council or authorised community
   organisation can deploy its own isolated tenant, configure its own roles,
@@ -249,5 +276,5 @@ decision-maker.
   (`docs/tenant-isolation.md`).
 - **Audit it:** all sensitive actions are permission-checked and written to an
   append-only, hash-chained audit trail (`docs/audit-log-design.md`).
-  Report issues via GitHub Issues; security issues via the process in
-  `docs/operations-runbook.md`.
+  Report product issues via GitHub Issues. Report security vulnerabilities
+  privately, as described in [`SECURITY.md`](SECURITY.md).
