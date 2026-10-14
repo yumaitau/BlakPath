@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 
 test('sensitive APIs consistently reject anonymous requests', async ({ request }) => {
   const protectedGets = [

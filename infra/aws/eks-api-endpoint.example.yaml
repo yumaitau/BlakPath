@@ -1,0 +1,9 @@
+# Desired Kubernetes API endpoint for the cluster that runs BlakPath.
+# Private access only. Reach the API through Tailscale or another private path.
+# Apply with UpdateClusterConfig. If public access must stay, set
+# endpointPublicAccess to true and list admin or CI CIDRs. Never use
+# 0.0.0.0/0 or ::/0. Tightening the shared cluster affects every team on it;
+# the dedicated cluster in docs/adr/0001-dedicated-cluster.md is the target.
+resourcesVpcConfig:
+  endpointPublicAccess: false
+  endpointPrivateAccess: true

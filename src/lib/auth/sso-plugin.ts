@@ -11,6 +11,7 @@ import {
   type SsoBinding,
   type SsoDenialReason,
 } from '@/domains/sso/sign-in';
+import { CLIENT_IP_HEADER } from '@/lib/http/client-ip';
 import { logger } from '@/lib/observability/logger';
 import {
   idTokenSatisfiesMfa,
@@ -69,13 +70,17 @@ function isRegistered(providerKey: string): boolean {
   return resolveSsoProvider(providerKey) !== null;
 }
 
+/**
+ * Audit metadata. The auth route has already replaced forwarded headers and
+ * set `CF-Connecting-IP` only to the address `clientIp` accepted, so that
+ * header is the trusted client address here (absent when unverified).
+ */
 function requestMeta(request: Request | undefined): {
   ipAddress: string | null;
   userAgent: string | null;
 } {
-  const forwarded = request?.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
   return {
-    ipAddress: forwarded || null,
+    ipAddress: request?.headers.get(CLIENT_IP_HEADER) || null,
     userAgent: request?.headers.get('user-agent') ?? null,
   };
 }

@@ -174,6 +174,13 @@ async function seedFixtures(): Promise<void> {
     insert into membership_roles (id, membership_id, role_id)
     values (${randomUUID()}, ${membership!.id}, ${role!.id})
     on conflict do nothing`;
+  // Staff MFA policy still applies to federated users: the staff shell needs
+  // an enrolled factor. Fixture passkey only, like the dev seed's.
+  await sql`
+    insert into passkeys (id, user_id, name, credential_id, public_key, counter)
+    select ${randomUUID()}, ${user!.id}, 'SSO E2E fixture passkey',
+           ${`sso-e2e-${user!.id}`}, 'sso-e2e-fixture-passkey', 0
+    where not exists (select 1 from passkeys where user_id = ${user!.id})`;
 }
 
 async function setBindingEnabled(enabled: boolean): Promise<void> {

@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  BlakPath-managed symmetric CMK for one tenant, in the BlakPath account,
+  ap-southeast-2. Same action set and org_id condition as the client template.
+  An operator applies this. The tool does not call AWS.
+
+Parameters:
+  OrganisationId:
+    Type: String
+    AllowedPattern: '^[0-9a-fA-F-]{36}$'
+  TenantSlug:
+    Type: String
+    AllowedPattern: '^[a-z0-9-]{1,40}$'
+  WorkloadRoleArns:
+    Type: CommaDelimitedList
+    Description: Web and worker role ARNs allowed to use this key.
+
+Resources:
+  TenantKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub 'BlakPath managed key for ${TenantSlug}'
+      KeyUsage: ENCRYPT_DECRYPT
+      KeySpec: SYMMETRIC_DEFAULT
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: BlakPathEnvelope
+            Effect: Allow
+            Principal:
+              AWS: !Ref WorkloadRoleArns
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:EncryptionContext:org_id: !Ref OrganisationId
+                aws:SourceAccount: !Ref 'AWS::AccountId'
+          - Sid: BlakPathDescribe
+            Effect: Allow
+            Principal:
+              AWS: !Ref WorkloadRoleArns
+            Action: kms:DescribeKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref 'AWS::AccountId'
+
+  TenantKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/blakpath-tenant-${TenantSlug}'
+      TargetKeyId: !Ref TenantKey
+
+Outputs:
+  KeyArn:
+    Value: !GetAtt TenantKey.Arn

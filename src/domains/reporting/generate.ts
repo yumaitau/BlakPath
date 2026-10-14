@@ -3,6 +3,7 @@ import { applications, certificates, decisions, exportRequests } from '@/db/sche
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { logger } from '@/lib/observability/logger';
+import { openApplicationRows } from '@/lib/encryption/tenant-fields';
 import { EVIDENCE_BUCKET, objectKey, putObjectBytes } from '@/lib/storage/s3';
 import { toCsv, type CsvCell } from './csv';
 import { REPORT_COLUMNS, isReportType, type ReportType } from './reports';
@@ -44,9 +45,10 @@ async function buildReport(
         ),
       )
       .orderBy(desc(applications.createdAt));
+    const opened = await openApplicationRows(scope.organisationId, items);
     return {
       headers,
-      rows: items.map((a) => [
+      rows: opened.map((a) => [
         a.reference,
         a.applicantName,
         a.status,
@@ -139,6 +141,7 @@ export async function processExport(input: ProcessExportInput): Promise<void> {
       key,
       body: Buffer.from(csv, 'utf8'),
       contentType: 'text/csv; charset=utf-8',
+      organisationId,
     });
 
     await settle({
