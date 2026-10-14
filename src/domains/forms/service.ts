@@ -403,7 +403,13 @@ export async function listResponses(formId: string): Promise<FormResponseRow[]> 
   const rows = await scope.db
     .select()
     .from(formResponses)
-    .where(scope.where(formResponses.organisationId, eq(formResponses.formId, formId)))
+    .where(
+      scope.where(
+        formResponses.organisationId,
+        eq(formResponses.formId, formId),
+        isNull(formResponses.deletedAt),
+      ),
+    )
     .orderBy(desc(formResponses.submittedAt));
   return openFormResponses(scope.organisationId, rows);
 }
