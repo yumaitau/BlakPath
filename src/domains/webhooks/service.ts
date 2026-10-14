@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
@@ -11,6 +11,8 @@ import { addJob, QueueName } from '@/lib/queues';
 import { sealWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { assertWebhookDestinationForCreate } from './destination';
+import { requeueDelivery } from './requeue';
+import { webhookJobOptions } from './retry';
 import type { WebhookEvent } from './events';
 import { createEndpointSchema, type CreateEndpointInput } from './schemas';
 import { toWebhookEndpointView, type WebhookEndpointView } from './view';
@@ -22,7 +24,8 @@ import { toWebhookEndpointView, type WebhookEndpointView } from './view';
  * domain services and the worker, so it uses `scopeFor` (no ambient context):
  * it finds the active endpoints subscribed to an event, records a delivery per
  * endpoint, and enqueues each for the delivery worker. Payloads carry ids and
- * non-sensitive fields only.
+ * non-sensitive fields only. A delivery whose enqueue fails stays `pending` and
+ * is picked up by the stale-delivery sweeper (see `sweep.ts`).
  */
 
 export type WebhookEndpointRow = typeof webhookEndpoints.$inferSelect;
@@ -247,13 +250,106 @@ export async function emitWebhookEvent(input: EmitInput): Promise<void> {
     const delivery = inserted[0];
     if (!delivery) continue;
 
-    await addJob(
-      QueueName.Webhook,
-      'deliver',
-      { organisationId: input.organisationId, correlationId, deliveryId: delivery.id },
-      { jobId: delivery.id },
-    );
+    try {
+      await addJob(
+        QueueName.Webhook,
+        'deliver',
+        { organisationId: input.organisationId, correlationId, deliveryId: delivery.id },
+        webhookJobOptions(delivery.id),
+      );
+    } catch (err) {
+      // The row is recorded as `pending`; the sweeper re-queues it. Keep going
+      // so one enqueue failure does not starve the remaining endpoints.
+      logger.warn(
+        { err, organisationId: input.organisationId, deliveryId: delivery.id },
+        'webhook enqueue failed; left pending for the sweeper',
+      );
+    }
   }
+}
+
+/**
+ * Manually redeliver a settled (delivered or failed) delivery. Requires
+ * `tenant:configure`. Resets the attempt count so the full retry schedule
+ * applies again, re-enqueues it, and audits the request. A delivery that is
+ * still `pending` is already being retried and is refused, so a double click
+ * cannot send two copies.
+ */
+export async function redeliverDelivery(
+  endpointId: string,
+  deliveryId: string,
+): Promise<WebhookDeliveryRow> {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'tenant:configure');
+  const scope = currentScope();
+
+  const [endpoint] = await scope.db
+    .select({ id: webhookEndpoints.id })
+    .from(webhookEndpoints)
+    .where(
+      scope.where(
+        webhookEndpoints.organisationId,
+        eq(webhookEndpoints.id, endpointId),
+        eq(webhookEndpoints.active, true),
+        isNull(webhookEndpoints.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!endpoint) throw new AuthorizationError('POLICY_DENIED');
+
+  // Conditional update: only a settled delivery flips back to pending, which
+  // also makes concurrent redeliver requests race-safe. The audit commits with
+  // the state change; the job is enqueued only after both are durable (a
+  // failed enqueue leaves the row pending for the sweeper).
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(webhookDeliveries)
+      .set({
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        lastResponseCode: null,
+        deliveredAt: null,
+      })
+      .where(
+        scope.where(
+          webhookDeliveries.organisationId,
+          eq(webhookDeliveries.id, deliveryId),
+          eq(webhookDeliveries.endpointId, endpointId),
+          ne(webhookDeliveries.status, 'pending'),
+        ),
+      )
+      .returning();
+    const reset = updated[0];
+    if (!reset) {
+      throw new AuthorizationError(
+        'POLICY_DENIED',
+        'This delivery cannot be redelivered right now.',
+      );
+    }
+
+    await recordAudit(
+      {
+        action: 'integration.redelivery_requested',
+        resourceType: 'integration',
+        resourceId: endpointId,
+        result: 'success',
+        after: {
+          data: { deliveryId, event: reset.event },
+          allow: ['deliveryId', 'event'],
+        },
+      },
+      tx,
+    );
+    return reset;
+  });
+
+  await requeueDelivery({
+    organisationId: ctx.organisationId,
+    deliveryId,
+    correlationId: ctx.correlationId,
+  });
+  return row;
 }
 
 /** Convenience: emit but swallow any error (for non-critical call sites). */

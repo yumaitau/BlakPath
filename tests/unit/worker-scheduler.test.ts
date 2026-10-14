@@ -7,6 +7,7 @@ vi.mock('@/lib/queues', () => ({
     AuditVerify: 'audit-verify',
     Retention: 'retention',
     Reminder: 'reminder',
+    Webhook: 'webhook',
     KeyHealth: 'key-health',
     MalwareScan: 'malware-scan',
   },
@@ -108,6 +109,7 @@ describe('tenant maintenance scheduler', () => {
       auditSchedulers: 2,
       retentionSchedulers: 2,
       reminderSchedulers: 0,
+      webhookSweepSchedulers: 0,
       keyHealthSchedulers: 0,
       scanSchedulers: 0,
       removedSchedulers: 2,
@@ -137,6 +139,34 @@ describe('tenant maintenance scheduler', () => {
     expect(report.keyHealthSchedulers).toBe(0);
     expect(report.scanSchedulers).toBe(0);
     expect(report.removedSchedulers).toBe(0);
+  });
+
+  it('schedules webhook sweeps and removes stale ones when the webhook queue is supplied', async () => {
+    const stale = tenantSchedulerId(QueueName.Webhook, 'closed-org');
+    const webhookQueue = fakeQueue([stale]);
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue: fakeQueue(),
+      retentionQueue: fakeQueue(),
+      webhookQueue,
+      intervals: {
+        auditVerifyMs: 60_000,
+        retentionSweepMs: 120_000,
+        webhookSweepMs: 300_000,
+      },
+    });
+    expect(webhookQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.Webhook, 'org-a'),
+        every: 300_000,
+        name: 'sweep',
+        organisationId: 'org-a',
+        attempts: 3,
+      },
+    ]);
+    expect(webhookQueue.removed).toEqual([stale]);
+    expect(report.webhookSweepSchedulers).toBe(1);
+    expect(report.removedSchedulers).toBe(1);
   });
 
   it('schedules the platform chain without dropping tenant schedules', async () => {

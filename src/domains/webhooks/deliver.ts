@@ -7,6 +7,7 @@ import { openWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { isDestinationRejection } from './destination';
 import { deliverWebhookRequest, deliveryDisposition } from './dispatch';
+import { WEBHOOK_MAX_ATTEMPTS } from './retry';
 import {
   signPayload,
   WEBHOOK_DELIVERY_HEADER,
@@ -19,14 +20,14 @@ import {
  *
  * Runs with an explicit organisation id (no ambient tenant context). Signs the
  * body, POSTs it, and records the outcome. FAIL-SECURE about retries: a failed
- * delivery THROWS so BullMQ retries with backoff, until `MAX_ATTEMPTS`, after
- * which the delivery is marked `failed` and left for operator inspection — it is
- * never silently dropped and never "succeeds" without a 2xx. A destination that
- * fails the public-HTTPS policy is terminal: it is not retried and it is not
- * dialled.
+ * delivery THROWS so BullMQ retries with the webhook backoff (hours, see
+ * `retry.ts`), until `MAX_ATTEMPTS`, after which the delivery is marked `failed`
+ * and left for operator inspection or manual redelivery — it is never silently
+ * dropped and never "succeeds" without a 2xx. A destination that fails the
+ * public-HTTPS policy is terminal: it is not retried and it is not dialled.
  */
 
-export const MAX_ATTEMPTS = 5;
+export const MAX_ATTEMPTS = WEBHOOK_MAX_ATTEMPTS;
 const TIMEOUT_MS = 10_000;
 
 export interface DeliverInput {

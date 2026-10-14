@@ -70,6 +70,11 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
       path: `/api/decisions/${resourceId}`,
       data: { operation: 'vote', choice: 'abstain' },
     },
+    {
+      method: 'post',
+      path: `/api/webhooks/${resourceId}/deliveries/${resourceId}/redeliver`,
+      data: {},
+    },
   ] as const;
 
   for (const mutation of protectedMutations) {

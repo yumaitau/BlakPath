@@ -666,6 +666,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/webhooks', anyOf(['tenant:configure'])),
   route('DELETE', '/api/webhooks/[id]', anyOf(['tenant:configure'])),
   route('GET', '/api/webhooks/[id]/deliveries', anyOf(['tenant:configure'])),
+  route(
+    'POST',
+    '/api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
+    anyOf(['tenant:configure']),
+  ),
   route('POST', '/api/webhooks/[id]/rotate', anyOf(['tenant:configure'])),
 ];
 
