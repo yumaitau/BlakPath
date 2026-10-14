@@ -54,7 +54,8 @@ Network boundaries expected by these templates:
 - web pods run in private subnets and accept traffic only from that load balancer;
 - worker pods have no inbound security-group rules;
 - PostgreSQL, Redis and ClamAV accept traffic only from the web/worker groups that
-  need them; database and Redis transports use TLS;
+  need them; database transport is `sslmode=verify-full` against the RDS global
+  bundle baked into the image, and Redis uses TLS;
 - S3, KMS, Secrets Manager, CloudWatch Logs and ECR use VPC endpoints so pod
   traffic does not require a public route;
 - the quarantine and evidence buckets block public access, enforce TLS and a

@@ -168,13 +168,14 @@ export function validateProductionReadiness(
   }
 
   const database = addRequiredUrl(issues, environment, 'DATABASE_URL', 'postgres:');
-  if (
-    database &&
-    !['require', 'verify-ca', 'verify-full'].includes(
-      database.searchParams.get('sslmode') ?? '',
-    )
-  ) {
-    issues.push({ key: 'DATABASE_URL', message: 'must enforce TLS with sslmode' });
+  // `require` is not enough: postgres.js then skips certificate verification,
+  // so a substitute certificate would be accepted. `verify-ca` skips the hostname.
+  if (database && database.searchParams.get('sslmode')?.toLowerCase() !== 'verify-full') {
+    issues.push({
+      key: 'DATABASE_URL',
+      message:
+        'must use sslmode=verify-full (certificate and hostname). sslmode=require does not verify the server',
+    });
   }
   const appRole = environment.AUDIT_DB_APP_ROLE || 'blakpath_app';
   if (database && decodeURIComponent(database.username) !== appRole) {
@@ -191,13 +192,12 @@ export function validateProductionReadiness(
   );
   if (
     migration &&
-    !['require', 'verify-ca', 'verify-full'].includes(
-      migration.searchParams.get('sslmode') ?? '',
-    )
+    migration.searchParams.get('sslmode')?.toLowerCase() !== 'verify-full'
   ) {
     issues.push({
       key: 'DATABASE_MIGRATION_URL',
-      message: 'must enforce TLS with sslmode',
+      message:
+        'must use sslmode=verify-full (certificate and hostname). sslmode=require does not verify the server',
     });
   }
   const roleIssue = migrationRoleIssue(environment);

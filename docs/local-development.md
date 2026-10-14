@@ -37,16 +37,16 @@ exceptions are `src/db/migrate.ts` and instrumentation).
 
 Key local defaults (see `.env.example`):
 
-| Variable                                      | Local value                                            | Notes                                                                             |
-| --------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres. See `docs/database-migrations.md` for the migrator role.                |
-| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                                          |
-| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                             |
-| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                                |
-| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                                  |
-| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                                        |
-| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — external tool access stays hidden. Must never decide/score/infer |
-| `STAFF_IDLE_TIMEOUT_MINUTES`                  | `30`                                                   | Staff UI inactivity sign-out (5-720)                                              |
+| Variable                                      | Local value                                            | Notes                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres. No TLS locally. Production requires `sslmode=verify-full`. See `docs/database-migrations.md` for the migrator role. |
+| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                                                                                      |
+| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                                                                         |
+| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                                                                            |
+| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                                                                              |
+| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                                                                                    |
+| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — external tool access stays hidden. Must never decide/score/infer                                             |
+| `STAFF_IDLE_TIMEOUT_MINUTES`                  | `30`                                                   | Staff UI inactivity sign-out (5-720)                                                                                          |
 
 ## Local services (Docker)
 

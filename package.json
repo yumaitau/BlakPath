@@ -65,8 +65,8 @@
     "db:seed": "tsx src/db/seeds/index.ts",
     "certificates:backfill-signing-keys": "tsx scripts/backfill-coa-signing-keys.ts",
     "admin:invite": "tsx scripts/invite-first-admin.ts",
-    "worker": "tsx worker/index.ts",
-    "worker:dev": "tsx watch worker/index.ts"
+    "worker": "BLAKPATH_PROCESS=worker tsx worker/index.ts",
+    "worker:dev": "BLAKPATH_PROCESS=worker tsx watch worker/index.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1130.0",

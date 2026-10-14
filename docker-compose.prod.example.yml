@@ -46,6 +46,7 @@ services:
       NODE_ENV: production
       APP_REGION: ap-southeast-2
       PORT: '3000'
+      DATABASE_POOL_MAX: '10'
     ports:
       - '3000:3000'
     # Harden the runtime: immutable root filesystem, writable scratch only.
@@ -88,6 +89,8 @@ services:
     environment:
       NODE_ENV: production
       APP_REGION: ap-southeast-2
+      BLAKPATH_PROCESS: worker
+      DATABASE_WORKER_POOL_MAX: '33'
     read_only: true
     tmpfs:
       - /tmp

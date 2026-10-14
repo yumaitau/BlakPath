@@ -46,6 +46,12 @@ never mount the migrator secret.
       enabled. Client addresses come from `clientIp` (`src/lib/http/client-ip.ts`).
 - [ ] Configure database point-in-time recovery and versioned, encrypted object
       storage backups. Redis is not a durable source of record.
+- [ ] Use RDS Postgres of at least 2 GiB (`max_connections` ≥ 225) with RDS Proxy
+      in front. `DATABASE_URL` must set `sslmode=verify-full` against the proxy
+      or instance hostname. The connection budget in `docs/eks-runbook.md` must
+      still hold if pools or replica limits change.
+- [ ] After cutover, under load, confirm `DatabaseConnectionsCurrentlySessionPinned`
+      stays near zero and `SHOW statement_timeout` from an app session is not 0.
 - [ ] Run a documented restore drill into an isolated environment. Confirm a
       tenant can sign in, their records are present, objects can be read only after
       the normal authorisation checks, and `audit-verify` reports a clean chain.
