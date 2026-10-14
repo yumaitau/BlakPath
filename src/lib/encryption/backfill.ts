@@ -228,6 +228,7 @@ async function backfillFamily(
       relativeName: familyLinks.relativeName,
       community: familyLinks.community,
       notes: familyLinks.notes,
+      decisionNote: familyLinks.decisionNote,
     })
     .from(familyLinks)
     .where(
@@ -243,7 +244,9 @@ async function backfillFamily(
     const nameReady = isTenantCiphertext(row.relativeName);
     const communityReady = row.community == null || isTenantCiphertext(row.community);
     const notesReady = row.notes == null || isTenantCiphertext(row.notes);
-    if (nameReady && communityReady && notesReady) continue;
+    const decisionNoteReady =
+      row.decisionNote == null || isTenantCiphertext(row.decisionNote);
+    if (nameReady && communityReady && notesReady && decisionNoteReady) continue;
     const name = nameReady
       ? row.relativeName
       : ((
@@ -265,9 +268,18 @@ async function backfillFamily(
     const notes = notesReady
       ? row.notes
       : (await resaveText(scope, bind('family_links', 'notes', row.id), row.notes)).value;
+    const decisionNote = decisionNoteReady
+      ? row.decisionNote
+      : (
+          await resaveText(
+            scope,
+            bind('family_links', 'decision_note', row.id),
+            row.decisionNote,
+          )
+        ).value;
     await tenant.db
       .update(familyLinks)
-      .set({ relativeName: name, community, notes })
+      .set({ relativeName: name, community, notes, decisionNote })
       .where(
         and(eq(familyLinks.organisationId, organisationId), eq(familyLinks.id, row.id)),
       );

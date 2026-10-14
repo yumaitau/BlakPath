@@ -90,6 +90,11 @@ const APPLICATION_READ = [
   'application:read-own',
 ] as const satisfies readonly Permission[];
 
+const FAMILY_LINK = [
+  'family-link:request',
+  'family-link:approve',
+] as const satisfies readonly Permission[];
+
 const CONSENT_WRITE = [
   'application:create',
   'application:update-intake',
@@ -267,6 +272,17 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     '/api/applications/[id]/evidence-requests/[requestId]/notify',
     anyOf(['correspondence:send']),
   ),
+  // Genealogy reads also need a staff case read, so an applicant holding
+  // `family-link:request` is still refused the list.
+  route('GET', '/api/applications/[id]/family-links', anyOf(FAMILY_LINK), {
+    denyActor: { type: 'role', slug: 'applicant' },
+  }),
+  route('POST', '/api/applications/[id]/family-links', anyOf(['family-link:request']), {
+    body: { relationship: 'grandmother', relativeName: 'Matrix Relative' },
+  }),
+  route('PATCH', '/api/applications/[id]/family-links/[linkId]', anyOf(FAMILY_LINK), {
+    body: { operation: 'approve' },
+  }),
   route('POST', '/api/applications/[id]/reviews', anyOf(['review:create'])),
   // Gated in the audit domain (`src/domains/audit/log.ts`); a refusal is
   // itself recorded on the tenant chain.
@@ -765,8 +781,6 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
 export const UNROUTED_PERMISSIONS = {
   'evidence:read-assigned':
     'Included in the break-glass read bundle. Download checks evidence:download.',
-  'family-link:request': 'requestFamilyLink has no route.',
-  'family-link:approve': 'approveFamilyLink has no route.',
   'conflict:declare': 'declareConflict has no route.',
   'break-glass:request':
     'The platform-operator template grants it. Request and activate check users.isPlatformOperator, not this key.',

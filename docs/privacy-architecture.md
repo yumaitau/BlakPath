@@ -124,7 +124,7 @@ and is not residue.
 Inventoried columns:
 
 - `applications.applicant_name` and `applications.intake`
-- `family_links.relative_name`, `community`, `notes`
+- `family_links.relative_name`, `community`, `notes`, `decision_note`
 - `form_responses.answers` and `respondent_email`
 - `clients.contact_email`, `contact_phone`, `notes` (`display_name` stays readable)
 - `application_notes.body`

@@ -168,12 +168,23 @@ export async function sealFamilyFields(
   };
 }
 
+/** The decider's note can name the relative, so it sits under the tenant key. */
+export async function sealFamilyDecisionNote(
+  organisationId: string,
+  rowId: string,
+  note: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('family_links', 'decision_note', rowId), note);
+}
+
 export async function openFamilyRows<
   T extends {
     id: string;
     relativeName: string;
     community: string | null;
     notes: string | null;
+    decisionNote: string | null;
   },
 >(organisationId: string, rows: readonly T[]): Promise<T[]> {
   return mapRows(organisationId, rows, async (scope, row) => ({
@@ -190,6 +201,11 @@ export async function openFamilyRows<
       row.community,
     ),
     notes: await openText(scope, bind('family_links', 'notes', row.id), row.notes),
+    decisionNote: await openText(
+      scope,
+      bind('family_links', 'decision_note', row.id),
+      row.decisionNote,
+    ),
   }));
 }
 

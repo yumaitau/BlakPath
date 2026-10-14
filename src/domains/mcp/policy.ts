@@ -16,7 +16,7 @@ export const MCP_RATE_WINDOW_MS = 60_000;
 
 /**
  * Fields stripped unless the key holds `mcp:read-pii`.
- * Names, contact details, free-text intake, and recorded outcomes.
+ * Names, contact details, free-text intake, family-link text, and recorded outcomes.
  */
 export const MCP_WITHHELD_FIELDS: readonly string[] = [
   'applicantName',
@@ -34,6 +34,10 @@ export const MCP_WITHHELD_FIELDS: readonly string[] = [
   'proposedOutcome',
   'finalOutcome',
   'title',
+  'relativeName',
+  'community',
+  'notes',
+  'decisionNote',
 ];
 
 const WITHHELD = new Set<string>(MCP_WITHHELD_FIELDS);
