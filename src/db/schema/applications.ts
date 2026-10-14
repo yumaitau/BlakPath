@@ -89,6 +89,11 @@ export const applications = pgTable(
     withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
     withdrawnReason: text('withdrawn_reason'),
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    /**
+     * Set when retention has anonymised this row. The sweep skips a non-null
+     * value so a later run does not rewrite or re-audit the same matter.
+     */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
     ...rowVersion,
     ...softDelete,

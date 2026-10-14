@@ -110,7 +110,10 @@ export const formResponses = pgTable(
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
     /** Coarse origin for abuse investigation; not shown in the UI. */
     ipAddress: text('ip_address'),
+    /** Set once retention has anonymised this response. A later sweep skips it. */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
+    ...softDelete,
   },
   (table) => [
     index('form_responses_org_form_idx').on(table.organisationId, table.formId),

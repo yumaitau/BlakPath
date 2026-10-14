@@ -273,8 +273,10 @@ describe('EKS Pod Identity roles', () => {
       'kms:GetPublicKey',
       'kms:Sign',
       's3:DeleteObject',
+      's3:DeleteObjectVersion',
       's3:GetObject',
       's3:ListBucket',
+      's3:ListBucketVersions',
       's3:PutObject',
     ]);
     const signers = [...workerStatements.entries()].filter(
