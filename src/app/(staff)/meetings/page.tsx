@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import {
   MeetingCalendar,
   type CalendarEvent,
@@ -59,23 +58,9 @@ export default async function MeetingsPage() {
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">Committee meetings</h1>
       <div className="flex flex-col gap-8">
-        {canCreate ? <ScheduleMeetingForm /> : null}
-        {events.length > 0 ? (
-          <ul className="divide-border divide-y rounded-lg border">
-            {events.map((meeting) => (
-              <li key={meeting.id}>
-                <Link
-                  href={meeting.href ?? `/meetings/${meeting.id}`}
-                  className="hover:bg-muted/40 flex items-baseline justify-between gap-3 px-3 py-2"
-                >
-                  <span className="font-medium">{meeting.title}</span>
-                  <span className="text-muted-foreground text-sm">{meeting.status}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        {/* Calendar entries for committee meetings link to the sitting. */}
         <MeetingCalendar events={events} calendarEvents={calendarEvents} />
+        {canCreate ? <ScheduleMeetingForm /> : null}
       </div>
     </div>
   );
