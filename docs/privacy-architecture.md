@@ -48,9 +48,10 @@ database. These are protected with **envelope encryption**:
 - The stored envelope is version 2: key id (ARN and version), encryption
   context, nonce, tag, wrapped data key, and ciphertext. Additional
   authenticated data binds the value to its table, column, row and organisation.
-  A version-1 reader remains only so older ciphertext can be migrated.
-  `ENCRYPTION_MASTER_KEY` is that legacy reader key. It is not required in
-  production.
+  Nothing writes version 1 any more. A version-1 reader remains only so older
+  ciphertext can be migrated. `ENCRYPTION_MASTER_KEY` is that legacy reader
+  key. It is needed only until the backfill below has run for every tenant;
+  after that it can be removed from the environment.
 - `organisation_keys` records custody mode, key ARN, version, status
   (`pending_validation`, `active`, `disabled`, `pending_deletion`,
   `unavailable`), validation (`pending`, `passed`, `failed`) and whether an
@@ -102,6 +103,8 @@ Inventoried columns:
 - `webhook_endpoints.secret`
 - `correspondence_messages.recipient`, `subject`, `text_body`, `html_body`
 - `consent_records.wording_snapshot` (the wording copied at grant time)
+- `membership_invitations.token_seal` and `form_invitations.token_seal` (the
+  bearer token held until the invitation email is sent; JSONB envelope)
 
 `applications.reference` stays readable so staff can see the matter number.
 Lookup does not use a plaintext index on that column.
@@ -163,6 +166,8 @@ sealed under the tenant key. The job is not scheduled. An operator enqueues it
 per organisation. Each batch and the completion are audited with the table
 name and the row count only. `PLAINTEXT_RESIDUE_SQL` counts non-null values
 that are not version-2 envelopes. A finished run leaves every count at 0.
+Once every organisation has a completed run, no stored value needs
+`ENCRYPTION_MASTER_KEY` and it can be removed.
 
 A disabled, pending-deletion, or unreachable tenant key fails closed
 (`TenantKeyUnavailableError`). Record reads and evidence downloads throw. They

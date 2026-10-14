@@ -13,7 +13,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    lives in the ConfigMap. Set `PLATFORM_KMS_KEY_ARN` (platform CMK, not a
    secret) in the config. Do not set `ENCRYPTION_LOCAL_KEY`, `KMS_ENDPOINT`,
    `SMTP_USER` or `SMTP_PASSWORD`. `ENCRYPTION_MASTER_KEY` is optional and
-   only reads version-1 ciphertext. Create a separate secret at
+   only reads version-1 ciphertext; nothing writes it. Drop it once the
+   encryption backfill has completed for every organisation. Create a separate secret at
    `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
    `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
 3. In `infra/aws/eks-boundary.example.yaml`, replace `OIDC_ID` with the cluster
@@ -146,11 +147,10 @@ shell history, or this repo.
 4. Revoke the old PaperBoy key, then store the new `PAPERBOY_API_KEY`.
 5. `EMAIL_WEBHOOK_SECRET` (at least 16 characters).
 6. Remove `SMTP_USER` and `SMTP_PASSWORD`.
-7. `ENCRYPTION_MASTER_KEY` only when no ciphertext depends on it.
-   `decryptField` uses the current key alone, so replacing it makes stored
-   fields unreadable. Before production records, replace it with a new
-   base64 32-byte value and bump `ENCRYPTION_KEY_VERSION`. After records
-   exist, leave it until wrapped data keys can be rewrapped.
+7. `ENCRYPTION_MASTER_KEY` is not rotated. It only reads version-1
+   ciphertext, and replacing it makes those values unreadable. Run the
+   encryption backfill for every organisation, confirm
+   `PLAINTEXT_RESIDUE_SQL` reports 0, then remove the key.
 
 Record who rotated, when, and which keys. Do not record the values.
 
