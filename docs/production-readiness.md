@@ -48,6 +48,10 @@ region.
       penetration-test scope.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Deploy the SES sender (`infra/aws/ses-sending.example.yaml`, ADR 0090).
+      An invitation and a password reset must reach an external mailbox with
+      `dkim=pass spf=pass dmarc=pass`, and simulator bounce/complaint events
+      must create suppressions in staging (`docs/eks-runbook.md#email`).
 - [ ] Review `infra/k8s/network-policy.example.yaml` against the live VPC,
       database, Redis and object-storage endpoints, then apply a policy that
       keeps webhook delivery off in-cluster and link-local addresses. Rotate

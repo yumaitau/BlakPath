@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Auth and tenant mail share `sendEmail`. Production without SMTP_USER uses
- * the SES API; a configured relay uses SMTP. Suppressed addresses never send.
+ * Auth and tenant mail share `sendEmail`. `EMAIL_TRANSPORT=ses` uses the SES
+ * API; the default `smtp` is unauthenticated Mailpit. Suppressed addresses
+ * never send.
  * Bearer links stay in the body — logs get a redacted recipient only.
  */
 
@@ -52,7 +53,9 @@ const bearerUrl = 'https://app.example/verify?token=secret-bearer';
 async function resetMailState(): Promise<void> {
   const { __resetEnvCache } = await import('@/lib/env');
   __resetEnvCache();
-  delete (globalThis as { __blakpathMailer?: unknown }).__blakpathMailer;
+  const holder = globalThis as { __blakpathMailer?: unknown; __blakpathSes?: unknown };
+  delete holder.__blakpathMailer;
+  delete holder.__blakpathSes;
 }
 
 beforeEach(() => {
@@ -73,9 +76,8 @@ afterEach(() => {
 });
 
 describe('sendEmail', () => {
-  it('uses the SES API when no SMTP user is configured', async () => {
-    delete process.env.SMTP_USER;
-    delete process.env.SMTP_PASSWORD;
+  it('uses the SES API when EMAIL_TRANSPORT=ses', async () => {
+    vi.stubEnv('EMAIL_TRANSPORT', 'ses');
     await resetMailState();
     const { authMailer } = await import('@/lib/email/mailer');
 
@@ -87,7 +89,7 @@ describe('sendEmail', () => {
     });
 
     expect(createTransport).not.toHaveBeenCalled();
-    expect(sesClients).toEqual([{ region: 'ap-southeast-2' }]);
+    expect(sesClients).toEqual([expect.objectContaining({ region: 'ap-southeast-2' })]);
     expect(sesSend).toHaveBeenCalledOnce();
     const command = sesSend.mock.calls[0]?.[0] as { input: Record<string, unknown> };
     expect(command.input).toMatchObject({
@@ -107,11 +109,10 @@ describe('sendEmail', () => {
     expect(logged).not.toContain(bearerUrl);
   });
 
-  it('uses SMTP with auth when SMTP_USER is set, and TLS only on port 465', async () => {
-    vi.stubEnv('SMTP_USER', 'relay-user');
-    vi.stubEnv('SMTP_PASSWORD', 'relay-secret');
+  it('uses unauthenticated SMTP by default, and TLS only on port 465', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('SMTP_PORT', '465');
-    vi.stubEnv('SMTP_HOST', 'email-smtp.ap-southeast-2.amazonaws.com');
+    vi.stubEnv('SMTP_HOST', 'mailpit.internal');
     await resetMailState();
     const { sendEmail } = await import('@/lib/email/mailer');
 
@@ -125,10 +126,9 @@ describe('sendEmail', () => {
     expect(sesSend).not.toHaveBeenCalled();
     expect(createTransport).toHaveBeenCalledOnce();
     expect(createTransport).toHaveBeenCalledWith({
-      host: 'email-smtp.ap-southeast-2.amazonaws.com',
+      host: 'mailpit.internal',
       port: 465,
       secure: true,
-      auth: { user: 'relay-user', pass: 'relay-secret' },
     });
     expect(sendMail).toHaveBeenCalledWith({
       from: 'BlakPath <no-reply@blakpath.local>',
@@ -142,7 +142,7 @@ describe('sendEmail', () => {
   });
 
   it('delivers queued password reset through the same transport without logging the link', async () => {
-    delete process.env.SMTP_USER;
+    vi.stubEnv('EMAIL_TRANSPORT', 'ses');
     await resetMailState();
     const { deliverPasswordResetEmail } = await import('@/lib/email/mailer');
 
@@ -167,7 +167,6 @@ describe('sendEmail', () => {
   });
 
   it('skips a suppressed address before either transport', async () => {
-    vi.stubEnv('SMTP_USER', 'relay-user');
     isSuppressed.mockResolvedValue(true);
     await resetMailState();
     const { sendEmail } = await import('@/lib/email/mailer');

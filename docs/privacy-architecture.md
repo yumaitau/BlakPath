@@ -2,8 +2,9 @@
 
 BlakPath is built to hold identity evidence, genealogy and determinations with
 the care that information deserves. Privacy here is not a bolt-on: it is
-data minimisation, Australian data sovereignty, encryption of sensitive fields,
-recorded consent, thoughtful retention, and hard limits on automation.
+data minimisation, Australian data sovereignty, encryption only where the code
+actually applies it, recorded consent, thoughtful retention, and hard limits
+on automation.
 
 > The foundational privacy and safety guarantee: **BlakPath never determines
 > Aboriginality.** It does not score, rank, predict, infer, auto-approve or
@@ -18,9 +19,12 @@ recorded consent, thoughtful retention, and hard limits on automation.
 - **Relational data stays relational.** JSONB is used only for genuinely flexible,
   organisation-authored config (terminology, guidance, branding) — never for data
   other modules must query, and never to smuggle in identity judgements.
-- **Audit stores metadata, not payloads.** `beforeMeta`/`afterMeta` capture
-  minimal change context; evidence content and secrets are never written to the
-  audit trail (`docs/audit-log-design.md`).
+- **Audit stores metadata, not payloads.** `beforeMeta`/`afterMeta` are
+  allowlisted, and a denylist blocks secrets
+  (`src/domains/audit/hash.ts`, `docs/audit-log-design.md`). Evidence content
+  is not written there. The event row **does** store `ipAddress` and
+  `userAgent`, so the trail is not free of personal data. Removing that is
+  #80. It is not done.
 - **Ids don't leak counts.** UUIDv7 identifiers are non-sequential and
   public-safe, so exposing an id never reveals how many records exist
   (`src/db/schema/_helpers.ts`).
@@ -35,10 +39,18 @@ recorded consent, thoughtful retention, and hard limits on automation.
 - Third-party processing that would move data offshore is not used for evidence,
   genealogy or determinations.
 
-## Sensitive-field envelope encryption (AES-256-GCM)
+## Encryption at rest (what is implemented)
 
-Some fields are too sensitive to sit in plaintext even inside a tenant-scoped
-database. These are protected with **envelope encryption**:
+The custody decision (modes, trust boundaries, escrow, and what is still
+deferred) is
+[`docs/adr/0001-customer-held-keys.md`](adr/0001-customer-held-keys.md).
+The client-facing summary is [`customer-held-keys.md`](customer-held-keys.md).
+
+Inventoried tenant columns are sealed under the organisation's key (see
+[Tenant data classes](#tenant-data-classes-under-the-tenant-key)). Every other
+tenant column is still **plaintext in PostgreSQL**: for example evidence
+metadata, decision outcomes and certificate rows. File bytes are in object
+storage under the tenant key, not in those rows.
 
 - A fresh **data key** encrypts the field with **AES-256-GCM**. KMS
   `GenerateDataKey` wraps that data key under the organisation's CMK (or an
@@ -81,8 +93,21 @@ database. These are protected with **envelope encryption**:
   keeps residual counts and timestamps only. AWS Backup copies of that
   ciphertext become unreadable when the tenant key is deleted. Detail is in
   [`key-lifecycle.md`](key-lifecycle.md).
-- Plaintext exists only transiently in memory during a single operation; it is
-  never logged (pino) and never persisted.
+- **TOTP material is encrypted by Better Auth, not by the tenant key.** On
+  Better Auth 1.6 the TOTP `secret` and backup codes are passed through
+  `symmetricEncrypt` before insert: XChaCha20-Poly1305 with key
+  SHA-256(`BETTER_AUTH_SECRET`). That path does not call KMS and does not use
+  `organisation_keys` (`docs/authentication.md`). Plaintext exists in the auth
+  process during enrolment and verification. Passwords are argon2 hashes.
+  Passkeys store a public key only.
+- **KMS signing is not data encryption.** `src/lib/kms/sign.ts` signs the
+  canonical certificate payload. It does not encrypt evidence or rows.
+- **Plaintext in memory.** The web process and the worker hold plaintext in
+  memory while they serve a permitted request or job. Zeroing a data key is
+  hygiene, not a boundary against a compromised process. Plaintext is not
+  written to logs by design, but the pino redaction list is a list, not a
+  proof. Client-side (Tier 2) encryption, where the server never sees the
+  bytes, is not built (#124).
 
 ## Tenant data classes under the tenant key
 

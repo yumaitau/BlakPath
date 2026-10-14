@@ -28,7 +28,19 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
-  serverExternalPackages: ['@node-rs/argon2', 'postgres', 'ioredis', 'bullmq'],
+  serverExternalPackages: [
+    '@node-rs/argon2',
+    'postgres',
+    'ioredis',
+    'bullmq',
+    '@pdf-lib/fontkit',
+    'qrcode',
+  ],
+  // Noto Sans files are read from disk when a certificate is rendered.
+  outputFileTracingIncludes: {
+    '/api/certificates': ['./src/domains/certificates/fonts/**/*'],
+    '/api/certificates/route': ['./src/domains/certificates/fonts/**/*'],
+  },
   experimental: {
     // Server Actions are used sparingly; keep body limits tight.
     serverActions: {
