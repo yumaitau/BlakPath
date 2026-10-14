@@ -15,6 +15,7 @@ describe('staff tool navigation', () => {
     expect(admin).toEqual(
       expect.arrayContaining(['Reports', 'API keys', 'Webhooks', 'Single sign-on']),
     );
+    expect(admin).toContain('Audit trail');
     expect(admin).not.toContain('Retention');
     expect(admin).not.toContain('Imports');
     expect(admin).not.toContain('Consents');
@@ -23,6 +24,7 @@ describe('staff tool navigation', () => {
     const records = labelsFor('records-officer');
     expect(records).toEqual(expect.arrayContaining(['Reports', 'Retention']));
     expect(records).not.toContain('API keys');
+    expect(records).not.toContain('Audit trail');
 
     const intake = labelsFor('intake-officer');
     expect(intake).toEqual(
