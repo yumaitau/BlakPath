@@ -7,6 +7,12 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+
+  // Fail boot when the Drizzle auth tables cannot store a field an enabled
+  // Better Auth plugin writes. The adapter would otherwise drop the write.
+  const { assertAuthSchemaCoverage } = await import('@/lib/auth/schema-coverage');
+  assertAuthSchemaCoverage();
+
   const { start } = await import('@/lib/observability/otel');
   await start();
 

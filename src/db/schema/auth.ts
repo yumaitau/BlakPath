@@ -39,6 +39,11 @@ export const users = pgTable(
     image: text('image'),
     /** Platform (BlakPath) staff flag. Not a tenant role; grants no tenant data. */
     isPlatformOperator: boolean('is_platform_operator').notNull().default(false),
+    /**
+     * Set by the two-factor plugin once a TOTP code is confirmed. Sign-in
+     * issues a second-factor challenge only when this is true.
+     */
+    twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
     ...timestamps,
   },
   (table) => [uniqueIndex('users_email_unique').on(table.email)],
@@ -142,6 +147,8 @@ export const passkeys = pgTable(
     backedUp: boolean('backed_up').notNull().default(false),
     /** Comma-separated authenticator transports (e.g. 'internal,hybrid'). */
     transports: text('transports'),
+    /** Authenticator model id from registration. Optional; not a device id. */
+    aaguid: text('aaguid'),
     ...timestamps,
   },
   (table) => [uniqueIndex('passkeys_credential_id_unique').on(table.credentialID)],
@@ -164,6 +171,15 @@ export const twoFactors = pgTable('two_factors', {
   secret: text('secret').notNull(),
   /** Envelope-encrypted recovery codes ciphertext. Never plaintext. */
   backupCodes: text('backup_codes').notNull(),
+  /**
+   * Plugin default is true. First enrolment writes false until the user
+   * confirms a code.
+   */
+  verified: boolean('verified').notNull().default(true),
+  /** Consecutive failed second-factor verifications. Reset after a success. */
+  failedVerificationCount: integer('failed_verification_count').notNull().default(0),
+  /** When set and still in the future, second-factor verification is refused. */
+  lockedUntil: timestamp('locked_until', { withTimezone: true }),
   ...timestamps,
 });
 
