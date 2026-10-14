@@ -196,6 +196,7 @@ export const DISPOSAL_CLASS_BY_RESOURCE = {
   job: 'operational_record',
   search: 'search_index',
   audit_chain: 'immutable_audit',
+  audit_log: 'immutable_audit',
 } as const satisfies Record<ResourceType, DisposalClass>;
 
 export function isRecordsJurisdiction(value: string): value is RecordsJurisdiction {

@@ -7,6 +7,7 @@
  *   - `service` — `recordAudit` / `recordPlatformAudit` write path.
  *   - `verify`  — `verifyChain` / `verifyAndCheckpoint` integrity tooling.
  *   - `anchor` — signed chain-head anchors stored outside the database.
+ *   - `log`     — tenant-scoped viewer, formula-safe CSV export, monthly review.
  */
 export type { AuditAction, AuditResult, ResourceType } from './events';
 export { AUDIT_RESULTS, isAuditResult } from './events';
@@ -24,7 +25,12 @@ export {
   toIsoTimestamp,
 } from './hash';
 
-export type { AuditMetaInput, RecordAuditInput, RecordedAuditEvent } from './service';
+export type {
+  AuditMetaInput,
+  AuditTransaction,
+  RecordAuditInput,
+  RecordedAuditEvent,
+} from './service';
 export {
   auditChainLockKey,
   auditChainWhere,
@@ -59,6 +65,31 @@ export {
   verifyChainFromPages,
   verifyFromCheckpoint,
 } from './verify';
+
+export type {
+  AuditLogEntry,
+  AuditLogExport,
+  AuditLogFilters,
+  AuditLogPage,
+  AuditReviewOutcome,
+} from './log';
+export {
+  AUDIT_CSV_HEADERS,
+  BREAK_GLASS_ACTION_LIKE,
+  AUDIT_EXPORT_MAX_ROWS,
+  AUDIT_LOG_PAGE_DEFAULT,
+  AUDIT_MONTHLY_REVIEW_CHECKS,
+  AUDIT_REVIEW_OUTCOMES,
+  auditEventsToCsv,
+  auditLogQuerySchema,
+  exportAuditLog,
+  listAuditLog,
+  recordMonthlyAuditReview,
+  recordMonthlyReviewSchema,
+  tenantAuditWhere,
+  toAuditQueryString,
+  viewAuditChecklist,
+} from './log';
 
 export type {
   AnchorBody,

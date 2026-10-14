@@ -39,7 +39,7 @@ import {
 } from '@/db/schema';
 import type { Database } from '@/db/client';
 import { scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import type { AuditAction, ResourceType } from '@/domains/audit/events';
 import {
   sealApplicationFields,
@@ -319,21 +319,28 @@ function sysAudit(
   result: 'success' | 'failure',
   reason?: SweepAuditReason,
   phase?: 'hard_delete',
+  tx?: AuditTransaction,
 ) {
-  return recordAudit({
-    action,
-    resourceType,
-    resourceId,
-    result,
-    reason: reason ?? null,
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-    ...(phase ? { after: { data: { phase }, allow: ['phase'] as const } } : {}),
-  });
+  return recordAudit(
+    {
+      action,
+      resourceType,
+      resourceId,
+      result,
+      reason: reason ?? null,
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+      ...(phase ? { after: { data: { phase }, allow: ['phase'] as const } } : {}),
+    },
+    tx,
+  );
 }
+
+/** Success audit written inside the disposal transaction. */
+type AuditInTx = (tx: Tx) => Promise<unknown>;
 
 const NO_WORK = { actioned: 0, failed: 0 } as const;
 
@@ -364,11 +371,26 @@ async function runRecord(
   resourceType: ResourceType,
   resourceId: string,
   phase: 'hard_delete' | undefined,
-  work: () => Promise<'actioned' | 'skipped'>,
+  work: (audit: AuditInTx) => Promise<'actioned' | 'skipped'>,
 ): Promise<'actioned' | 'failed' | 'skipped'> {
+  // The success audit joins the disposal transaction, together with the
+  // tombstone or delete and any destruction-register row, so a rolled-back
+  // disposal never leaves a success event or register entry behind.
+  const audit: AuditInTx = (tx) =>
+    sysAudit(
+      input.organisationId,
+      input.correlationId,
+      action,
+      resourceType,
+      resourceId,
+      'success',
+      undefined,
+      phase,
+      tx,
+    );
   let outcome: 'actioned' | 'skipped';
   try {
-    outcome = await work();
+    outcome = await work(audit);
   } catch (err) {
     logger.error(
       { err, organisationId: input.organisationId, resourceType, resourceId, action },
@@ -385,18 +407,7 @@ async function runRecord(
     );
     return 'failed';
   }
-  if (outcome === 'skipped') return 'skipped';
-  await sysAudit(
-    input.organisationId,
-    input.correlationId,
-    action,
-    resourceType,
-    resourceId,
-    'success',
-    undefined,
-    phase,
-  );
-  return 'actioned';
+  return outcome;
 }
 
 interface ObjectTarget {
@@ -1351,6 +1362,7 @@ async function disposeApplication(
   policy: Policy,
   authorityVerified: boolean,
   now: Date,
+  audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   const action = policy.action;
   if (
@@ -1382,6 +1394,7 @@ async function disposeApplication(
       await tombstoneApplication(tx, input.organisationId, applicationId, now);
       await registerDestruction(tx, policy, input, 'application', applicationId, now);
     }
+    await audit(tx);
     return 'actioned';
   });
 }
@@ -1458,7 +1471,8 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
             'application',
             row.id,
             undefined,
-            () => disposeApplication(scope, input, row.id, policy, authority, now),
+            (audit) =>
+              disposeApplication(scope, input, row.id, policy, authority, now, audit),
           ),
       );
       const hard = hardDelete
@@ -1489,7 +1503,8 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
                 'application',
                 row.id,
                 'hard_delete',
-                () => hardDeleteOneApplication(scope, input, row.id, authority),
+                (audit) =>
+                  hardDeleteOneApplication(scope, input, row.id, authority, audit),
               ),
           )
         : NO_WORK;
@@ -1522,7 +1537,8 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
             'evidence',
             row.id,
             undefined,
-            () => disposeEvidence(scope, input, row.id, policy, authority, now),
+            (audit) =>
+              disposeEvidence(scope, input, row.id, policy, authority, now, audit),
           ),
       );
       const hard = hardDelete
@@ -1553,7 +1569,7 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
                 'evidence',
                 row.id,
                 'hard_delete',
-                () => hardDeleteOneEvidence(scope, input, row.id, authority),
+                (audit) => hardDeleteOneEvidence(scope, input, row.id, authority, audit),
               ),
           )
         : NO_WORK;
@@ -1586,7 +1602,8 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
             'form_response',
             row.id,
             undefined,
-            () => disposeFormResponse(scope, input, row.id, policy, authority, now),
+            (audit) =>
+              disposeFormResponse(scope, input, row.id, policy, authority, now, audit),
           ),
       );
       const hard = hardDelete
@@ -1611,7 +1628,8 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
                 'form_response',
                 row.id,
                 'hard_delete',
-                () => hardDeleteOneFormResponse(scope, input, row.id, authority),
+                (audit) =>
+                  hardDeleteOneFormResponse(scope, input, row.id, authority, audit),
               ),
           )
         : NO_WORK;
@@ -1652,6 +1670,7 @@ async function hardDeleteOneApplication(
   input: SweepInput,
   applicationId: string,
   authorityVerified: boolean,
+  audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   if (
     await disposalBlocked(
@@ -1673,6 +1692,7 @@ async function hardDeleteOneApplication(
       throw new Error('Official record became protected during retention disposal');
     }
     await hardDeleteApplication(tx, input.organisationId, applicationId);
+    await audit(tx);
     return 'actioned';
   });
 }
@@ -1684,6 +1704,7 @@ async function disposeEvidence(
   policy: Policy,
   authorityVerified: boolean,
   now: Date,
+  audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   const action = policy.action;
   const [row] = await scope.db
@@ -1753,6 +1774,7 @@ async function disposeEvidence(
         );
       await registerDestruction(tx, policy, input, 'evidence', evidenceId, now);
     }
+    await audit(tx);
     return 'actioned';
   });
 }
@@ -1762,6 +1784,7 @@ async function hardDeleteOneEvidence(
   input: SweepInput,
   evidenceId: string,
   authorityVerified: boolean,
+  audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   const [row] = await scope.db
     .select({
@@ -1809,6 +1832,7 @@ async function hardDeleteOneEvidence(
           eq(evidence.id, evidenceId),
         ),
       );
+    await audit(tx);
     return 'actioned';
   });
 }
@@ -1839,6 +1863,7 @@ async function disposeFormResponse(
   policy: Policy,
   authorityVerified: boolean,
   now: Date,
+  audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   const action = policy.action;
   const applicationId = await formApplicationId(
@@ -1878,6 +1903,7 @@ async function disposeFormResponse(
         );
       await registerDestruction(tx, policy, input, 'form_response', formResponseId, now);
     }
+    await audit(tx);
     return 'actioned';
   });
 }
@@ -1887,6 +1913,7 @@ async function hardDeleteOneFormResponse(
   input: SweepInput,
   formResponseId: string,
   authorityVerified: boolean,
+  audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   const applicationId = await formApplicationId(
     scope,
@@ -1919,6 +1946,7 @@ async function hardDeleteOneFormResponse(
           eq(formResponses.id, formResponseId),
         ),
       );
+    await audit(tx);
     return 'actioned';
   });
 }

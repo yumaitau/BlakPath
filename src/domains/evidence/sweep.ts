@@ -64,6 +64,30 @@ async function deleteQuarantineBestEffort(key: string | null): Promise<void> {
   }
 }
 
+/**
+ * A requeue changes no row; it records that a scan job was enqueued again.
+ * It stands alone rather than joining a business transaction.
+ */
+function auditScanRequeued(
+  organisationId: string,
+  correlationId: string,
+  evidenceId: string,
+  reason: 'evidence.scan_dlq_redrive' | 'evidence.scan_quarantine_stale',
+) {
+  return recordAudit({
+    action: 'evidence.scan_requeued',
+    resourceType: 'evidence',
+    resourceId: evidenceId,
+    result: 'success',
+    reason,
+    organisationId,
+    actorUserId: null,
+    actingRole: 'system',
+    sessionId: null,
+    correlationId,
+  });
+}
+
 export async function sweepEvidenceScans(input: EvidenceSweepInput): Promise<SweepStats> {
   const { organisationId, correlationId } = input;
   const now = new Date();
@@ -94,18 +118,12 @@ export async function sweepEvidenceScans(input: EvidenceSweepInput): Promise<Swe
   const plan = planDlqRedrive(candidates, organisationId, inFlight);
   let redriven = 0;
   for (const evidenceId of plan.enqueueEvidenceIds) {
-    await recordAudit({
-      action: 'evidence.scan_requeued',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'success',
-      reason: 'evidence.scan_dlq_redrive',
+    await auditScanRequeued(
       organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
       correlationId,
-    });
+      evidenceId,
+      'evidence.scan_dlq_redrive',
+    );
     await enqueueMalwareScan({
       organisationId,
       correlationId,
@@ -169,18 +187,12 @@ export async function sweepEvidenceScans(input: EvidenceSweepInput): Promise<Swe
     ) {
       continue;
     }
-    await recordAudit({
-      action: 'evidence.scan_requeued',
-      resourceType: 'evidence',
-      resourceId: row.id,
-      result: 'success',
-      reason: 'evidence.scan_quarantine_stale',
+    await auditScanRequeued(
       organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
       correlationId,
-    });
+      row.id,
+      'evidence.scan_quarantine_stale',
+    );
     await enqueueMalwareScan({
       organisationId,
       correlationId,
@@ -213,35 +225,42 @@ export async function sweepEvidenceScans(input: EvidenceSweepInput): Promise<Swe
   for (const row of stalePending) {
     if (!pendingUploadExpired(row.createdAt, now, pendingExpireMs)) continue;
     await deleteQuarantineBestEffort(row.quarantineKey);
-    const updated = await scope.db
-      .update(evidence)
-      .set({
-        status: 'rejected',
-        scanResult: 'expired:pending',
-        scannedAt: now,
-      })
-      .where(
-        and(
-          eq(evidence.organisationId, organisationId),
-          eq(evidence.id, row.id),
-          eq(evidence.status, 'pending'),
-        ),
-      )
-      .returning({ id: evidence.id });
-    if (updated.length === 0) continue;
-    await recordAudit({
-      action: 'evidence.rejected',
-      resourceType: 'evidence',
-      resourceId: row.id,
-      result: 'failure',
-      reason: 'evidence.pending_upload_expired',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
-      correlationId,
+    // The rejection and its audit commit or roll back together.
+    const rejected = await scope.db.transaction(async (tx) => {
+      const updated = await tx
+        .update(evidence)
+        .set({
+          status: 'rejected',
+          scanResult: 'expired:pending',
+          scannedAt: now,
+        })
+        .where(
+          and(
+            eq(evidence.organisationId, organisationId),
+            eq(evidence.id, row.id),
+            eq(evidence.status, 'pending'),
+          ),
+        )
+        .returning({ id: evidence.id });
+      if (updated.length === 0) return false;
+      await recordAudit(
+        {
+          action: 'evidence.rejected',
+          resourceType: 'evidence',
+          resourceId: row.id,
+          result: 'failure',
+          reason: 'evidence.pending_upload_expired',
+          organisationId,
+          actorUserId: null,
+          actingRole: 'system',
+          sessionId: null,
+          correlationId,
+        },
+        tx,
+      );
+      return true;
     });
-    expired += 1;
+    if (rejected) expired += 1;
   }
 
   logger.info(

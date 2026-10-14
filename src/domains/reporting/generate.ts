@@ -163,44 +163,68 @@ export async function processExport(input: ProcessExportInput): Promise<void> {
       organisationId,
     });
 
-    await settle({
-      status: 'ready',
-      objectKey: key,
-      rowCount: report.rows.length,
-      expiresAt: new Date(Date.now() + EXPORT_TTL_MS),
-      completedAt: new Date(),
-    });
-    await recordAudit({
-      action: 'export.generated',
-      resourceType: 'export',
-      resourceId: exportRequestId,
-      result: 'success',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
-      correlationId,
-      after: {
-        data: { type: request.type, rows: report.rows.length },
-        allow: ['type', 'rows'],
-      },
+    const whereRequest = and(
+      eq(exportRequests.organisationId, organisationId),
+      eq(exportRequests.id, exportRequestId),
+    );
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(exportRequests)
+        .set({
+          status: 'ready',
+          objectKey: key,
+          rowCount: report.rows.length,
+          expiresAt: new Date(Date.now() + EXPORT_TTL_MS),
+          completedAt: new Date(),
+        })
+        .where(whereRequest);
+      await recordAudit(
+        {
+          action: 'export.generated',
+          resourceType: 'export',
+          resourceId: exportRequestId,
+          result: 'success',
+          organisationId,
+          actorUserId: null,
+          actingRole: 'system',
+          sessionId: null,
+          correlationId,
+          after: {
+            data: { type: request.type, rows: report.rows.length },
+            allow: ['type', 'rows'],
+          },
+        },
+        tx,
+      );
     });
   } catch (err) {
-    await settle({
-      status: 'failed',
-      error: err instanceof Error ? err.message : 'export failed',
-      completedAt: new Date(),
-    });
-    await recordAudit({
-      action: 'export.failed',
-      resourceType: 'export',
-      resourceId: exportRequestId,
-      result: 'failure',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
-      correlationId,
+    const whereRequest = and(
+      eq(exportRequests.organisationId, organisationId),
+      eq(exportRequests.id, exportRequestId),
+    );
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(exportRequests)
+        .set({
+          status: 'failed',
+          error: err instanceof Error ? err.message : 'export failed',
+          completedAt: new Date(),
+        })
+        .where(whereRequest);
+      await recordAudit(
+        {
+          action: 'export.failed',
+          resourceType: 'export',
+          resourceId: exportRequestId,
+          result: 'failure',
+          organisationId,
+          actorUserId: null,
+          actingRole: 'system',
+          sessionId: null,
+          correlationId,
+        },
+        tx,
+      );
     });
     logger.error({ organisationId, exportRequestId, err }, 'export generation failed');
   }
