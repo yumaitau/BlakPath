@@ -30,6 +30,13 @@ fs.writeFileSync(
 );
 fs.writeFileSync(kustomizationPath, pinKustomizationImages(kustomization, release));
 
+// The release gate runs in the same candidate images.
+const gatePath = path.join(root, 'release-check', 'kustomization.yaml');
+fs.writeFileSync(
+  gatePath,
+  pinKustomizationImages(fs.readFileSync(gatePath, 'utf8'), release),
+);
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {

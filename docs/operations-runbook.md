@@ -10,8 +10,12 @@ incident ticket.
 1. Identify the queue and opaque job id from the log event. Do not inspect or
    export job payloads into third-party systems.
 2. Check the named dependency and the immediately preceding retry logs.
-3. For `malware-scan`, leave the object quarantined. Restore scanner/storage
-   service, then retry the existing job; never mark evidence clean manually.
+3. For `malware-scan`, leave the object quarantined. Never mark evidence clean
+   manually. Restoring ClamAV is enough while attempts remain: the job uses 24
+   tries and a backoff capped at 10 minutes. Once attempts are exhausted the
+   job is copied to `malware-scan-dlq` and the evidence sweep redrives it with
+   a fresh job id (`evidence.scan_requeued`). Do not retry the old job id; BullMQ
+   keeps it for 7 days. Confirm the dead-letter depth returns to zero.
 4. For email/webhook/export, confirm whether the side effect happened before
    retrying. Processors are designed to be idempotent, but the operator must
    verify the external service response. A webhook marked `destination not allowed`
@@ -26,11 +30,28 @@ incident ticket.
 
 1. Treat this as a security incident. Preserve database snapshots and relevant
    logs; do not edit, delete or “repair” audit rows.
-2. Restrict administrative changes for the affected opaque organisation id.
+2. Restrict administrative changes. `chain` is `tenant` or `platform`. A
+   platform failure has a null organisation id; a tenant failure carries an
+   opaque organisation id. Do not treat the platform chain as a tenant.
 3. Compare the last trusted checkpoint with a restored backup in an isolated
    account and determine the first divergent event.
 4. Escalate to the security owner and affected organisation under the incident
    communications plan. Resume normal operation only with documented approval.
+
+## `evidence_quarantine_backlog`
+
+The sweep logs `quarantinedCount`, `oldestQuarantinedAgeSeconds`, `dlqDepth`
+and `redriven` for one organisation. Page when the oldest age stays at or above
+30 minutes, or dead-letter depth stays above zero (`blakpath-oldest-quarantined-age`,
+`blakpath-malware-scan-dlq`).
+
+1. Confirm ClamAV is healthy and the worker is running. The sweep runs about
+   every five minutes and re-queues quarantined evidence on its own.
+2. Do not promote or download quarantined objects. Do not edit the row to
+   `clean`.
+3. After the scanner recovers, confirm new scan jobs finish `clean` or
+   `infected` and the oldest age falls. A `pending` upload older than 24 hours
+   is rejected as `expired:pending`; the applicant uploads again.
 
 ## `clamav_unavailable`
 

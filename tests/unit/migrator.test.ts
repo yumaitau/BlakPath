@@ -129,4 +129,26 @@ describe('release migrate job', () => {
     expect(pinned).toContain(`digest: sha256:${workerDigest}`);
     expect(pinned).not.toMatch(/newTag/);
   });
+
+  it('pins the release gate to the same digests', () => {
+    const gate = fs.readFileSync('infra/k8s/release-check/kustomization.yaml', 'utf8');
+    const pinned = pinKustomizationImages(gate, release);
+    expect(pinned).toContain(`digest: sha256:${appDigest}`);
+    expect(pinned).toContain(`digest: sha256:${workerDigest}`);
+    expect(pinned).not.toMatch(/newTag/);
+  });
+
+  it('deploys through one script: gate, then migrate, then rollout', () => {
+    const script = fs.readFileSync('scripts/eks-deploy.sh', 'utf8');
+    const gate = script.indexOf('wait_for_job "$gate_job"');
+    const migrate = script.indexOf('wait_for_job "$migrate_job"');
+    const rollout = script.indexOf('-f - <<<"$rendered"');
+    expect(gate).toBeGreaterThan(0);
+    expect(migrate).toBeGreaterThan(gate);
+    expect(rollout).toBeGreaterThan(migrate);
+    expect(fs.readFileSync('.github/workflows/deploy.yml', 'utf8')).toContain(
+      'bash scripts/eks-deploy.sh',
+    );
+    expect(fs.existsSync('scripts/cd-release.sh')).toBe(false);
+  });
 });

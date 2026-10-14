@@ -22,6 +22,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
    Apply `infra/postgres/audit-roles.sql` once as the RDS master before the
    first migrate (see [Database roles](#database-roles)).
+   The runtime secret also needs `COA_SIGNING_KEY_ID` (KMS key ARN or alias in
+   ap-southeast-2). Do not set `COA_SIGNING_LOCAL_KEY_PEM`.
 3. In `infra/aws/eks-boundary.example.yaml`, replace `OIDC_ID` with the cluster
    OIDC issuer id. Deploy that stack in ap-southeast-2 after step 4: it
    attaches the mail-send policy to the `blakpath-web` and `blakpath-worker`
@@ -34,25 +36,34 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    for service accounts `blakpath-web` and `blakpath-worker` only. ClamAV and
    the migrate/seed jobs have no AWS role and mount no API token.
 5. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-6. Replace host, role ARNs, certificate ARN, trust store ARN and WAF ACL ARN
-   in `infra/k8s`, then release with `scripts/cd-release.sh`. It renders a
-   per-release Job (`blakpath-migrate-<git sha>`, `ttlSecondsAfterFinished` 86400) from the app digest, waits until the Job succeeds, and only then
-   applies the web and worker Deployments at those digests. A failed Job
-   does not roll the Deployments. `DRY_RUN=1` renders without applying.
-   Complete the edge section below first.
-   Rolling the app before the origin-verify header is live makes production
-   requests return 403. The namespace enforces Pod Security `restricted`;
-   every pod runs non-root with a read-only root filesystem.
+6. Roll out with the Deploy workflow or `scripts/eks-deploy.sh` after
+   replacing `ACCOUNT_ID`, host, role ARNs, certificate ARN, trust store ARN
+   and WAF ACL ARN. Pass `IMAGE` and `WORKER_IMAGE` as `@sha256` digests and
+   `RELEASE_ID` as the git sha. The script applies namespace, config and
+   ExternalSecrets, then runs three steps in order, each only after the
+   previous one succeeds:
+   1. the release-check Job (`node release-check.cjs`) in the candidate web
+      and worker images;
+   2. the per-release migrate Job (`blakpath-migrate-<git sha>`,
+      `ttlSecondsAfterFinished` 86400) from the app digest;
+   3. the web and worker Deployments at those digests.
+      A failed gate or migration does not roll the workloads. `DRY_RUN=1`
+      renders without applying. `kubectl apply -k infra/k8s` alone skips the
+      gate and the migration. Complete the edge section below first.
+      Rolling the app before the origin-verify header is live makes production
+      requests return 403. The namespace enforces Pod Security `restricted`;
+      every pod runs non-root with a read-only root filesystem.
 7. Moving from the shared `blakpath` service account: deploy step 4 before
    step 6, so the new associations exist when web and worker restart. Then
    delete the pod identity association for `blakpath/blakpath` and retire
    `blakpath-eks-runtime`. Confirm the ClamAV pods have no AWS credential
    environment variables.
-8. Run `pnpm release:check` inside the exact web and worker images before
-   promoting. It rejects static S3 credentials, standing SMTP credentials,
-   `PAPERBOY_*` and `PILOT_BOOTSTRAP_TOKEN`, and requires the SES sender
-   config. SDK uses the EKS Pod Identity role. Do not put
-   `PILOT_BOOTSTRAP_TOKEN` in the runtime secret.
+8. The release-check Job in step 6 is the gate. `pnpm release:check` runs the
+   same checks where the source tree exists. It rejects static S3 credentials,
+   standing SMTP credentials, `PAPERBOY_*`, `PILOT_BOOTSTRAP_TOKEN` and
+   `COA_SIGNING_LOCAL_KEY_PEM`, and requires the SES sender config. SDK uses
+   the EKS Pod Identity role. Do not put `PILOT_BOOTSTRAP_TOKEN` in the
+   runtime secret.
 9. After the first release, apply the seed job, then
    `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
    The job emails an organisation-administrator invitation and does not create
@@ -78,7 +89,7 @@ concurrent indexes and `NOT VALID` foreign keys. It may not drop, rename or
 tighten columns the previous release still uses. The contract (drop the old
 shape) waits until N-1 is gone.
 
-1. If the migrate Job failed, stop. `scripts/cd-release.sh` has not changed
+1. If the migrate Job failed, stop. `scripts/eks-deploy.sh` has not changed
    Deployments. Transactional DDL rolled back. Fix the migration forward and
    release again. A lock wait aborts in under five seconds
    (`lock_timeout` 4s) instead of stalling the rollout.
@@ -389,7 +400,10 @@ same availability zone as their volumes, on two different nodes.
 
 ## Alarms
 
-Audit divergence, scan backlog past handling target, dead-letter email/export/
-retention/webhook jobs, backup failures, sustained 5xx / readiness failures,
-ClamAV signature age above 48 hours.
-See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+Audit divergence, oldest quarantined-evidence age
+(`blakpath-oldest-quarantined-age`, 30 minutes), malware-scan dead-letter depth
+(`blakpath-malware-scan-dlq`), dead-letter email/export/retention/webhook jobs,
+backup failures, sustained 5xx / readiness failures, ClamAV signature age above
+48 hours. See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+The evidence sweep redrives stuck scans; the age alarm means that redrive is
+not draining.

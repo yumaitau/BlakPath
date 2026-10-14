@@ -167,6 +167,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Bundle release gate
+        run: pnpm release:check:bundle
+
       - name: Build
         run: pnpm build
 
@@ -269,4 +272,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-kubectl@v4
       - name: Build kustomization
-        run: kubectl kustomize infra/k8s > /dev/null && echo "kustomize build OK"
+        run: |
+          kubectl kustomize infra/k8s > /dev/null
+          kubectl kustomize infra/k8s/release-check > /dev/null
+          echo "kustomize build OK"

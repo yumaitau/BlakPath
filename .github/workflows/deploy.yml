@@ -1,8 +1,8 @@
 name: Deploy
 
-# Operator-triggered. The script migrates with the app image digest and
-# applies Deployments only after the Job succeeds. Cluster credentials are
-# supplied by the runner environment; this workflow does not mint them.
+# Operator-triggered. scripts/eks-deploy.sh runs the release gate Job, then
+# the release-pinned migrate Job, then rolls web and worker. Every step uses
+# the same image digests; a failed step leaves the Deployments unchanged.
 on:
   workflow_dispatch:
     inputs:
@@ -19,8 +19,10 @@ on:
         required: true
         type: string
 
+# One rollout at a time. A failed release gate or migration must not be
+# cancelled into a partial apply.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-production
   cancel-in-progress: false
 
 permissions:
@@ -32,9 +34,10 @@ env:
   IMAGE_REPOSITORY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath
 
 jobs:
-  deploy:
-    name: Migrate then roll out
+  rollout:
+    name: Release gate, migrate, then roll out
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -54,9 +57,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Migrate, then roll web and worker
-        run: ./scripts/cd-release.sh
+      - name: Configure cluster access
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        run: |
+          if [ -z "${KUBECONFIG_CONTENT}" ]; then
+            echo "GitHub environment secret KUBECONFIG is not set. Refusing to roll out."
+            exit 1
+          fi
+          mkdir -p "${HOME}/.kube"
+          printf '%s\n' "${KUBECONFIG_CONTENT}" > "${HOME}/.kube/config"
+          chmod 600 "${HOME}/.kube/config"
+
+      - name: Release gate, migrate, then roll web and worker
         env:
           IMAGE: ${{ env.IMAGE_REPOSITORY }}/app@sha256:${{ inputs.image_digest }}
           WORKER_IMAGE: ${{ env.IMAGE_REPOSITORY }}/worker@sha256:${{ inputs.worker_image_digest }}
           RELEASE_ID: ${{ inputs.release_id }}
+        run: bash scripts/eks-deploy.sh

@@ -1,4 +1,4 @@
-# Rendered by scripts/cd-release.sh. Do not kubectl apply this file directly.
+# Rendered by scripts/eks-deploy.sh after the release gate. Do not kubectl apply.
 # Not in kustomization.yaml: a Job is immutable and is named per release.
 # __IMAGE__ is the app image digest. __RELEASE_ID__ is the git sha.
 # seed.yaml and invite-admin.yaml in this folder are still applied by hand.

@@ -25,7 +25,7 @@ database. It does not replace the required staging rehearsal.
   case.
 - Code rollback in the runbook is redeploying the previous image digest and
   not running a migrate Job. This drill had no cluster, so Deployments were
-  not changed. `scripts/cd-release.sh` applies Deployments only after the
+  not changed. `scripts/eks-deploy.sh` applies Deployments only after the
   migrate Job is complete.
 
 ## Still required

@@ -78,6 +78,9 @@ RUN ESBUILD="$(find node_modules/.pnpm -path '*/node_modules/esbuild/bin/esbuild
   && test -n "$ESBUILD" \
   && "$ESBUILD" src/db/migrate.ts \
     --bundle --platform=node --target=node24 --format=cjs --outfile=migrate.cjs
+# Plain JS release gate. Runtime images do not ship pnpm, tsx, or the source
+# tree, so the pre-deploy Job runs `node release-check.cjs`.
+RUN node scripts/build-release-check.mjs
 # Build the Next.js standalone server. `output: 'standalone'` is set in
 # next.config.ts, producing .next/standalone with a minimal node_modules.
 RUN pnpm build
@@ -119,6 +122,9 @@ COPY --from=build --chown=nextjs:nodejs /app/public ./public
 # reads ./migrations next to itself unless MIGRATIONS_FOLDER is set.
 COPY --from=build --chown=nextjs:nodejs /app/migrate.cjs ./migrate.cjs
 COPY --from=build --chown=nextjs:nodejs /app/src/db/migrations ./migrations
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/migration-url.cjs ./migration-url.cjs
 # Certificate renderer reads Noto Sans from the working directory. The
 # standalone server does not otherwise keep that path.
 COPY --from=build --chown=nextjs:nodejs /app/src/domains/certificates/fonts ./src/domains/certificates/fonts
@@ -161,6 +167,9 @@ COPY --chown=worker:nodejs tsconfig.json ./tsconfig.json
 COPY --from=build --chown=worker:nodejs /app/worker ./worker
 COPY --from=build --chown=worker:nodejs /app/src ./src
 COPY --from=build --chown=worker:nodejs /app/scripts ./scripts
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/migration-url.cjs ./migration-url.cjs
 
 USER worker
 
