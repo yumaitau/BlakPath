@@ -244,6 +244,19 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/applications/[id]/evidence', anyOf(EVIDENCE_UPLOAD)),
   route('POST', '/api/applications/[id]/evidence-requests', anyOf(['evidence:request'])),
   route('POST', '/api/applications/[id]/reviews', anyOf(['review:create'])),
+  // Gated in the audit domain (`src/domains/audit/log.ts`); a refusal is
+  // itself recorded on the tenant chain.
+  route('GET', '/api/audit/events', anyOf(['audit:view']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('GET', '/api/audit/events/export', anyOf(['audit:view']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('POST', '/api/audit/reviews', anyOf(['audit:view']), {
+    body: { period: '2026-10', outcome: 'no_findings' },
+  }),
   route('GET', '/api/auth/[...all]', { kind: 'auth' }, { skipProbe: true }),
   route(
     'POST',
@@ -552,6 +565,10 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     body: { resourceType: 'application', retentionDays: 30, action: 'anonymise' },
   }),
   route('DELETE', '/api/retention/policies/[id]', anyOf(['retention:manage'])),
+  route('GET', '/api/retention/preview', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
   route('PATCH', '/api/reviews/[id]', anyOf(['review:finalise']), {
     body: { operation: 'finalise' },
   }),
@@ -634,8 +651,6 @@ export const UNROUTED_PERMISSIONS = {
   'family-link:request': 'requestFamilyLink has no route.',
   'family-link:approve': 'approveFamilyLink has no route.',
   'conflict:declare': 'declareConflict has no route.',
-  'audit:view':
-    'Granted to organisation-admin and the break-glass read bundle. No route checks it. audit:read and audit:verify are not catalogue keys.',
   'break-glass:request':
     'The platform-operator template grants it. Request and activate check users.isPlatformOperator, not this key.',
   'group:manage':

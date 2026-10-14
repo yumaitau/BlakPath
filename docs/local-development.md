@@ -39,7 +39,7 @@ Key local defaults (see `.env.example`):
 
 | Variable                                      | Local value                                            | Notes                                                                             |
 | --------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres                                                                          |
+| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres. See `docs/database-migrations.md` for the migrator role.                |
 | `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                                          |
 | `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                             |
 | `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                                |
@@ -93,8 +93,14 @@ Working on the schema:
 
 ```bash
 pnpm db:generate    # generate a migration from schema changes (drizzle-kit)
+pnpm db:check       # journal and snapshots agree
+pnpm db:drift       # check, then fail if generate would write a new migration
 pnpm db:studio      # browse data in Drizzle Studio
 ```
+
+`pnpm db:push` only runs when `DATABASE_URL` is loopback. It refuses every
+other host. Production schema changes are committed migrations. See
+`docs/database-migrations.md`.
 
 Schema lives in `src/db/schema/*`. Remember: every table must be re-exported from
 `src/db/schema/index.ts`, or it is invisible to the query builder and to
@@ -116,20 +122,22 @@ or email, keep it running.
 
 ## Common commands
 
-| Command                                                | Purpose                                     |
-| ------------------------------------------------------ | ------------------------------------------- |
-| `pnpm dev`                                             | Run the app in development                  |
-| `pnpm worker:dev`                                      | Run the worker in watch mode                |
-| `pnpm build` / `pnpm start`                            | Production build / start                    |
-| `pnpm typecheck`                                       | `tsc --noEmit` (strict; run before pushing) |
-| `pnpm lint` / `pnpm lint:fix`                          | ESLint                                      |
-| `pnpm format` / `pnpm format:check`                    | Prettier                                    |
-| `pnpm test` / `pnpm test:watch`                        | Vitest unit + integration                   |
-| `pnpm test:e2e`                                        | Playwright e2e                              |
-| `pnpm test:live`                                       | Disposable full-service Playwright drill    |
-| `pnpm test:restore`                                    | Disposable backup and restore exercise      |
-| `pnpm db:migrate` / `pnpm db:seed`                     | Migrate / seed                              |
-| `pnpm db:generate` / `pnpm db:push` / `pnpm db:studio` | Drizzle Kit tools                           |
+| Command                                                | Purpose                                       |
+| ------------------------------------------------------ | --------------------------------------------- |
+| `pnpm dev`                                             | Run the app in development                    |
+| `pnpm worker:dev`                                      | Run the worker in watch mode                  |
+| `pnpm build` / `pnpm start`                            | Production build / start                      |
+| `pnpm typecheck`                                       | `tsc --noEmit` (strict; run before pushing)   |
+| `pnpm lint` / `pnpm lint:fix`                          | ESLint                                        |
+| `pnpm format` / `pnpm format:check`                    | Prettier                                      |
+| `pnpm test` / `pnpm test:watch`                        | Vitest unit + integration                     |
+| `pnpm test:e2e`                                        | Playwright e2e                                |
+| `pnpm test:live`                                       | Disposable full-service Playwright drill      |
+| `pnpm test:restore`                                    | Disposable backup and restore exercise        |
+| `pnpm db:migrate` / `pnpm db:seed`                     | Migrate / seed                                |
+| `pnpm db:generate` / `pnpm db:check` / `pnpm db:drift` | Generate a migration, or fail on schema drift |
+| `pnpm db:push`                                         | Refused except on localhost                   |
+| `pnpm db:studio`                                       | Browse data in Drizzle Studio                 |
 
 ## Testing
 

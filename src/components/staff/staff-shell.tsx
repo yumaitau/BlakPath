@@ -54,6 +54,9 @@ function ToolLinks({
       <Link
         key={item.href}
         href={item.href}
+        // Tool pages read tenant data and some audit the view (`/audit` records
+        // audit.viewed). Prefetch would record views nobody made.
+        prefetch={false}
         aria-current={currentPath ? 'page' : undefined}
         className={cn(
           'flex shrink-0 items-center rounded-md px-3 py-2 text-sm font-semibold transition-colors',
