@@ -110,6 +110,33 @@ Platform operators must use MFA unconditionally.
   the `blakpath` prefix without `Secure` so plain HTTP on a non-loopback host
   can still sign in.
 
+### Expiry, return-to and inactivity in the staff UI
+
+- An expired session never strands the user. The staff layout and staff pages
+  redirect to `/sign-in?returnTo=<current page>&reason=expired`; the current
+  page path reaches server components through `src/proxy.ts`
+  (`x-blakpath-path`), which makes no access decision. After sign-in (including
+  the two-factor step) the user lands back on that page.
+- `returnTo` is untrusted input: `safeReturnTo` (`src/lib/auth/return-to.ts`)
+  only accepts same-origin relative paths and refuses absolute or
+  protocol-relative URLs, backslash tricks, control characters, `/api/*`,
+  `/_next/*` and the auth pages themselves. Anything else falls back to
+  `/dashboard`.
+- Client components: the staff shell wraps `fetch` once. A `401` from our own
+  API (outside `/api/auth/*`) sends the user to sign-in with `returnTo`. A
+  step-up refusal is also a `401` but carries `code: "STEP_UP_REQUIRED"`, so the
+  component handles it instead.
+- Inactivity: after `STAFF_IDLE_TIMEOUT_MINUTES` (default 30, 5-720) without
+  activity in any open tab, the UI revokes the session through Better Auth and
+  returns to sign-in (`reason=idle`). A warning dialog with a countdown appears
+  two minutes before, and "Stay signed in" resets the timer. This is a
+  convenience control on shared devices. The server-side session lifetime is
+  still the security boundary.
+- Staff pages tell failures apart. An expired session redirects to sign-in, a
+  missing organisation goes to the organisation picker, an access refusal shows
+  an in-page **403** state, and anything else reaches the branded **500** error
+  page with a support reference (see `docs/operations-runbook.md`).
+
 ## Step-up / re-authentication for sensitive actions
 
 Certain actions require a **recent** authentication, not just a valid session.

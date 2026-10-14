@@ -1,7 +1,6 @@
 {
   "ignores": [
     "@tailwindcss/postcss",
-    "@testing-library/react",
     "@worker/*",
     "pino-pretty",
     "prettier-plugin-tailwindcss",

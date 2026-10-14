@@ -40,14 +40,9 @@ GHSA-q7rr-3cgh-j5r3 (OpenTelemetry Prometheus exporter crash) was ignored until 
 
 ## Unused dependencies
 
-Removed because nothing imports them: `react-hook-form`, `@hookform/resolvers`, `@radix-ui/react-dialog`, `@radix-ui/react-tabs`, `@radix-ui/react-toast`.
+Removed because nothing imports them: `react-hook-form`, `@hookform/resolvers`, `@radix-ui/react-tabs`, `@radix-ui/react-toast`. `@radix-ui/react-dialog` stays: `src/components/auth/session-watch.tsx` imports it.
 
-Held until [#75](https://github.com/yumaitau/BlakPath/issues/75) adds component tests:
-
-| Package                  | Why it stays                                                                                                                       |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `@testing-library/react` | No importer yet. Ignored by Knip and depcheck. Delete the ignores when #75 imports it.                                             |
-| `jsdom`                  | Installed for the jsdom Vitest environment #75 will turn on. Current Vitest wiring already keeps the tools from calling it unused. |
+Component-test libraries (`@testing-library/react`, `@testing-library/dom`, `jsdom`) are in use: `tests/unit/session-watch.test.ts` runs in the jsdom Vitest environment and imports `@testing-library/react`. They need no Knip or depcheck ignore. Wider component-test coverage stays on [#75](https://github.com/yumaitau/BlakPath/issues/75).
 
 These references are real, but the tools cannot see them. They are ignored so the gate does not report them as unused:
 

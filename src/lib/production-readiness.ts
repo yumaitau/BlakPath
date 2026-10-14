@@ -1,6 +1,16 @@
 import { migrationRoleIssue } from '@/db/migration-url';
 
-/** Pure production configuration checks used by the executable release gate. */
+/**
+ * Pure production configuration checks used by the release gate and by server
+ * boot when `NODE_ENV=production` (see `src/lib/env.ts`).
+ *
+ * `OTEL_EXPORTER_OTLP_ENDPOINT` is optional. Tracing stays off when it is unset
+ * (`src/lib/observability/otel.ts`). A value, when present, must be HTTPS on a
+ * non-local host.
+ *
+ * `PRODUCTION_READINESS_KEYS` is every key this function can reject. Tests
+ * assert each one.
+ */
 
 export interface ReadinessIssue {
   key: string;
@@ -8,6 +18,43 @@ export interface ReadinessIssue {
 }
 
 type ProductionEnvironment = Readonly<Record<string, string | undefined>>;
+
+export const PRODUCTION_READINESS_KEYS = [
+  'NODE_ENV',
+  'PILOT_BOOTSTRAP_TOKEN',
+  'APP_REGION',
+  'S3_REGION',
+  'APP_URL',
+  'BETTER_AUTH_URL',
+  'DATABASE_URL',
+  'DATABASE_MIGRATION_URL',
+  'REDIS_URL',
+  'S3_ENDPOINT',
+  'S3_ACCESS_KEY_ID',
+  'S3_KMS_KEY_ID',
+  'S3_BUCKET_AUDIT_ANCHORS',
+  'AUDIT_ANCHOR_OBJECT_LOCK',
+  'AUDIT_ANCHOR_SIGNING_KEY_ID',
+  'COA_SIGNING_KEY_ID',
+  'COA_SIGNING_LOCAL_KEY_PEM',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'CLAMAV_HOST',
+  'EMAIL_TRANSPORT',
+  'SMTP_USER',
+  'SMTP_PASSWORD',
+  'PAPERBOY_URL',
+  'PAPERBOY_API_KEY',
+  'SES_CONFIGURATION_SET',
+  'SMTP_FROM',
+  'ORIGIN_VERIFY_SECRET',
+  'BETTER_AUTH_SECRET',
+  'ENCRYPTION_LOCAL_KEY',
+  'KMS_ENDPOINT',
+  'PLATFORM_KMS_KEY_ARN',
+  'OPERATOR_ONCALL_EMAIL',
+  'EMAIL_WEBHOOK_SECRET',
+  'EMAIL_SNS_TOPIC_ARN',
+] as const;
 
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|::1)$/i;
 const PLACEHOLDER = /(replace[-_ ]?me|changeme|example|test-secret|dev-secret)/i;
@@ -198,7 +245,26 @@ export function validateProductionReadiness(
     });
   }
 
-  addRequiredUrl(issues, environment, 'OTEL_EXPORTER_OTLP_ENDPOINT', 'https:');
+  // Key ARN or alias: the runbook rotates CoA signing by retargeting
+  // alias/blakpath-coa-signing. Seals record the resolved key ARN.
+  const coaSigningKey =
+    /^(arn:aws:kms:ap-southeast-2:\d{12}:(key\/[0-9a-z-]+|alias\/[A-Za-z0-9/_-]+)|alias\/[A-Za-z0-9/_-]+)$/;
+  if (!coaSigningKey.test(environment.COA_SIGNING_KEY_ID ?? '')) {
+    issues.push({
+      key: 'COA_SIGNING_KEY_ID',
+      message: 'must reference an ap-southeast-2 KMS signing key ARN or alias',
+    });
+  }
+  if (environment.COA_SIGNING_LOCAL_KEY_PEM) {
+    issues.push({
+      key: 'COA_SIGNING_LOCAL_KEY_PEM',
+      message: 'must be unset in production',
+    });
+  }
+
+  if (environment.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    addRequiredUrl(issues, environment, 'OTEL_EXPORTER_OTLP_ENDPOINT', 'https:');
+  }
   const clamavHost = environment.CLAMAV_HOST;
   if (!clamavHost || LOCAL_HOST.test(clamavHost)) {
     issues.push({

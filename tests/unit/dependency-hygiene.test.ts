@@ -31,6 +31,7 @@ const productionReview: Record<string, Review> = {
   '@opentelemetry/exporter-trace-otlp-http': { latestMajor: 0 },
   '@opentelemetry/sdk-node': { latestMajor: 0 },
   '@pdf-lib/fontkit': { latestMajor: 1 },
+  '@radix-ui/react-dialog': { latestMajor: 1 },
   '@radix-ui/react-dropdown-menu': { latestMajor: 2 },
   '@radix-ui/react-label': { latestMajor: 2 },
   '@radix-ui/react-slot': { latestMajor: 1 },
@@ -61,13 +62,16 @@ const productionReview: Record<string, Review> = {
 const removedDependencies = [
   'react-hook-form',
   '@hookform/resolvers',
-  '@radix-ui/react-dialog',
   '@radix-ui/react-tabs',
   '@radix-ui/react-toast',
 ] as const;
 
-/** Component-test libraries kept until issue 75. */
-const heldUntilCoverage = ['@testing-library/react', 'jsdom'] as const;
+/** Component-test libraries used by the jsdom Vitest environment. */
+const componentTestLibraries = [
+  '@testing-library/dom',
+  '@testing-library/react',
+  'jsdom',
+] as const;
 
 const skipDirs = new Set([
   'node_modules',
@@ -173,18 +177,18 @@ describe('dependency hygiene', () => {
     }
   });
 
-  it('holds component-test libraries until issue 75 and documents every ignore', () => {
+  it('keeps component-test libraries and documents every ignore', () => {
     const pkg = readJson('package.json') as { devDependencies: Record<string, string> };
     const knip = readJson('knip.json') as { ignoreDependencies: string[] };
     const depcheck = readJson('.depcheckrc.json') as { ignores: string[] };
     const doc = readFileSync(join(root, 'docs/supply-chain.md'), 'utf8');
 
-    for (const name of heldUntilCoverage) {
+    for (const name of componentTestLibraries) {
       expect(pkg.devDependencies[name], name).toBeTruthy();
     }
-    expect(knip.ignoreDependencies).toContain('@testing-library/react');
-    expect(depcheck.ignores).toContain('@testing-library/react');
-    expect(doc).toContain('#75');
+    // Imported by tests/unit/session-watch.test.ts, so no ignore is needed.
+    expect(knip.ignoreDependencies).not.toContain('@testing-library/react');
+    expect(depcheck.ignores).not.toContain('@testing-library/react');
     expect(doc).toContain('pino-pretty');
     for (const name of [...knip.ignoreDependencies, ...depcheck.ignores]) {
       expect(doc, name).toContain(name);

@@ -11,6 +11,7 @@ const config = [
   {
     ignores: [
       '.next/**',
+      'dist/**',
       'node_modules/**',
       'src/db/migrations/**',
       'playwright-report/**',

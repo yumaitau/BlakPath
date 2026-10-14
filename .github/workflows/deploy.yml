@@ -1,0 +1,46 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Immutable ECR tag already pushed for the web and worker images
+        required: true
+        type: string
+
+# One rollout at a time. A failed release gate must not be cancelled into a
+# partial apply.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollout:
+    name: Release gate then roll out
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+
+      - name: Configure cluster access
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        run: |
+          if [ -z "${KUBECONFIG_CONTENT}" ]; then
+            echo "GitHub environment secret KUBECONFIG is not set. Refusing to roll out."
+            exit 1
+          fi
+          mkdir -p "${HOME}/.kube"
+          printf '%s\n' "${KUBECONFIG_CONTENT}" > "${HOME}/.kube/config"
+          chmod 600 "${HOME}/.kube/config"
+
+      - name: Run release gate and block rollout on failure
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: bash scripts/eks-deploy.sh "${IMAGE_TAG}"
