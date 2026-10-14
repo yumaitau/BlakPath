@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 /**
@@ -106,6 +107,26 @@ const serverSchema = z
 
     // Feature toggles
     AI_FEATURES_ENABLED: booleanish('false'),
+
+    // Extra CIDRs refused for webhook delivery, comma-separated, in addition
+    // to private, loopback, link-local, CGNAT and unique-local ranges.
+    WEBHOOK_DENY_CIDRS: z
+      .string()
+      .optional()
+      .refine((value) => {
+        if (!value || !value.trim()) return true;
+        return value.split(',').every((part) => {
+          const item = part.trim();
+          if (!item) return true;
+          const slash = item.lastIndexOf('/');
+          if (slash <= 0) return false;
+          const address = item.slice(0, slash);
+          const prefix = Number(item.slice(slash + 1));
+          const family = isIP(address);
+          const max = family === 4 ? 32 : family === 6 ? 128 : -1;
+          return max > 0 && Number.isInteger(prefix) && prefix >= 0 && prefix <= max;
+        });
+      }, 'WEBHOOK_DENY_CIDRS must be comma-separated CIDRs'),
   })
   .superRefine((value, context) => {
     if (Boolean(value.S3_ACCESS_KEY_ID) !== Boolean(value.S3_SECRET_ACCESS_KEY)) {

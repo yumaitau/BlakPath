@@ -25,6 +25,10 @@ region.
       availability, exhausted jobs, audit-chain divergence and backup failures.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Review `infra/k8s/network-policy.example.yaml` against the live VPC,
+      database, Redis and object-storage endpoints, then apply a policy that
+      keeps webhook delivery off in-cluster and link-local addresses. Rotate
+      any webhook endpoint whose stored secret is not envelope ciphertext.
 
 ## Signals and response
 
