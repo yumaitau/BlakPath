@@ -529,7 +529,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
         resourceType: 'evidence',
         resourceId: evidenceId,
         result: 'success',
-        reason: 'promoted object already present',
+        reason: 'evidence.promoted_object_present',
       });
       return;
     }
@@ -543,7 +543,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'failure',
-      reason: 'quarantine object missing',
+      reason: 'evidence.quarantine_object_missing',
     });
   };
 
