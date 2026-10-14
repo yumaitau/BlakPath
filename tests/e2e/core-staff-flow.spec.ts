@@ -300,7 +300,18 @@ test('staff can progress a case through review and a human committee decision', 
   await page.getByLabel('Request further evidence').fill(requestText);
   await page.getByRole('button', { name: 'Record request' }).click();
   await expect(page.getByRole('status')).toContainText('Evidence request recorded.');
-  await expect(page.getByText(requestText, { exact: true })).toBeVisible();
+  // The request is listed under Evidence, and again under Correspondence where
+  // staff send its notice (a separate, explicit step).
+  await expect(
+    page
+      .getByRole('region', { name: 'Evidence', exact: true })
+      .getByText(requestText, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole('region', { name: 'Correspondence', exact: true })
+      .getByText(requestText, { exact: true }),
+  ).toBeVisible();
 
   const noteText = `Applicant prefers contact after 3 pm ${stamp}`;
   await page.getByLabel('Add a note').fill(noteText);

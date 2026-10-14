@@ -30,6 +30,14 @@ export const ENCRYPTED_COLUMNS: readonly InventoryColumn[] = [
   { table: 'correspondence_messages', column: 'subject', kind: 'text' },
   { table: 'correspondence_messages', column: 'text_body', kind: 'text' },
   { table: 'correspondence_messages', column: 'html_body', kind: 'text' },
+  { table: 'correspondence_templates', column: 'subject_template', kind: 'text' },
+  { table: 'correspondence_templates', column: 'body_template', kind: 'text' },
+  { table: 'correspondence_items', column: 'subject_template', kind: 'text' },
+  { table: 'correspondence_items', column: 'body_template', kind: 'text' },
+  { table: 'correspondence_items', column: 'rendered_subject', kind: 'text' },
+  { table: 'correspondence_items', column: 'rendered_body', kind: 'text' },
+  { table: 'correspondence_items', column: 'recipient_name', kind: 'text' },
+  { table: 'correspondence_items', column: 'recipient_email', kind: 'text' },
   { table: 'consent_records', column: 'wording_snapshot', kind: 'text' },
   { table: 'membership_invitations', column: 'token_seal', kind: 'jsonb' },
   { table: 'form_invitations', column: 'token_seal', kind: 'jsonb' },
@@ -54,6 +62,12 @@ export const INVENTORY_LOG_FIELDS = [
   'recipient',
   'notes',
   'subject',
+  'subjectTemplate',
+  'bodyTemplate',
+  'renderedSubject',
+  'renderedBody',
+  'recipientName',
+  'recipientEmail',
 ] as const;
 
 export function inventoryRedactPaths(): string[] {

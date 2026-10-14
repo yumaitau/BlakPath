@@ -169,6 +169,17 @@ function classify(error: unknown): MappedError {
       error: error.message,
     };
   }
+  // Correspondence send rules (src/domains/correspondence/errors.ts). The
+  // message is a fixed phrase, plus at most a validated merge-field name.
+  if (error instanceof Error && error.name === 'CorrespondenceError') {
+    const code = (error as { code?: unknown }).code;
+    const upper = typeof code === 'string' ? `CORRESPONDENCE_${code.toUpperCase()}` : '';
+    return {
+      status: 409,
+      code: SAFE_CODE.test(upper) ? upper : 'CORRESPONDENCE_REFUSED',
+      error: error.message,
+    };
+  }
   // Per-tenant MCP budget (src/domains/mcp/rate-limit.ts).
   if (error instanceof Error && error.name === 'McpRateLimitError') {
     const seconds = (error as { retryAfterSeconds?: unknown }).retryAfterSeconds;

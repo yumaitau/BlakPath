@@ -64,6 +64,8 @@ export const RETENTION_RESOURCE_TYPES = [
   'group',
   'client',
   'message',
+  'correspondence',
+  'correspondence_template',
   'notification',
   'email_suppression',
   'meeting_pack',

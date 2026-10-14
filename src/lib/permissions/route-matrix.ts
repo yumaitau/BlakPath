@@ -148,6 +148,17 @@ const DASHBOARD_READ = [
   'application:read-any',
 ] as const satisfies readonly Permission[];
 
+const CORRESPONDENCE_CASE_READ = [
+  'correspondence:send',
+  'application:read-any',
+  'application:read-assigned',
+] as const satisfies readonly Permission[];
+
+const CORRESPONDENCE_TEMPLATE_READ = [
+  'correspondence:manage-templates',
+  'correspondence:send',
+] as const satisfies readonly Permission[];
+
 const CERTIFICATE_READ = [
   'certificate:generate',
   'certificate:sign',
@@ -240,9 +251,22 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('PATCH', '/api/applications/[id]', anyOf(APPLICATION_PATCH), {
     body: { operation: 'assign_self' },
   }),
+  route('GET', '/api/applications/[id]/correspondence', anyOf(CORRESPONDENCE_CASE_READ)),
+  route('POST', '/api/applications/[id]/correspondence', anyOf(['correspondence:send'])),
+  // Step-up first (a fresh fixture session passes), then the send permission.
+  route(
+    'POST',
+    '/api/applications/[id]/correspondence/[correspondenceId]/send',
+    anyOf(['correspondence:send']),
+  ),
   route('POST', '/api/applications/[id]/decisions', anyOf(['decision:propose'])),
   route('POST', '/api/applications/[id]/evidence', anyOf(EVIDENCE_UPLOAD)),
   route('POST', '/api/applications/[id]/evidence-requests', anyOf(['evidence:request'])),
+  route(
+    'POST',
+    '/api/applications/[id]/evidence-requests/[requestId]/notify',
+    anyOf(['correspondence:send']),
+  ),
   route('POST', '/api/applications/[id]/reviews', anyOf(['review:create'])),
   // Gated in the audit domain (`src/domains/audit/log.ts`); a refusal is
   // itself recorded on the tenant chain.
@@ -307,6 +331,26 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('GET', '/api/certificates/[id]/download', anyOf(CERTIFICATE_READ)),
   route('POST', '/api/certificates/[id]/revoke', anyOf(['certificate:revoke'])),
   route('POST', '/api/certificates/[id]/sign', anyOf(['certificate:sign'])),
+  route('GET', '/api/correspondence/[id]/letter', anyOf(CORRESPONDENCE_CASE_READ)),
+  route('GET', '/api/correspondence/templates', anyOf(CORRESPONDENCE_TEMPLATE_READ), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route(
+    'POST',
+    '/api/correspondence/templates',
+    anyOf(['correspondence:manage-templates']),
+  ),
+  route(
+    'PATCH',
+    '/api/correspondence/templates/[id]',
+    anyOf(['correspondence:manage-templates']),
+  ),
+  route(
+    'POST',
+    '/api/correspondence/templates/seed',
+    anyOf(['correspondence:manage-templates']),
+  ),
   route('GET', '/api/clients', anyOf(CLIENT_READ), {
     allowRole: 'organisation-admin',
     allowProbe: true,
@@ -524,6 +568,12 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('PATCH', '/api/organisations/session-policy', anyOf(['tenant:configure']), {
     body: { idleTimeoutMinutes: 45 },
   }),
+  route(
+    'GET',
+    '/api/public/correspondence/[token]/certificate',
+    { kind: 'bearer-token' },
+    { denyStatuses: [404] },
+  ),
   route(
     'POST',
     '/api/public/forms/[token]',

@@ -25,6 +25,8 @@ const LISTED_ROUTES = [
   'POST /api/reports/exports',
   'GET /api/reports/exports/[id]/download',
   'POST /api/certificates/[id]/revoke',
+  'POST /api/applications/[id]/correspondence/[correspondenceId]/send',
+  'POST /api/applications/[id]/evidence-requests/[requestId]/notify',
   'POST /api/keys',
   'POST /api/webhooks',
   'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
@@ -55,6 +57,14 @@ describe('step-up route map', () => {
     expect(STEP_UP_ROUTES['POST /api/certificates/[id]/revoke']).toBe(
       STEP_UP_WINDOWS.sensitiveAction,
     );
+    expect(
+      STEP_UP_ROUTES[
+        'POST /api/applications/[id]/correspondence/[correspondenceId]/send'
+      ],
+    ).toBe(STEP_UP_WINDOWS.sensitiveAction);
+    expect(
+      STEP_UP_ROUTES['POST /api/applications/[id]/evidence-requests/[requestId]/notify'],
+    ).toBe(STEP_UP_WINDOWS.sensitiveAction);
     expect(STEP_UP_ROUTES['POST /api/keys']).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['POST /api/webhooks']).toBe(STEP_UP_WINDOWS.privileged);
     expect(

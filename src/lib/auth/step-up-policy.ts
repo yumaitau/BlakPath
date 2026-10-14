@@ -14,7 +14,7 @@
 export const STEP_UP_WINDOWS = {
   /** Break-glass decisions, secrets, and permission changes: 5 minutes. */
   privileged: 5 * 60,
-  /** Evidence export and certificate signing or revocation: 10 minutes. */
+  /** Evidence export, certificate revocation, and letters to applicants: 10 minutes. */
   sensitiveAction: 10 * 60,
   /** Destructive retention changes: 15 minutes. */
   destructive: 15 * 60,
@@ -31,6 +31,11 @@ export const STEP_UP_ROUTES = {
   'POST /api/reports/exports': STEP_UP_WINDOWS.sensitiveAction,
   'GET /api/reports/exports/[id]/download': STEP_UP_WINDOWS.sensitiveAction,
   'POST /api/certificates/[id]/revoke': STEP_UP_WINDOWS.sensitiveAction,
+  // Sending a letter releases case information to the applicant.
+  'POST /api/applications/[id]/correspondence/[correspondenceId]/send':
+    STEP_UP_WINDOWS.sensitiveAction,
+  'POST /api/applications/[id]/evidence-requests/[requestId]/notify':
+    STEP_UP_WINDOWS.sensitiveAction,
   'POST /api/keys': STEP_UP_WINDOWS.privileged,
   'POST /api/webhooks': STEP_UP_WINDOWS.privileged,
   'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver': STEP_UP_WINDOWS.privileged,

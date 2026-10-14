@@ -103,6 +103,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'evidence:read-assigned',
       'evidence:upload-on-behalf',
       'evidence:request',
+      'correspondence:send',
       'client:create',
       'client:read-any',
       'client:assign-team',
@@ -127,6 +128,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'family-link:request',
       'review:create',
       'review:finalise',
+      'correspondence:send',
       'client:read-assigned',
       'calendar:create',
       'calendar:read-any',
@@ -197,6 +199,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'certificate:generate',
       'certificate:sign',
       'certificate:revoke',
+      'correspondence:send',
       'calendar:create',
       'calendar:read-any',
       'calendar:update-any',
@@ -214,6 +217,8 @@ export const SYSTEM_ROLES = Object.freeze({
       'evidence:classify',
       'evidence:download',
       'certificate:generate',
+      'correspondence:send',
+      'correspondence:manage-templates',
       'report:view',
       'report:export',
       'retention:manage',
@@ -230,6 +235,7 @@ export const SYSTEM_ROLES = Object.freeze({
     permissions: [
       'tenant:configure',
       'membership:manage',
+      'correspondence:manage-templates',
       // Transport scopes only. The admin still holds no application, evidence,
       // decision or certificate read, so a key needs a separate data permission
       // the issuer themselves holds before a tool can return records.

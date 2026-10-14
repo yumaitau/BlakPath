@@ -235,6 +235,27 @@ export const formInvitationStatus = pgEnum('form_invitation_status', [
   'revoked',
 ]);
 
+/**
+ * Kind of outbound correspondence. These name the letter, not a judgement
+ * the software made. `outcome` repeats a decision a person already finalised.
+ */
+export const correspondenceKind = pgEnum('correspondence_kind', [
+  'outcome',
+  'evidence_request',
+  'revocation',
+  'certificate',
+  'general',
+]);
+
+/** How a letter leaves the organisation. Email detail stays behind a link. */
+export const correspondenceChannel = pgEnum('correspondence_channel', [
+  'email',
+  'letter',
+]);
+
+/** A draft is stored on the case. Only an explicit Send moves it to `sent`. */
+export const correspondenceStatus = pgEnum('correspondence_status', ['draft', 'sent']);
+
 /** Lifecycle of a break-glass (emergency access) request. */
 export const breakGlassStatus = pgEnum('break_glass_status', [
   'requested',

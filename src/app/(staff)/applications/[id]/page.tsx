@@ -14,6 +14,14 @@ import {
 } from '@/components/certificates/certificate-panel';
 import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import {
+  CorrespondencePanel,
+  type CorrespondenceCertificateOption,
+  type CorrespondenceDecisionOption,
+  type CorrespondenceEvidenceOption,
+  type CorrespondenceLetter,
+  type CorrespondenceTemplateOption,
+} from '@/components/correspondence/correspondence-panel';
+import {
   CaseFormResponses,
   type CaseFormResponseView,
 } from '@/components/forms/case-form-responses';
@@ -24,6 +32,12 @@ import {
   type ApplicationStatus,
 } from '@/domains/applications';
 import { listCertificates } from '@/domains/certificates';
+import {
+  CORRESPONDENCE_KINDS,
+  listCorrespondence,
+  listTemplates,
+  maySendKind,
+} from '@/domains/correspondence';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
 import { listResponsesForApplication } from '@/domains/forms';
@@ -39,6 +53,15 @@ interface LoadedData {
   governance: CaseGovernanceWorkspaceProps;
   decisions: PanelDecision[];
   certificates: PanelCertificate[];
+  correspondence: {
+    allowedKinds: string[];
+    canManageTemplates: boolean;
+    letters: CorrespondenceLetter[];
+    templates: CorrespondenceTemplateOption[];
+    decisions: CorrespondenceDecisionOption[];
+    evidenceRequests: CorrespondenceEvidenceOption[];
+    certificates: CorrespondenceCertificateOption[];
+  };
   formResponses: CaseFormResponseView[];
 }
 
@@ -86,6 +109,25 @@ export default async function ApplicationDetailPage({
         listResponsesForApplication(id),
       ]);
       const subject = subjectFromContext(ctx);
+      const allowedKinds = CORRESPONDENCE_KINDS.filter((kind) =>
+        maySendKind(kind, subject.permissions),
+      );
+      const canManageTemplates = hasPermission(
+        subject,
+        'correspondence:manage-templates',
+      );
+      const [letters, templates] = await Promise.all([
+        hasAny(subject, [
+          'correspondence:send',
+          'application:read-any',
+          'application:read-assigned',
+        ])
+          ? listCorrespondence(id)
+          : Promise.resolve([]),
+        allowedKinds.length > 0 || canManageTemplates
+          ? listTemplates()
+          : Promise.resolve([]),
+      ]);
       const application = record.application;
       const decisionDetails = await Promise.all(
         decisions.map((decision) => getDecisionWithVotes(decision.id)),
@@ -204,6 +246,45 @@ export default async function ApplicationDetailPage({
           decisionId: certificate.decisionId,
           revokedReason: certificate.revokedReason,
         })),
+        correspondence: {
+          allowedKinds: [...allowedKinds],
+          canManageTemplates,
+          letters: letters.map((letter) => ({
+            id: letter.id,
+            kind: letter.kind,
+            channel: letter.channel,
+            status: letter.status,
+            subject: letter.renderedSubject ?? letter.subjectTemplate,
+            body: letter.renderedBody,
+            emailText: letter.emailText,
+            sentAt: letter.sentAt?.toISOString() ?? null,
+            createdAt: letter.createdAt.toISOString(),
+            recipientEmail: letter.recipientEmail,
+          })),
+          templates: templates
+            .filter((template) => template.active)
+            .map((template) => ({
+              id: template.id,
+              name: template.name,
+              kind: template.kind,
+            })),
+          decisions: decisions.map((decision) => ({
+            id: decision.id,
+            status: decision.status,
+            finalOutcome: decision.finalOutcome,
+          })),
+          evidenceRequests: evidenceRequests.map((request) => ({
+            id: request.id,
+            description: request.description,
+            status: request.status,
+            dueAt: request.dueAt?.toISOString() ?? null,
+          })),
+          certificates: certificates.map((certificate) => ({
+            id: certificate.id,
+            reference: certificate.reference,
+            status: certificate.status,
+          })),
+        },
         formResponses: formResponses.map((response) => ({
           id: response.id,
           formId: response.formId,
@@ -268,6 +349,8 @@ export default async function ApplicationDetailPage({
         decisions={data.decisions}
         certificates={data.certificates}
       />
+
+      <CorrespondencePanel applicationId={id} {...data.correspondence} />
     </div>
   );
 }
