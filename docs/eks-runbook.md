@@ -19,26 +19,32 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
    `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
 3. In `infra/aws/eks-boundary.example.yaml`, replace `OIDC_ID` with the cluster
-   OIDC issuer id. Deploy that stack in ap-southeast-2.
-   `CreatePodIdentityAssociation` stays `false` until the namespace exists.
-   `PlatformEsoRoleName` is the shared External Secrets role, never
-   `blakpath-external-secrets` or the workload role.
-4. Replace `CLUSTER_NAME` in
-   `infra/aws/blakpath-eks-runtime-trust.example.json` and set that document as
-   the trust policy on `blakpath-eks-runtime`.
+   OIDC issuer id. Deploy that stack in ap-southeast-2 after step 4: it
+   attaches the mail-send policy to the `blakpath-web` and `blakpath-worker`
+   roles. `PlatformEsoRoleName` is the shared External Secrets role, never
+   `blakpath-external-secrets`, `blakpath-web` or `blakpath-worker`.
+4. Install the EKS Pod Identity agent add-on. Deploy
+   `infra/aws/workload-roles.example.yaml` with the cluster name, bucket ARNs,
+   evidence CMK, CoA signing CMK, audit anchor bucket and key, and platform
+   CMK. It creates roles `blakpath-web` and `blakpath-worker` and associations
+   for service accounts `blakpath-web` and `blakpath-worker` only. ClamAV and
+   the migrate/seed jobs have no AWS role and mount no API token.
 5. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
 6. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, certificate ARN,
    trust store ARN and WAF ACL ARN. Complete the edge section below first.
    Rolling the app before the origin-verify header is live makes production
-   requests return 403.
-7. Delete any pod identity association for `blakpath/blakpath` that was left
-   behind while the namespace did not exist. Update the stack with
-   `CreatePodIdentityAssociation=true` and the real `WorkloadRoleArn`.
+   requests return 403. The namespace enforces Pod Security `restricted`;
+   every pod runs non-root with a read-only root filesystem.
+7. Moving from the shared `blakpath` service account: deploy step 4 before
+   step 6, so the new associations exist when web and worker restart. Then
+   delete the pod identity association for `blakpath/blakpath` and retire
+   `blakpath-eks-runtime`. Confirm the ClamAV pods have no AWS credential
+   environment variables.
 8. Run `pnpm release:check` inside the exact web and worker images before
    promoting. It rejects static S3 credentials, standing SMTP credentials,
    `PAPERBOY_*` and `PILOT_BOOTSTRAP_TOKEN`, and requires the SES sender
-   config. SDK uses the workload role. Do not put
+   config. SDK uses the EKS Pod Identity role. Do not put
    `PILOT_BOOTSTRAP_TOKEN` in the runtime secret.
 9. Apply the migrate job, then the seed job, then
    `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
@@ -111,7 +117,8 @@ manifest is `infra/k8s/service-ingress.yaml`. The example stack is
 
 ## Mail credentials
 
-Production mail uses `ses:SendEmail` on `blakpath-eks-runtime`, limited to
+Production mail uses `ses:SendEmail` on the `blakpath-web` and
+`blakpath-worker` roles, limited to
 `ses:FromAddress` `no-reply@blakpath.yumait.au`. The stack does not create an
 SMTP user or an access key.
 
@@ -270,11 +277,13 @@ Version 1 seals continue to verify.
 
 1. Create the key: RSA_2048 (or ECC_NIST_P256), usage SIGN_VERIFY, alias
    `alias/blakpath-coa-signing`, ap-southeast-2.
-2. Grant the workload role `kms:Sign` and `kms:GetPublicKey` on the key ARN
-   (Pod Identity association). Signing needs nothing else; public
-   verification needs no KMS access at all.
+2. Grant only the web role `kms:Sign` and `kms:GetPublicKey` on that key
+   (`CoaSigningKeyArn` in `infra/aws/workload-roles.example.yaml`). The worker
+   role denies `kms:Sign` on every key except the audit anchor key. Public
+   verification needs no KMS access at all, so `kms:Verify` is not granted.
+   Action-by-action review: `infra/aws/unused-access-review.md`.
 3. Set `COA_SIGNING_KEY_ID` to the alias (`alias/blakpath-coa-signing`) or the
-   key ARN in `blakpath-eks-runtime`.
+   key ARN in the runtime secret.
 4. Every seal stores the resolved key ARN KMS reports it signed with (never
    the alias), and the first seal by a key stores that key's public half
    (SPKI + SHA-256 fingerprint) in `signing_keys`. `/verify` checks seals
@@ -283,7 +292,7 @@ Version 1 seals continue to verify.
 Rotation. KMS does not rotate asymmetric keys in place, so rotation is a new
 key plus an alias retarget:
 
-1. Create a new SIGN_VERIFY key (same spec) and grant the workload role
+1. Create a new SIGN_VERIFY key (same spec) and grant the web role
    `kms:Sign` and `kms:GetPublicKey` on it.
 2. Retarget the alias: `aws kms update-alias --alias-name
 alias/blakpath-coa-signing --target-key-id <new-key-id>` (or, if

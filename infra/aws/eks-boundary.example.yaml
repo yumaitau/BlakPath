@@ -3,8 +3,9 @@ Description: >
   BlakPath secret sync and application mail. The External Secrets role can
   read only /blakpath/production/* and only from the blakpath namespace.
   The shared External Secrets role is denied that folder and the app-secrets
-  key. Mail send is ses:SendEmail for one From address on the workload role.
-  This stack does not create an SMTP user or an access key.
+  key. Mail send is ses:SendEmail for one From address on the web and
+  worker Pod Identity roles. workload-roles.example.yaml owns those roles and
+  their associations. This stack does not create an SMTP user or an access key.
 
 Parameters:
   AppSecretsKeyArn:
@@ -15,27 +16,14 @@ Parameters:
     Type: String
     Description: Shared External Secrets role. Never a BlakPath role.
     AllowedPattern: '^[A-Za-z0-9+=,.@_-]+$'
-  WorkloadRoleName:
+  WebRoleName:
     Type: String
-    Default: blakpath-eks-runtime
-    Description: Existing pod role for service account blakpath.
-  WorkloadRoleArn:
+    Default: blakpath-web
+    Description: Pod Identity role for service account blakpath-web.
+  WorkerRoleName:
     Type: String
-    Default: arn:aws:iam::111122223333:role/blakpath-eks-runtime
-    Description: ARN of WorkloadRoleName. Replace the placeholder when the association is created.
-    AllowedPattern: '^arn:aws:iam::\d{12}:role/[A-Za-z0-9+=,.@_-]+$'
-  ClusterName:
-    Type: String
-    Default: yumait-prod
-    Description: Cluster that will own the pod identity association.
-    AllowedPattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$'
-  CreatePodIdentityAssociation:
-    Type: String
-    Default: 'false'
-    AllowedValues: ['true', 'false']
-    Description: >
-      true only after namespace blakpath exists. Delete a leftover association
-      for this service account before setting true.
+    Default: blakpath-worker
+    Description: Pod Identity role for service account blakpath-worker.
   MailFromDomain:
     Type: String
     Default: blakpath.yumait.au
@@ -56,21 +44,14 @@ Rules:
           Fn::Not:
             - Fn::Equals:
                 - !Ref PlatformEsoRoleName
-                - !Ref WorkloadRoleName
-        AssertDescription: Do not attach the deny policy to the workload role.
+                - !Ref WebRoleName
+        AssertDescription: Do not attach the deny policy to the web role.
       - Assert:
-          Fn::Or:
+          Fn::Not:
             - Fn::Equals:
-                - !Ref CreatePodIdentityAssociation
-                - 'false'
-            - Fn::Not:
-                - Fn::Equals:
-                    - !Ref WorkloadRoleArn
-                    - arn:aws:iam::111122223333:role/blakpath-eks-runtime
-        AssertDescription: Set WorkloadRoleArn when creating the pod identity association.
-
-Conditions:
-  AssociateWorkload: !Equals [!Ref CreatePodIdentityAssociation, 'true']
+                - !Ref PlatformEsoRoleName
+                - !Ref WorkerRoleName
+        AssertDescription: Do not attach the deny policy to the worker role.
 
 Resources:
   ExternalSecretsRole:
@@ -139,7 +120,8 @@ Resources:
     Properties:
       PolicyName: BlakPathSesSend
       Roles:
-        - !Ref WorkloadRoleName
+        - !Ref WebRoleName
+        - !Ref WorkerRoleName
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -151,18 +133,6 @@ Resources:
               StringEquals:
                 ses:FromAddress: !Ref MailFromAddress
 
-  WorkloadPodIdentity:
-    Type: AWS::EKS::PodIdentityAssociation
-    Condition: AssociateWorkload
-    Properties:
-      ClusterName: !Ref ClusterName
-      Namespace: blakpath
-      ServiceAccount: blakpath
-      RoleArn: !Ref WorkloadRoleArn
-
 Outputs:
   ExternalSecretsRoleArn:
     Value: !GetAtt ExternalSecretsRole.Arn
-  WorkloadTrustPolicy:
-    Description: Replace CLUSTER_NAME, then set this trust on the workload role.
-    Value: infra/aws/blakpath-eks-runtime-trust.example.json
