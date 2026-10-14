@@ -44,6 +44,12 @@ export interface VerifyChainResult {
   readonly endHash: string | null;
   readonly periodStart: Date | null;
   readonly periodEnd: Date | null;
+  /**
+   * Hash of each event that verified, in chain order. On divergence this is
+   * only the intact prefix. External anchor checks compare these digests to
+   * the signed head; the unkeyed recompute alone cannot see a rewritten tail.
+   */
+  readonly hashes: readonly string[];
   /** First break found, or null when the chain verifies cleanly. */
   readonly divergence: ChainDivergence | null;
 }
@@ -138,6 +144,7 @@ export async function verifyChain(
 
   let prevHash: string | null = options.startingPrevHash ?? null;
   let divergence: ChainDivergence | null = null;
+  const hashes: string[] = [];
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
@@ -174,6 +181,7 @@ export async function verifyChain(
       };
       break;
     }
+    hashes.push(row.hash);
     prevHash = row.hash;
   }
 
@@ -188,6 +196,7 @@ export async function verifyChain(
     endHash: last ? last.hash : null,
     periodStart: first ? first.timestamp : null,
     periodEnd: last ? last.timestamp : null,
+    hashes,
     divergence,
   };
 }

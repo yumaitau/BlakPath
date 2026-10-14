@@ -24,14 +24,14 @@ export const MIGRATIONS_TABLE = '__drizzle_migrations';
 const PROGRESS_TABLE = '__drizzle_migration_progress';
 const ADVISORY_LOCK_KEY = 'blakpath-migrate';
 
-const LOCAL_MIGRATE_HOSTS = new Set(['localhost', '127.0.0.1', '::1', 'postgres']);
 const STATEMENT_BREAKPOINT = '--> statement-breakpoint';
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
- * Migrations 0000–0018 shipped before the expand/contract linter. 0015 and
- * 0016 add foreign keys to existing tables without `NOT VALID`. They stay as
- * applied history; a new file cannot copy that shape.
+ * Migrations 0000–0034 shipped before the expand/contract linter. 0015 and
+ * 0016 add foreign keys to existing tables without `NOT VALID`; 0028 and 0032
+ * build plain indexes on existing tables. They stay as applied history; a new
+ * file cannot copy that shape.
  */
 export const GRANDFATHERED_MIGRATION_TAGS: ReadonlySet<string> = new Set([
   '0000_square_speed',
@@ -53,6 +53,22 @@ export const GRANDFATHERED_MIGRATION_TAGS: ReadonlySet<string> = new Set([
   '0016_invitation-teams',
   '0017_calendar-exdate',
   '0018_coa-signatures',
+  '0019_safe_wasp',
+  '0020_numerous_morph',
+  '0021_tired_slipstream',
+  '0022_fluffy_franklin_richards',
+  '0023_long_talisman',
+  '0024_mushy_rocket_racer',
+  '0025_mixed_lady_deathstrike',
+  '0026_brown_speedball',
+  '0027_fluffy_cammi',
+  '0028_skinny_old_lace',
+  '0029_remarkable_robin_chapel',
+  '0030_productive_boomerang',
+  '0031_tired_psylocke',
+  '0032_narrow_betty_brant',
+  '0033_nice_edwin_jarvis',
+  '0034_audit_free_text_off_chain',
 ]);
 
 export interface MigrationLintIssue {
@@ -144,32 +160,6 @@ export function resolveMigrationTimeouts(env: Env): MigrationTimeouts {
     );
   }
   return { lockTimeoutMs, statementTimeoutMs };
-}
-
-/**
- * Migrations use the owner role. Local development and CI may fall back to
- * `DATABASE_URL` when the host is loopback or the Compose service `postgres`.
- * Production never falls back, and the two URLs must not share a role.
- */
-export function resolveMigratorUrl(env: Env): string {
-  const migrator = env.DATABASE_MIGRATOR_URL;
-  const app = env.DATABASE_URL;
-  if (migrator) {
-    if (
-      app &&
-      databaseUsername(migrator) === databaseUsername(app) &&
-      !localMigrateFallbackAllowed(env, migrator)
-    ) {
-      throw new Error(
-        'DATABASE_MIGRATOR_URL must use a different role than DATABASE_URL',
-      );
-    }
-    return migrator;
-  }
-  if (app && localMigrateFallbackAllowed(env, app)) return app;
-  throw new Error(
-    'DATABASE_MIGRATOR_URL is required. Migrations must not use the application role.',
-  );
 }
 
 export function lintMigrationSql(tag: string, sql: string): MigrationLintIssue[] {
@@ -493,27 +483,6 @@ function parseTimeout(
   if (!/^\d+$/.test(value))
     throw new Error(`${label} must be an integer number of milliseconds`);
   return Number(value);
-}
-
-function localMigrateFallbackAllowed(env: Env, databaseUrl: string): boolean {
-  if ((env.NODE_ENV ?? 'development') === 'production') return false;
-  return LOCAL_MIGRATE_HOSTS.has(databaseHost(databaseUrl));
-}
-
-function databaseHost(databaseUrl: string): string {
-  return parseDatabaseUrl(databaseUrl, 'database URL').hostname;
-}
-
-function databaseUsername(databaseUrl: string): string {
-  return decodeURIComponent(parseDatabaseUrl(databaseUrl, 'database URL').username);
-}
-
-function parseDatabaseUrl(value: string, label: string): URL {
-  try {
-    return new URL(value);
-  } catch {
-    throw new Error(`${label} is not a valid URL`);
-  }
 }
 
 function tablesCreated(sql: string): Set<string> {

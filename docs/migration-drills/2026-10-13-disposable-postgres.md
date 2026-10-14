@@ -31,6 +31,10 @@ database. It does not replace the required staging rehearsal.
 ## Still required
 
 Run rollback steps 1 and 2 once against the staging cluster and record that
-rehearsal separately. Apply `infra/postgres/roles.sql` as the RDS master and
-store `DATABASE_MIGRATOR_URL` only in `/blakpath/production/migrator` before
-the first production migrate Job.
+rehearsal separately. Apply `infra/postgres/audit-roles.sql` as the RDS
+master and store `DATABASE_MIGRATION_URL` only in
+`/blakpath/production/migrator` before the first production migrate Job.
+
+The drill above ran before the migrator settings were merged with main. It
+used the then-current `infra/postgres/roles.sql` and `DATABASE_MIGRATOR_URL`.
+Both are now `infra/postgres/audit-roles.sql` and `DATABASE_MIGRATION_URL`.

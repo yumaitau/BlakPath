@@ -1,6 +1,7 @@
 # Rendered by scripts/cd-release.sh. Do not kubectl apply this file directly.
 # Not in kustomization.yaml: a Job is immutable and is named per release.
 # __IMAGE__ is the app image digest. __RELEASE_ID__ is the git sha.
+# seed.yaml and invite-admin.yaml in this folder are still applied by hand.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -31,6 +32,11 @@ spec:
           image: __IMAGE__
           imagePullPolicy: IfNotPresent
           command: ['node', '/app/migrate.cjs']
+          # Config only (AUDIT_DB_APP_ROLE). The Job does not mount the
+          # runtime secret: it needs no app credential.
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
           env:
             - name: NODE_ENV
               value: production
@@ -40,11 +46,14 @@ spec:
               value: '4000'
             - name: MIGRATION_STATEMENT_TIMEOUT_MS
               value: '600000'
-            - name: DATABASE_MIGRATOR_URL
+            # Owning role. Must not be the application DATABASE_URL. The
+            # runtime secret must not carry this value; web and worker never
+            # mount blakpath-migrator.
+            - name: DATABASE_MIGRATION_URL
               valueFrom:
                 secretKeyRef:
                   name: blakpath-migrator
-                  key: DATABASE_MIGRATOR_URL
+                  key: DATABASE_MIGRATION_URL
           resources:
             requests:
               cpu: 250m

@@ -8,7 +8,6 @@ import {
   lintMigrationSql,
   MAX_LOCK_TIMEOUT_MS,
   resolveMigrationTimeouts,
-  resolveMigratorUrl,
   splitMigrationStatements,
   statementRunsOutsideTransaction,
 } from '@/db/migrator';
@@ -27,10 +26,10 @@ const workerImage = `${WORKER_IMAGE_REPOSITORY}@sha256:${workerDigest}`;
 const release = { appImage, workerImage, releaseId: 'abc1234' };
 
 describe('migration policy', () => {
-  it('grandfathers only migrations 0000-0018', () => {
-    expect(GRANDFATHERED_MIGRATION_TAGS.size).toBe(19);
+  it('grandfathers only migrations 0000-0034', () => {
+    expect(GRANDFATHERED_MIGRATION_TAGS.size).toBe(35);
     for (const tag of GRANDFATHERED_MIGRATION_TAGS) {
-      expect(tag).toMatch(/^00(0[0-9]|1[0-8])_/);
+      expect(tag).toMatch(/^00([0-2][0-9]|3[0-4])_/);
     }
   });
 
@@ -79,45 +78,13 @@ describe('migration policy', () => {
   });
 });
 
-describe('migration timeouts and role', () => {
+describe('migration timeouts', () => {
   it('caps lock_timeout under 5 seconds', () => {
     expect(MAX_LOCK_TIMEOUT_MS).toBeLessThan(5_000);
     expect(resolveMigrationTimeouts({})).toMatchObject({ lockTimeoutMs: 4_000 });
     expect(() => resolveMigrationTimeouts({ MIGRATION_LOCK_TIMEOUT_MS: '5000' })).toThrow(
       /1 to 4000/,
     );
-  });
-
-  it('requires a distinct migrator role outside local development', () => {
-    expect(
-      resolveMigratorUrl({
-        NODE_ENV: 'development',
-        DATABASE_URL: 'postgres://blakpath:blakpath@localhost:5432/blakpath',
-      }),
-    ).toMatch(/localhost/);
-
-    expect(
-      resolveMigratorUrl({
-        NODE_ENV: 'production',
-        DATABASE_URL: 'postgres://blakpath_app:secret@db.internal/blakpath',
-        DATABASE_MIGRATOR_URL: 'postgres://blakpath_migrator:secret@db.internal/blakpath',
-      }),
-    ).toMatch(/blakpath_migrator/);
-
-    expect(() =>
-      resolveMigratorUrl({
-        NODE_ENV: 'production',
-        DATABASE_URL: 'postgres://blakpath_app:secret@db.internal/blakpath',
-      }),
-    ).toThrow(/DATABASE_MIGRATOR_URL is required/);
-
-    expect(() =>
-      resolveMigratorUrl({
-        NODE_ENV: 'production',
-        DATABASE_URL: 'postgres://blakpath_migrator:secret@db.internal/blakpath',
-        DATABASE_MIGRATOR_URL: 'postgres://blakpath_migrator:other@db.internal/blakpath',
-      }),
-    ).toThrow(/different role/);
   });
 });
 

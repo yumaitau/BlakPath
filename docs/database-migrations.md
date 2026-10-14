@@ -6,22 +6,23 @@ change the schema. `docs/eks-runbook.md` is the release and rollback procedure.
 
 ## Roles
 
-`infra/postgres/roles.sql` creates the split. Apply it once as the RDS master
-before the first production migrate.
+`infra/postgres/audit-roles.sql` creates the split. Apply it once as the RDS
+master before the first production migrate.
 
-- `blakpath_migrator` owns the database and runs `src/db/migrate.ts`.
-- `blakpath_app` has `SELECT`, `INSERT`, `UPDATE`, `DELETE` and sequence usage.
-  It has no `CREATE`.
+- `blakpath_migrator` owns the tables and runs `src/db/migrate.ts`.
+- `blakpath_app` has `SELECT`, `INSERT`, `UPDATE`, `DELETE` and sequence usage,
+  granted by the migrate run itself. On `audit_events` and
+  `audit_integrity_checkpoints` it has `SELECT` and `INSERT` only.
 - The migrator URL is Secrets Manager `/blakpath/production/migrator`, synced
   to Secret `blakpath-migrator`, mounted only on the migrate Job.
+- The Job reads `DATABASE_MIGRATION_URL`. In production it refuses to run
+  when that URL is missing or uses the same role as `DATABASE_URL`.
 - `DATABASE_URL` on web and worker is the app role. `pnpm release:check` fails
-  if the app environment contains `DATABASE_MIGRATOR_URL` or uses the migrator
-  username.
+  if `DATABASE_URL` is not the app role.
 
 Local development and CI keep using the single Compose/Postgres superuser.
-`pnpm db:migrate` falls back to `DATABASE_URL` only when `NODE_ENV` is not
-`production` and the host is `localhost`, `127.0.0.1`, `::1` or the Compose
-service `postgres`.
+`pnpm db:migrate` falls back to `DATABASE_URL` when `NODE_ENV` is not
+`production` and `DATABASE_MIGRATION_URL` is unset.
 
 ## Timeouts
 
@@ -53,9 +54,10 @@ not wrap every pending file in one transaction.
 
 ## Expand, then contract
 
-Release N-1 must run on schema N. New SQL is linted. Migrations `0000`–`0018`
+Release N-1 must run on schema N. New SQL is linted. Migrations `0000`–`0034`
 are grandfathered, including the foreign keys in `0015` and `0016` that were
-added to existing tables without `NOT VALID`. Do not edit those files.
+added to existing tables without `NOT VALID` and the plain indexes on existing
+tables in `0028` and `0032`. Do not edit those files.
 
 Allowed in the release that introduces a change:
 

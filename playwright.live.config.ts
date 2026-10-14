@@ -13,6 +13,9 @@ export default defineConfig({
   retries: 0,
   use: {
     baseURL,
+    extraHTTPHeaders: {
+      Origin: baseURL,
+    },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },

@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Client-owned symmetric CMK for BlakPath envelope encryption.
+  Deploy in the client account, in ap-southeast-2 only. The workload role
+  receives GenerateDataKey, Decrypt, Encrypt and DescribeKey. Crypto calls
+  must present kms:EncryptionContext:org_id for this organisation and must
+  come from the BlakPath account. DescribeKey has no encryption context.
+  kms:ViaService is intentionally absent: BlakPath calls KMS directly, and a
+  ViaService condition would reject the handshake.
+
+Rules:
+  SydneyOnly:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'ap-southeast-2']
+        AssertDescription: Deploy this stack only in ap-southeast-2.
+
+Parameters:
+  OrganisationId:
+    Type: String
+    Description: BlakPath organisation id. Becomes kms:EncryptionContext:org_id.
+    AllowedPattern: '^[0-9a-fA-F-]{36}$'
+  BlakPathWorkloadRoleArns:
+    Type: CommaDelimitedList
+    Description: Web and worker role ARNs in the BlakPath account.
+  BlakPathAccountId:
+    Type: String
+    AllowedPattern: '^[0-9]{12}$'
+    Description: AWS account that runs BlakPath. Checked as aws:SourceAccount.
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: Optional address for DisableKey and ScheduleKeyDeletion alerts.
+
+Conditions:
+  CreateAlerts: !Not [!Equals [!Ref AlertEmail, '']]
+
+Resources:
+  ClientKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub 'BlakPath envelope key for ${OrganisationId}'
+      KeyUsage: ENCRYPT_DECRYPT
+      KeySpec: SYMMETRIC_DEFAULT
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: BlakPathEnvelope
+            Effect: Allow
+            Principal:
+              AWS: !Ref BlakPathWorkloadRoleArns
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:EncryptionContext:org_id: !Ref OrganisationId
+                aws:SourceAccount: !Ref BlakPathAccountId
+          - Sid: BlakPathDescribe
+            Effect: Allow
+            Principal:
+              AWS: !Ref BlakPathWorkloadRoleArns
+            Action: kms:DescribeKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref BlakPathAccountId
+
+  ClientKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/blakpath-${OrganisationId}'
+      TargetKeyId: !Ref ClientKey
+
+  KeyStateTopic:
+    Type: AWS::SNS::Topic
+    Condition: CreateAlerts
+    Properties:
+      TopicName: !Sub 'blakpath-key-${OrganisationId}'
+
+  KeyStateTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: CreateAlerts
+    Properties:
+      Topics: [!Ref KeyStateTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEventBridge
+            Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref KeyStateTopic
+
+  KeyStateSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: CreateAlerts
+    Properties:
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+      TopicArn: !Ref KeyStateTopic
+
+  KeyStateRule:
+    Type: AWS::Events::Rule
+    Condition: CreateAlerts
+    Properties:
+      Description: Notify when this account disables or schedules deletion of a KMS key.
+      EventPattern:
+        source: [aws.kms]
+        detail-type: [AWS API Call via CloudTrail]
+        detail:
+          eventSource: [kms.amazonaws.com]
+          eventName:
+            - DisableKey
+            - ScheduleKeyDeletion
+            - EnableKey
+            - CancelKeyDeletion
+      State: ENABLED
+      Targets:
+        - Arn: !Ref KeyStateTopic
+          Id: KeyStateTopic
+
+Outputs:
+  KeyArn:
+    Description: Register this ARN in BlakPath after the handshake.
+    Value: !GetAtt ClientKey.Arn
