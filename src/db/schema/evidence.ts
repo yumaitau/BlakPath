@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { bigint, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { bigint, date, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -8,7 +8,7 @@ import {
   softDelete,
   timestamps,
 } from './_helpers';
-import { evidenceRequestStatus, evidenceStatus } from './enums';
+import { evidenceReceiptChannel, evidenceRequestStatus, evidenceStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
@@ -80,6 +80,13 @@ export const evidence = pgTable(
     uploadedByUserId: refId('uploaded_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
+    /**
+     * Set when staff record a file received for the applicant. Null when the
+     * applicant uploaded it themselves. Always stored with `receivedOn`.
+     */
+    receiptChannel: evidenceReceiptChannel('receipt_channel'),
+    /** Civil date the file was received. Null on an applicant's own upload. */
+    receivedOn: date('received_on', { mode: 'string' }),
     /** The upload that fulfils a specific staff request, when applicable. */
     fulfilsRequestId: refId('fulfils_request_id').references(() => evidenceRequests.id, {
       onDelete: 'set null',
