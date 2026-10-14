@@ -5,8 +5,9 @@ import { addJob, QueueName } from '@/lib/queues';
  *
  * Tenant-facing emails (form invitations, notification copies) are delivered
  * out-of-band by the worker's Email processor, so a slow or unavailable relay
- * never blocks a request. Auth emails do NOT come through here — they send
- * synchronously via `authMailer` (see `src/lib/email/mailer.ts`).
+ * never blocks a request. Verification mail stays on the request. Password
+ * reset mail uses the platform `auth-email` queue (no organisation on the
+ * request), not this helper.
  *
  * Every payload carries `organisationId` + `correlationId` so the job satisfies
  * the tenant invariant enforced by `addJob`.

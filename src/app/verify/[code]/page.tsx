@@ -8,7 +8,7 @@ import { verifyCertificate } from '@/domains/certificates';
  * non-personal confirmation of authenticity — whether a certificate with that
  * code exists and is currently valid, its reference, the issuing organisation,
  * the sign date, and whether its cryptographic seal checks out. No applicant
- * detail is exposed.
+ * detail is exposed. Request limits for this page run in `src/proxy.ts`.
  */
 export const dynamic = 'force-dynamic';
 

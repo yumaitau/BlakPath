@@ -8,7 +8,20 @@ import {
   setScimUserActive,
 } from '@/domains/scim';
 import { toErrorResponse } from '@/lib/http/tenant-route';
+import { clientIp } from '@/lib/http/client-ip';
+import { REQUEST_LIMITS, limitIp, limitSubject } from '@/lib/http/request-limits';
 import { AuthorizationError } from '@/lib/permissions/errors';
+
+/** IP first, then the presented bearer. A missing bearer still spends the IP budget. */
+async function limitScim(request: NextRequest): Promise<Response | null> {
+  const ipLimited = await limitIp(REQUEST_LIMITS.scim, clientIp(request.headers));
+  if (ipLimited) return ipLimited;
+  const header = request.headers.get('authorization');
+  const match = header ? /^Bearer\s+(.+)$/i.exec(header.trim()) : null;
+  const bearer = match?.[1]?.trim() ?? '';
+  if (!bearer) return null;
+  return limitSubject(REQUEST_LIMITS.scim, bearer);
+}
 
 function scimError(error: unknown): Response {
   if (error instanceof AuthorizationError) {
@@ -29,6 +42,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ orgId: string }> },
 ): Promise<Response> {
+  const limited = await limitScim(request);
+  if (limited) return limited;
   try {
     const { orgId } = await params;
     const auth = await authenticateScim(request, orgId);
@@ -69,6 +84,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ orgId: string }> },
 ): Promise<Response> {
+  const limited = await limitScim(request);
+  if (limited) return limited;
   try {
     const { orgId } = await params;
     const auth = await authenticateScim(request, orgId);
@@ -96,6 +113,8 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ orgId: string }> },
 ): Promise<Response> {
+  const limited = await limitScim(request);
+  if (limited) return limited;
   try {
     const { orgId } = await params;
     const auth = await authenticateScim(request, orgId);

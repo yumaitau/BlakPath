@@ -144,7 +144,12 @@ function sessionIdFrom(context: object): string | null {
 }
 
 /** After a passkey registration succeeds, record `mfa.passkey_registered`. */
-export const auditPasskeyRegistration = createAuthMiddleware(async (ctx) => {
+export async function recordPasskeyRegistration(ctx: {
+  path: string;
+  context: object & {
+    session?: { user?: { id?: string }; session?: { id?: string } };
+  };
+}): Promise<void> {
   if (ctx.path !== '/passkey/verify-registration') return;
   const created = await readSuccessJson(returnedBody(ctx.context));
   if (!created) return;
@@ -158,4 +163,8 @@ export const auditPasskeyRegistration = createAuthMiddleware(async (ctx) => {
     method: 'passkey',
     sessionId: ctx.context.session?.session?.id ?? null,
   });
+}
+
+export const auditPasskeyRegistration = createAuthMiddleware(async (ctx) => {
+  await recordPasskeyRegistration(ctx);
 });

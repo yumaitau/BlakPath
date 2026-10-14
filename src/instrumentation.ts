@@ -21,8 +21,8 @@ export async function register(): Promise<void> {
   const { start } = await import('@/lib/observability/otel');
   await start();
 
-  // Inject the real SMTP transport so better-auth's verification/reset emails
-  // actually send. Best-effort: a wiring failure here must not crash boot.
+  // Inject the auth transport. Verification sends now; password reset is
+  // queued by that transport. Best-effort: a wiring failure must not crash boot.
   try {
     const [{ setAuthMailer }, { authMailer }] = await Promise.all([
       import('@/lib/auth/emails'),

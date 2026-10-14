@@ -9,6 +9,7 @@ import { PublicFormRenderer } from '@/components/forms/public-form-renderer';
  * hash and either returns the recipient-facing form (marking the invitation
  * opened) or throws for any invalid/expired/used/revoked token. There is no
  * session here, so we call the service directly — never via `withRequestTenant`.
+ * Request limits for this page run in `src/proxy.ts` (a real 429 before render).
  *
  * PRODUCT INVARIANT: a form collects information a human provides. It never
  * scores, ranks or determines a person's Aboriginality.
