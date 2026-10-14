@@ -82,6 +82,8 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
   `CF-Connecting-IP` only after the origin-verify secret matches (`clientIp`);
   a forwarded-for header is not a client identity. Tenant id is derived from the
   verified membership, never the request (`docs/authentication.md`).
+  Cookie-authenticated `/api` mutations require the application origin and a
+  JSON content type. Production session cookies use the `__Host-` prefix.
 
 ### Tampering
 

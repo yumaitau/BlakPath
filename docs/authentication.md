@@ -100,6 +100,13 @@ Platform operators must use MFA unconditionally.
   must sign in again.
 - `lastAuthenticatedAt` records the most recent successful authentication and
   gates step-up (below). A null value falls back to `createdAt`.
+- Cookie-authenticated `/api` mutations must come from the `APP_URL` origin
+  with `Content-Type: application/json`. Bearer, Better Auth, SCIM, provider
+  webhooks, token-addressed public forms and the CSP report sink are exempt.
+- Production session cookies use the `__Host-` prefix (`Secure`, `Path=/`, no
+  `Domain`), so they cannot be issued for a parent domain. Development keeps
+  the `blakpath` prefix without `Secure` so plain HTTP on a non-loopback host
+  can still sign in.
 
 ## Step-up / re-authentication for sensitive actions
 
