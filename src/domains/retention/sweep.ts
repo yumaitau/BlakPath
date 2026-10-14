@@ -9,6 +9,7 @@ import {
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import type { AuditAction, ResourceType } from '@/domains/audit/events';
+import { sealApplicationFields } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { deleteObject, EVIDENCE_BUCKET, QUARANTINE_BUCKET } from '@/lib/storage/s3';
 import { dueForRetention, isRetentionResourceType } from './rules';
@@ -113,10 +114,16 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
       for (const r of rows) {
         if (!due(r.createdAt, r.id)) continue;
         if (policy.action === 'anonymise') {
+          const sealed = await sealApplicationFields(organisationId, r.id, {
+            applicantName: '[retained-anonymised]',
+            intake: null,
+          });
           await scope.db
             .update(applications)
             .set({
-              applicantName: '[retained-anonymised]',
+              applicantName: sealed.applicantName,
+              applicantNameBidx: sealed.applicantNameBidx,
+              applicantNameTokenBidx: sealed.applicantNameTokenBidx,
               applicantUserId: null,
               intake: null,
             })

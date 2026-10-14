@@ -3,7 +3,10 @@ import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
+import { openWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
+import { isDestinationRejection } from './destination';
+import { deliverWebhookRequest, deliveryDisposition } from './dispatch';
 import {
   signPayload,
   WEBHOOK_DELIVERY_HEADER,
@@ -18,7 +21,9 @@ import {
  * body, POSTs it, and records the outcome. FAIL-SECURE about retries: a failed
  * delivery THROWS so BullMQ retries with backoff, until `MAX_ATTEMPTS`, after
  * which the delivery is marked `failed` and left for operator inspection — it is
- * never silently dropped and never "succeeds" without a 2xx.
+ * never silently dropped and never "succeeds" without a 2xx. A destination that
+ * fails the public-HTTPS policy is terminal: it is not retried and it is not
+ * dialled.
  */
 
 export const MAX_ATTEMPTS = 5;
@@ -97,24 +102,48 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
     payload: delivery.payload,
     timestamp: new Date().toISOString(),
   });
-  const signature = signPayload(endpoint.secret, body);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(endpoint.url, {
-      method: 'POST',
-      headers: {
+    let signingSecret: string;
+    try {
+      signingSecret = await openWebhookSecret(
+        organisationId,
+        endpoint.id,
+        endpoint.secretCiphertext,
+      );
+    } catch {
+      await settle({
+        status: 'failed',
+        attempts,
+        lastError: 'endpoint secret unavailable',
+      });
+      await systemAudit(organisationId, correlationId, {
+        action: 'integration.call_failed',
+        resourceType: 'integration',
+        resourceId: endpoint.id,
+        result: 'failure',
+        reason: 'webhook.secret_unavailable',
+      });
+      return;
+    }
+
+    const signature = signPayload(signingSecret, body);
+    const res = await deliverWebhookRequest(
+      endpoint.url,
+      body,
+      {
         'content-type': 'application/json',
         [WEBHOOK_SIGNATURE_HEADER]: signature,
         [WEBHOOK_EVENT_HEADER]: delivery.event,
         [WEBHOOK_DELIVERY_HEADER]: delivery.id,
       },
-      body,
-      signal: controller.signal,
-    });
+      controller.signal,
+    );
 
-    if (res.ok) {
+    const disposition = deliveryDisposition(res.status);
+    if (disposition === 'delivered') {
       await settle({
         status: 'delivered',
         attempts,
@@ -130,31 +159,48 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
       return;
     }
 
-    // Non-2xx: retry until the cap, then give up (marked failed).
-    const giveUp = attempts >= MAX_ATTEMPTS;
+    // 3xx is terminal: the redirect target is never requested. Other non-2xx
+    // responses retry until the cap, then stay failed for an operator.
+    const terminal = disposition === 'redirect' || attempts >= MAX_ATTEMPTS;
+    const reason =
+      disposition === 'redirect' ? 'redirect not followed' : `HTTP ${res.status}`;
     await settle({
-      status: giveUp ? 'failed' : 'pending',
+      status: terminal ? 'failed' : 'pending',
       attempts,
       lastResponseCode: res.status,
-      lastError: `HTTP ${res.status}`,
+      lastError: reason,
     });
     await systemAudit(organisationId, correlationId, {
       action: 'integration.call_failed',
       resourceType: 'integration',
       resourceId: endpoint.id,
       result: 'failure',
-      reason: auditReason('webhook.http_status', String(res.status)),
+      reason:
+        disposition === 'redirect'
+          ? 'webhook.redirect_not_followed'
+          : auditReason('webhook.http_status', String(res.status)),
     });
-    if (!giveUp) throw new Error(`webhook delivery failed: HTTP ${res.status}`);
+    if (!terminal) throw new Error(`webhook delivery failed: HTTP ${res.status}`);
   } catch (err) {
     if (err instanceof Error && err.message.startsWith('webhook delivery failed')) {
       throw err; // already recorded above; rethrow so BullMQ retries.
+    }
+    if (isDestinationRejection(err)) {
+      await settle({ status: 'failed', attempts, lastError: 'destination not allowed' });
+      await systemAudit(organisationId, correlationId, {
+        action: 'integration.call_failed',
+        resourceType: 'integration',
+        resourceId: endpoint.id,
+        result: 'failure',
+        reason: 'webhook.destination_not_allowed',
+      });
+      return;
     }
     const giveUp = attempts >= MAX_ATTEMPTS;
     await settle({
       status: giveUp ? 'failed' : 'pending',
       attempts,
-      lastError: err instanceof Error ? err.message : 'network error',
+      lastError: 'network error',
     });
     await systemAudit(organisationId, correlationId, {
       action: 'integration.call_failed',

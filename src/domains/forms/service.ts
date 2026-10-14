@@ -1,17 +1,23 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
 import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { env } from '@/lib/env';
-import { queueTenantEmail } from '@/lib/email/queue';
+import { queueInvitationEmail } from '@/lib/email/queue';
 import { logger } from '@/lib/observability/logger';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { parseFieldsJson, validateResponse, type FormField } from '@/lib/forms/fields';
+import {
+  openFormResponses,
+  sealFormResponse,
+  sealInvitationToken,
+} from '@/lib/encryption/tenant-fields';
 import {
   createFormSchema,
   createInvitationSchema,
@@ -31,12 +37,20 @@ import {
  *     secret token. There is no session, so the token itself is the capability:
  *     it is looked up by HASH, must be unexpired/unused, and yields the exact
  *     organisation + form it belongs to. Responses are written under that
- *     organisation only. The token is never stored in the clear.
+ *     organisation only. The token is never stored in the clear: lookup uses
+ *     the hash, and delivery uses a sealed copy that the worker clears.
  */
 
 export type FormRow = typeof forms.$inferSelect;
 export type FormInvitationRow = typeof formInvitations.$inferSelect;
+/** Invitation row safe to return from an API. The delivery seal stays server-side. */
+export type PublicFormInvitation = Omit<FormInvitationRow, 'tokenSeal'>;
 export type FormResponseRow = typeof formResponses.$inferSelect;
+
+function presentInvitation(row: FormInvitationRow): PublicFormInvitation {
+  const { tokenSeal: _tokenSeal, ...invitation } = row;
+  return invitation;
+}
 
 /** Capabilities allowed to author/manage forms and read responses. */
 const FORM_MANAGE = ['application:read-any', 'application:update-intake'] as const;
@@ -193,7 +207,7 @@ export async function getForm(formId: string): Promise<FormRow> {
 export async function createInvitation(
   formId: string,
   rawInput: CreateInvitationInput,
-): Promise<{ invitation: FormInvitationRow; token: string; path: string }> {
+): Promise<{ invitation: PublicFormInvitation; token: string; path: string }> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
 
@@ -205,12 +219,19 @@ export async function createInvitation(
   const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
 
   const scope = currentScope();
+  // The id is fixed before sealing so the token seal is bound to this row.
+  const id = uuidv7();
+  const tokenSeal = input.recipientEmail
+    ? await sealInvitationToken(scope.organisationId, 'form_invitations', id, token)
+    : null;
   const inserted = await scope.db
     .insert(formInvitations)
     .values(
       scope.insertValues({
+        id,
         formId,
         tokenHash: hashToken(token),
+        tokenSeal,
         recipientName: input.recipientName ?? null,
         recipientEmail: input.recipientEmail ?? null,
         sentByUserId: ctx.userId,
@@ -229,30 +250,17 @@ export async function createInvitation(
     after: { data: { formId }, allow: ['formId'] },
   });
 
-  // Email the recipient their completion link. This is the one place the raw
-  // token is legitimately sent to its intended recipient — tenant emails go
-  // through the queue (auth emails send synchronously via the authMailer).
+  // Queue the invitation id. The worker loads the row, opens the seal and
+  // sends the link. The job itself never carries the address or the token.
   // Best-effort: a delivery hiccup must not fail invitation creation, but a
   // genuinely thrown enqueue error should still surface in development.
   if (input.recipientEmail) {
-    const completionUrl = `${env.APP_URL}/form/${token}`;
-    const name = input.recipientName ?? 'there';
     try {
-      await queueTenantEmail({
+      await queueInvitationEmail({
         organisationId: scope.organisationId,
         correlationId: ctx.correlationId,
-        to: input.recipientEmail,
-        subject: 'You have been invited to complete a form in BlakPath',
-        text: [
-          `Hi ${name},`,
-          '',
-          `You have been invited to complete the form "${form.title}".`,
-          'Open the link below to begin. It will expire after a while.',
-          '',
-          completionUrl,
-          '',
-          'BlakPath',
-        ].join('\n'),
+        invitationId: invitation.id,
+        kind: 'form',
       });
     } catch (err) {
       if (env.NODE_ENV === 'development') throw err;
@@ -263,10 +271,12 @@ export async function createInvitation(
     }
   }
 
-  return { invitation, token, path: `/form/${token}` };
+  return { invitation: presentInvitation(invitation), token, path: `/form/${token}` };
 }
 
-export async function revokeInvitation(invitationId: string): Promise<FormInvitationRow> {
+export async function revokeInvitation(
+  invitationId: string,
+): Promise<PublicFormInvitation> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
 
@@ -286,31 +296,33 @@ export async function revokeInvitation(invitationId: string): Promise<FormInvita
     resourceId: invitationId,
     result: 'success',
   });
-  return row;
+  return presentInvitation(row);
 }
 
-export async function listInvitations(formId: string): Promise<FormInvitationRow[]> {
+export async function listInvitations(formId: string): Promise<PublicFormInvitation[]> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(formInvitations)
     .where(
       scope.where(formInvitations.organisationId, eq(formInvitations.formId, formId)),
     )
     .orderBy(desc(formInvitations.createdAt));
+  return rows.map(presentInvitation);
 }
 
 export async function listResponses(formId: string): Promise<FormResponseRow[]> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(formResponses)
     .where(scope.where(formResponses.organisationId, eq(formResponses.formId, formId)))
     .orderBy(desc(formResponses.submittedAt));
+  return openFormResponses(scope.organisationId, rows);
 }
 
 /* ---------------------------------------------------------------------------
@@ -423,13 +435,19 @@ export async function submitPublicResponse(
   }
 
   const scope = scopeFor(invitation.organisationId);
+  const responseId = uuidv7();
+  const sealed = await sealFormResponse(invitation.organisationId, responseId, {
+    answers: parsed.data,
+    respondentEmail: invitation.recipientEmail,
+  });
   await scope.db.insert(formResponses).values(
     scope.insertValues({
+      id: responseId,
       formId: form.id,
       invitationId: invitation.id,
-      answers: parsed.data,
+      answers: sealed.answers,
       respondentName: invitation.recipientName,
-      respondentEmail: invitation.recipientEmail,
+      respondentEmail: sealed.respondentEmail,
       ipAddress: ipAddress ?? null,
     }),
   );

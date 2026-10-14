@@ -1,1 +1,0 @@
-ALTER TABLE "break_glass_requests" ADD COLUMN "denial_reason" text;

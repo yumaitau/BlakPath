@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations, expectVisibleFocus } from './helpers/accessibility';
 import {
   selectDevelopmentOrganisation,
@@ -22,6 +23,7 @@ test('public and authentication journeys meet automated WCAG checks', async ({
     ['/', 'A clearer path'],
     ['/accessibility', 'Accessibility'],
     ['/privacy', 'Privacy'],
+    ['/key-custody', 'Key custody'],
     ['/support', 'Support'],
     ['/organisations', 'Find an organisation'],
     ['/verify', 'Check a certificate'],

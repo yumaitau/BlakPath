@@ -180,6 +180,8 @@ describe('coded audit reasons', () => {
     const bad: { file: string; value: string }[] = [];
     for (const file of walk(SRC)) {
       const source = readFileSync(file, 'utf8');
+      // Only files that write audit events; other `reason` fields are not hashed.
+      if (!/\b(recordAudit|recordPlatformAudit|systemAudit)\b/.test(source)) continue;
       for (const match of source.matchAll(reasonLiteral)) {
         const value = match[1] ?? match[2] ?? match[3] ?? '';
         const template =

@@ -16,6 +16,17 @@ export type DecisionOutcome = (typeof DECISION_OUTCOMES)[number];
 export const VOTE_CHOICES = ['for', 'against', 'abstain'] as const;
 export type VoteChoice = (typeof VOTE_CHOICES)[number];
 
+/**
+ * Case stages in which an authorised human may propose a decision.
+ * Earlier stages (including `in_review`) are not committee business.
+ */
+export const PROPOSABLE_CASE_STATUSES = ['ready_for_committee', 'in_committee'] as const;
+
+/** May a decision be proposed while the case is in `status`? Pure. */
+export function canProposeOnCase(status: string): boolean {
+  return (PROPOSABLE_CASE_STATUSES as readonly string[]).includes(status);
+}
+
 /** Voting, finalising and withdrawing are only possible while `proposed`. */
 export function canVote(status: DecisionStatus): boolean {
   return status === 'proposed';

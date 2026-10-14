@@ -1,114 +1,315 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
-import { z } from 'zod';
-import { db } from '@/db/client';
-import { membershipRoles, memberships, organisations, roles, users } from '@/db/schema';
+import { db, type Database } from '@/db/client';
+import {
+  membershipRoles,
+  memberships,
+  organisations,
+  roles,
+  scimCredentials,
+  sessions,
+  users,
+} from '@/db/schema';
 import { recordAudit } from '@/domains/audit/service';
-import { env } from '@/lib/env';
+import { parseBearer } from '@/domains/api-keys/keys';
 import { AuthorizationError } from '@/lib/permissions/errors';
-import { isSystemRoleSlug, type SystemRoleSlug } from '@/lib/permissions/roles';
+import { enforceScimRateLimit } from './rate-limit';
+import { diffRoleIds, mapGroupsToRoles, scimControllableRoles } from './roles';
+import { scimUserSchema, type ScimUserInput } from './schemas';
+import { hashScimToken, looksLikeScimToken } from './tokens';
 
 /**
- * SCIM 2.0 directory provisioning — tenant-scoped, bearer-authenticated.
+ * SCIM 2.0 directory provisioning.
  *
- * Maps IdP user lifecycle onto membership status transitions (no parallel
- * identity store): provision → active membership, deactivate → suspended,
- * delete → revoked. Roles come from an explicit allowlist mapping of IdP
- * group display names to system role slugs; unmapped groups are ignored, so
- * an IdP can never escalate beyond the allowlist.
+ * The bearer token resolves to one organisation. The path organisation must
+ * match that credential; it is never the source of tenancy. Group lists replace
+ * the SCIM-managed role set. A revoked membership is terminal for SCIM.
+ * Suspending or revoking access also deletes the user's sessions.
  */
 
-const ALLOWED_SCIM_ROLES: readonly SystemRoleSlug[] = [
-  'intake-officer',
-  'case-officer',
-  'genealogy-officer',
-  'committee-member',
-  'records-officer',
-  'organisation-admin',
-];
+type DbTx = Parameters<Parameters<Database['transaction']>[0]>[0];
 
-const scimUserSchema = z.object({
-  userName: z.email().max(320),
-  active: z.boolean().optional(),
-  name: z
-    .object({
-      givenName: z.string().max(200).optional(),
-      familyName: z.string().max(200).optional(),
-      formatted: z.string().max(400).optional(),
-    })
-    .optional(),
-  emails: z
-    .array(z.object({ value: z.email().max(320), primary: z.boolean().optional() }))
-    .optional(),
-  groups: z.array(z.object({ display: z.string().max(200) })).optional(),
-  entitlements: z.array(z.object({ value: z.string().max(200) })).optional(),
-});
-
-export type ScimUserInput = z.input<typeof scimUserSchema>;
-
-/** Verify the SCIM bearer credential. Missing env = SCIM off (deny all). */
-export function verifyScimBearer(request: Request): void {
-  const expected = env.SCIM_BEARER_TOKEN;
-  const auth = request.headers.get('authorization');
-  if (!expected || !auth || !auth.startsWith('Bearer ')) {
-    throw new AuthorizationError('POLICY_DENIED');
-  }
-  const provided = createHash('sha256').update(auth.slice('Bearer '.length)).digest();
-  const wanted = createHash('sha256').update(expected).digest();
-  if (provided.length !== wanted.length || !timingSafeEqual(provided, wanted)) {
-    throw new AuthorizationError('POLICY_DENIED');
-  }
+export interface ScimPrincipal {
+  readonly organisationId: string;
+  readonly credentialId: string;
+  readonly allowOrganisationAdmin: boolean;
 }
 
-function mapGroupsToRoles(input: ScimUserInput): SystemRoleSlug[] {
-  const names = [
-    ...(input.groups ?? []).map((g) => g.display),
-    ...(input.entitlements ?? []).map((e) => e.value),
-  ].map((n) =>
-    n
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z-]/g, ''),
-  );
-  const slugs = names.filter((n): n is SystemRoleSlug => isSystemRoleSlug(n));
-  return slugs.filter((s) => ALLOWED_SCIM_ROLES.includes(s));
-}
+const ORGANISATION_ADMIN_SLUG = 'organisation-admin';
 
 function displayName(input: ScimUserInput): string {
   const formatted = input.name?.formatted?.trim();
   if (formatted) return formatted;
   const parts = [input.name?.givenName, input.name?.familyName]
-    .map((p) => p?.trim())
+    .map((part) => part?.trim())
     .filter(Boolean);
   if (parts.length > 0) return parts.join(' ');
   return input.userName;
 }
 
-/** Provision (create or reactivate) a user + active membership for the org. */
-export async function provisionScimUser(
-  organisationId: string,
-  raw: unknown,
-): Promise<{ id: string; userName: string }> {
-  const input = scimUserSchema.parse(raw);
-  const email = input.userName.trim().toLowerCase();
+async function touchLastUsed(credentialId: string): Promise<void> {
+  try {
+    await db
+      .update(scimCredentials)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(scimCredentials.id, credentialId));
+  } catch {
+    // A failed stamp must not deny a credential that already matched.
+  }
+}
+
+/**
+ * Resolve the SCIM caller from the bearer token. The organisation comes from
+ * the credential row. `pathOrganisationId` must equal it.
+ */
+export async function authenticateScim(
+  request: Request,
+  pathOrganisationId: string,
+): Promise<ScimPrincipal> {
+  const raw = parseBearer(request.headers.get('authorization'));
+  if (!raw || !looksLikeScimToken(raw)) {
+    enforceScimRateLimit('invalid');
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+  const tokenHash = hashScimToken(raw);
+  enforceScimRateLimit(tokenHash);
+
+  const [credential] = await db
+    .select({
+      id: scimCredentials.id,
+      organisationId: scimCredentials.organisationId,
+      allowOrganisationAdmin: scimCredentials.allowOrganisationAdmin,
+      revokedAt: scimCredentials.revokedAt,
+      expiresAt: scimCredentials.expiresAt,
+    })
+    .from(scimCredentials)
+    .where(eq(scimCredentials.tokenHash, tokenHash))
+    .limit(1);
+  if (!credential || credential.revokedAt) {
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+  if (credential.expiresAt && credential.expiresAt.getTime() <= Date.now()) {
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+  if (credential.organisationId !== pathOrganisationId) {
+    throw new AuthorizationError('POLICY_DENIED');
+  }
 
   const [org] = await db
     .select({ id: organisations.id, status: organisations.status })
     .from(organisations)
-    .where(eq(organisations.id, organisationId))
+    .where(eq(organisations.id, credential.organisationId))
     .limit(1);
-  if (!org || org.status !== 'active') throw new AuthorizationError('POLICY_DENIED');
+  if (!org || org.status !== 'active') {
+    throw new AuthorizationError('POLICY_DENIED');
+  }
 
-  let userId: string;
-  const [existingUser] = await db
+  await touchLastUsed(credential.id);
+  return {
+    organisationId: credential.organisationId,
+    credentialId: credential.id,
+    allowOrganisationAdmin: credential.allowOrganisationAdmin,
+  };
+}
+
+function assertSameOrg(auth: ScimPrincipal, pathOrganisationId: string): void {
+  if (auth.organisationId !== pathOrganisationId) {
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+}
+
+async function soleActiveAdministrator(
+  tx: DbTx,
+  organisationId: string,
+  membershipId: string,
+): Promise<boolean> {
+  const rows = await tx
+    .select({ membershipId: memberships.id })
+    .from(memberships)
+    .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
+    .innerJoin(roles, eq(membershipRoles.roleId, roles.id))
+    .where(
+      and(
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.status, 'active'),
+        eq(roles.slug, ORGANISATION_ADMIN_SLUG),
+      ),
+    );
+  const ids = new Set(rows.map((row) => row.membershipId));
+  return ids.size <= 1 && ids.has(membershipId);
+}
+
+/** Sessions are not tenant-scoped, so ending access also ends the user's cookies. */
+async function deleteUserSessions(tx: DbTx, userId: string): Promise<string[]> {
+  const removed = await tx
+    .delete(sessions)
+    .where(eq(sessions.userId, userId))
+    .returning({ id: sessions.id });
+  return removed.map((row) => row.id);
+}
+
+interface RoleSync {
+  added: string[];
+  removed: string[];
+}
+
+/**
+ * Replace the SCIM-managed roles with the IdP set. Roles outside that set are
+ * left alone. The last active organisation-admin role is kept so directory
+ * sync cannot lock the tenant out of administration.
+ */
+async function replaceScimRoles(
+  tx: DbTx,
+  organisationId: string,
+  membershipId: string,
+  membershipStatus: 'active' | 'suspended' | 'invited',
+  desiredSlugs: readonly string[],
+  allowOrganisationAdmin: boolean,
+): Promise<RoleSync> {
+  const controllable = scimControllableRoles(allowOrganisationAdmin);
+  const tenantRoles = await tx
+    .select({ id: roles.id, slug: roles.slug })
+    .from(roles)
+    .where(eq(roles.organisationId, organisationId));
+  const bySlug = new Map(tenantRoles.map((role) => [role.slug, role.id]));
+  const slugById = new Map(tenantRoles.map((role) => [role.id, role.slug]));
+  const controllableIds = controllable
+    .map((slug) => bySlug.get(slug))
+    .filter((id): id is string => Boolean(id));
+  if (controllableIds.length === 0) return { added: [], removed: [] };
+
+  const current = await tx
+    .select({ roleId: membershipRoles.roleId })
+    .from(membershipRoles)
+    .where(
+      and(
+        eq(membershipRoles.membershipId, membershipId),
+        inArray(membershipRoles.roleId, controllableIds),
+      ),
+    );
+  const desiredIds = desiredSlugs
+    .map((slug) => bySlug.get(slug))
+    .filter((id): id is string => Boolean(id));
+  const adminRoleId = bySlug.get(ORGANISATION_ADMIN_SLUG);
+  const currentIds = current.map((row) => row.roleId);
+  const nextDesired = new Set(desiredIds);
+  if (
+    adminRoleId &&
+    currentIds.includes(adminRoleId) &&
+    !nextDesired.has(adminRoleId) &&
+    membershipStatus === 'active' &&
+    (await soleActiveAdministrator(tx, organisationId, membershipId))
+  ) {
+    nextDesired.add(adminRoleId);
+  }
+
+  const diff = diffRoleIds(currentIds, [...nextDesired]);
+  if (diff.remove.length > 0) {
+    await tx
+      .delete(membershipRoles)
+      .where(
+        and(
+          eq(membershipRoles.membershipId, membershipId),
+          inArray(membershipRoles.roleId, diff.remove),
+        ),
+      );
+  }
+  for (const roleId of diff.add) {
+    await tx
+      .insert(membershipRoles)
+      .values({ id: uuidv7(), membershipId, roleId })
+      .onConflictDoNothing({
+        target: [membershipRoles.membershipId, membershipRoles.roleId],
+      });
+  }
+  return {
+    added: diff.add.map((id) => slugById.get(id) ?? id),
+    removed: diff.remove.map((id) => slugById.get(id) ?? id),
+  };
+}
+
+async function auditRoleChanges(
+  organisationId: string,
+  membershipId: string,
+  credentialId: string,
+  changes: RoleSync,
+): Promise<void> {
+  for (const slug of changes.removed) {
+    await recordAudit({
+      action: 'membership.role_removed',
+      resourceType: 'membership',
+      resourceId: membershipId,
+      result: 'success',
+      reason: 'scim',
+      organisationId,
+      actorUserId: null,
+      actingRole: 'scim',
+      after: {
+        data: { role: slug, scimAuthId: credentialId },
+        allow: ['role', 'scimAuthId'],
+      },
+    });
+  }
+  for (const slug of changes.added) {
+    await recordAudit({
+      action: 'membership.role_assigned',
+      resourceType: 'membership',
+      resourceId: membershipId,
+      result: 'success',
+      reason: 'scim',
+      organisationId,
+      actorUserId: null,
+      actingRole: 'scim',
+      after: {
+        data: { role: slug, scimAuthId: credentialId },
+        allow: ['role', 'scimAuthId'],
+      },
+    });
+  }
+}
+
+async function auditSessionRevokes(
+  organisationId: string,
+  sessionIds: readonly string[],
+): Promise<void> {
+  for (const sessionId of sessionIds) {
+    await recordAudit({
+      action: 'session.revoked',
+      resourceType: 'session',
+      resourceId: sessionId,
+      result: 'success',
+      reason: 'scim',
+      organisationId,
+      actorUserId: null,
+      actingRole: 'scim',
+    });
+  }
+}
+
+async function findUserId(email: string): Promise<string | undefined> {
+  const [user] = await db
     .select({ id: users.id })
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
-  if (existingUser) {
-    userId = existingUser.id;
-  } else {
+  return user?.id;
+}
+
+/** Provision or update a user. Revoked memberships are not reactivated. */
+export async function provisionScimUser(
+  auth: ScimPrincipal,
+  pathOrganisationId: string,
+  raw: unknown,
+): Promise<{ id: string; userName: string; active: boolean }> {
+  assertSameOrg(auth, pathOrganisationId);
+  const input = scimUserSchema.parse(raw);
+  const email = input.userName.trim().toLowerCase();
+  const organisationId = auth.organisationId;
+  const nextStatus = input.active === false ? 'suspended' : 'active';
+  const desired = mapGroupsToRoles(input, auth.allowOrganisationAdmin);
+
+  let userId = await findUserId(email);
+  if (!userId) {
     userId = uuidv7();
     await db.insert(users).values({
       id: userId,
@@ -119,88 +320,241 @@ export async function provisionScimUser(
   }
 
   const [existing] = await db
-    .select({ id: memberships.id })
+    .select({ id: memberships.id, status: memberships.status })
     .from(memberships)
     .where(
       and(eq(memberships.organisationId, organisationId), eq(memberships.userId, userId)),
     )
     .limit(1);
-  let membershipId = existing?.id;
-  if (existing) {
-    await db
-      .update(memberships)
-      .set({ status: input.active === false ? 'suspended' : 'active' })
-      .where(eq(memberships.id, existing.id));
-    membershipId = existing.id;
-  } else {
-    membershipId = uuidv7();
-    await db.insert(memberships).values({
-      id: membershipId,
+
+  if (existing?.status === 'revoked') {
+    await recordAudit({
+      action: 'membership.reinstated',
+      resourceType: 'membership',
+      resourceId: existing.id,
+      result: 'denied',
+      reason: 'scim',
       organisationId,
-      userId,
-      status: input.active === false ? 'suspended' : 'active',
+      actorUserId: null,
+      actingRole: 'scim',
+    });
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+
+  const outcome = await db.transaction(async (tx) => {
+    if (
+      existing &&
+      existing.status === 'active' &&
+      nextStatus !== 'active' &&
+      (await soleActiveAdministrator(tx, organisationId, existing.id))
+    ) {
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+
+    let membershipId = existing?.id;
+    if (existing) {
+      await tx
+        .update(memberships)
+        .set({ status: nextStatus })
+        .where(eq(memberships.id, existing.id));
+    } else {
+      membershipId = uuidv7();
+      await tx.insert(memberships).values({
+        id: membershipId,
+        organisationId,
+        userId,
+        status: nextStatus,
+      });
+    }
+    if (!membershipId) throw new AuthorizationError('POLICY_DENIED');
+
+    const changes = await replaceScimRoles(
+      tx,
+      organisationId,
+      membershipId,
+      nextStatus === 'suspended' ? 'suspended' : 'active',
+      desired,
+      auth.allowOrganisationAdmin,
+    );
+    const revokedSessionIds =
+      nextStatus === 'suspended' ? await deleteUserSessions(tx, userId) : [];
+    return { membershipId, changes, revokedSessionIds, created: !existing };
+  });
+
+  await auditRoleChanges(
+    organisationId,
+    outcome.membershipId,
+    auth.credentialId,
+    outcome.changes,
+  );
+  await auditSessionRevokes(organisationId, outcome.revokedSessionIds);
+  if (existing && existing.status !== nextStatus) {
+    await recordAudit({
+      action: nextStatus === 'active' ? 'membership.reinstated' : 'membership.suspended',
+      resourceType: 'membership',
+      resourceId: outcome.membershipId,
+      result: 'success',
+      reason: 'scim',
+      organisationId,
+      actorUserId: null,
+      actingRole: 'scim',
+    });
+  }
+  if (outcome.created) {
+    await recordAudit({
+      action: 'membership.invitation_accepted',
+      resourceType: 'membership',
+      resourceId: outcome.membershipId,
+      result: 'success',
+      reason: 'scim.provision',
+      organisationId,
+      actorUserId: null,
+      actingRole: 'scim',
+      after: {
+        // `credential*` keys are denylisted; this is the credential row id.
+        data: { scimAuthId: auth.credentialId, status: nextStatus },
+        allow: ['scimAuthId', 'status'],
+      },
     });
   }
 
-  const slugs = mapGroupsToRoles(input);
-  if (slugs.length > 0 && membershipId) {
-    const tenantRoles = await db
-      .select({ id: roles.id, slug: roles.slug })
-      .from(roles)
-      .where(eq(roles.organisationId, organisationId));
-    const bySlug = new Map(tenantRoles.map((r) => [r.slug, r.id]));
-    for (const slug of slugs) {
-      const roleId = bySlug.get(slug);
-      if (!roleId) continue;
-      await db
-        .insert(membershipRoles)
-        .values({ id: uuidv7(), membershipId, roleId })
-        .onConflictDoNothing({
-          target: [membershipRoles.membershipId, membershipRoles.roleId],
-        });
-    }
-  }
-
-  await recordAudit({
-    action: 'membership.invitation_accepted',
-    resourceType: 'membership',
-    resourceId: membershipId ?? null,
-    result: 'success',
-    reason: 'scim.provision',
-    organisationId,
-  });
-  return { id: membershipId ?? userId, userName: email };
+  return {
+    id: outcome.membershipId,
+    userName: email,
+    active: nextStatus === 'active',
+  };
 }
 
-/** Deactivate (suspend) or revoke a provisioned membership by email. */
+/** Set active (reactivate or suspend). Revoked memberships stay revoked. */
 export async function setScimUserActive(
-  organisationId: string,
+  auth: ScimPrincipal,
+  pathOrganisationId: string,
   email: string,
   active: boolean,
 ): Promise<void> {
-  const [user] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.email, email.trim().toLowerCase()))
-    .limit(1);
-  if (!user) throw new AuthorizationError('POLICY_DENIED');
-  const updated = await db
-    .update(memberships)
-    .set({ status: active ? 'active' : 'suspended' })
+  assertSameOrg(auth, pathOrganisationId);
+  const normalised = email.trim().toLowerCase();
+  const userId = await findUserId(normalised);
+  if (!userId) throw new AuthorizationError('POLICY_DENIED');
+
+  const [membership] = await db
+    .select({ id: memberships.id, status: memberships.status })
+    .from(memberships)
     .where(
       and(
-        eq(memberships.organisationId, organisationId),
-        eq(memberships.userId, user.id),
+        eq(memberships.organisationId, auth.organisationId),
+        eq(memberships.userId, userId),
       ),
     )
-    .returning({ id: memberships.id });
-  if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({
-    action: active ? 'membership.reinstated' : 'membership.suspended',
-    resourceType: 'membership',
-    resourceId: updated[0].id,
-    result: 'success',
-    reason: 'scim',
-    organisationId,
+    .limit(1);
+  if (!membership) throw new AuthorizationError('POLICY_DENIED');
+
+  if (membership.status === 'revoked') {
+    if (active) {
+      await recordAudit({
+        action: 'membership.reinstated',
+        resourceType: 'membership',
+        resourceId: membership.id,
+        result: 'denied',
+        reason: 'scim',
+        organisationId: auth.organisationId,
+        actorUserId: null,
+        actingRole: 'scim',
+      });
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+    const revokedSessionIds = await db.transaction(async (tx) =>
+      deleteUserSessions(tx, userId),
+    );
+    await auditSessionRevokes(auth.organisationId, revokedSessionIds);
+    return;
+  }
+
+  if (!active && membership.status === 'active') {
+    const blocked = await db.transaction(async (tx) =>
+      soleActiveAdministrator(tx, auth.organisationId, membership.id),
+    );
+    if (blocked) throw new AuthorizationError('POLICY_DENIED');
+  }
+
+  const nextStatus = active ? 'active' : 'suspended';
+  if (membership.status === nextStatus && active) return;
+
+  const revokedSessionIds = await db.transaction(async (tx) => {
+    await tx
+      .update(memberships)
+      .set({ status: nextStatus })
+      .where(eq(memberships.id, membership.id));
+    return active ? [] : deleteUserSessions(tx, userId);
   });
+  await auditSessionRevokes(auth.organisationId, revokedSessionIds);
+  if (membership.status !== nextStatus) {
+    await recordAudit({
+      action: active ? 'membership.reinstated' : 'membership.suspended',
+      resourceType: 'membership',
+      resourceId: membership.id,
+      result: 'success',
+      reason: 'scim',
+      organisationId: auth.organisationId,
+      actorUserId: null,
+      actingRole: 'scim',
+    });
+  }
+}
+
+/**
+ * Directory delete. The membership row is kept and marked revoked so a later
+ * provision cannot restore it. Sessions for that user are deleted.
+ */
+export async function revokeScimUser(
+  auth: ScimPrincipal,
+  pathOrganisationId: string,
+  email: string,
+): Promise<void> {
+  assertSameOrg(auth, pathOrganisationId);
+  const normalised = email.trim().toLowerCase();
+  const userId = await findUserId(normalised);
+  if (!userId) throw new AuthorizationError('POLICY_DENIED');
+
+  const [membership] = await db
+    .select({ id: memberships.id, status: memberships.status })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, auth.organisationId),
+        eq(memberships.userId, userId),
+      ),
+    )
+    .limit(1);
+  if (!membership) throw new AuthorizationError('POLICY_DENIED');
+
+  if (membership.status === 'active') {
+    const blocked = await db.transaction(async (tx) =>
+      soleActiveAdministrator(tx, auth.organisationId, membership.id),
+    );
+    if (blocked) throw new AuthorizationError('POLICY_DENIED');
+  }
+
+  const revokedSessionIds = await db.transaction(async (tx) => {
+    if (membership.status !== 'revoked') {
+      await tx
+        .update(memberships)
+        .set({ status: 'revoked' })
+        .where(eq(memberships.id, membership.id));
+    }
+    return deleteUserSessions(tx, userId);
+  });
+  await auditSessionRevokes(auth.organisationId, revokedSessionIds);
+  if (membership.status !== 'revoked') {
+    await recordAudit({
+      action: 'membership.revoked',
+      resourceType: 'membership',
+      resourceId: membership.id,
+      result: 'success',
+      reason: 'scim',
+      organisationId: auth.organisationId,
+      actorUserId: null,
+      actingRole: 'scim',
+    });
+  }
 }
