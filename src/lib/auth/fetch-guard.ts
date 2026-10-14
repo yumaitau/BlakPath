@@ -8,9 +8,10 @@
  * current page afterwards). The response is still handed back unchanged so the
  * calling component behaves as before.
  *
- * A step-up refusal (`code: 'STEP_UP_REQUIRED'`) is also a 401 but the session
- * is still valid — the component asks for re-authentication itself — so it is
- * deliberately not treated as expiry. Auth endpoints (`/api/auth/*`) answer 401
+ * A step-up refusal (`code: 'STEP_UP_REQUIRED'`) or a failed step-up completion
+ * (`code: 'REAUTH_FAILED'`) is also a 401 but the session is still valid — the
+ * component asks for re-authentication itself — so neither is treated as
+ * expiry. Auth endpoints (`/api/auth/*`) answer 401
  * for wrong passwords and codes, so they are excluded too.
  */
 
@@ -36,6 +37,12 @@ export function isGuardedApiRequest(input: RequestInfo | URL, origin: string): b
   return url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/');
 }
 
+/** 401 codes that mean "re-authenticate", not "signed out". */
+const STEP_UP_CODES: ReadonlySet<unknown> = new Set([
+  'STEP_UP_REQUIRED',
+  'REAUTH_FAILED',
+]);
+
 /** True when a 401 body says "re-authenticate" rather than "signed out". */
 async function isStepUpRefusal(response: Response): Promise<boolean> {
   try {
@@ -43,7 +50,7 @@ async function isStepUpRefusal(response: Response): Promise<boolean> {
     return (
       typeof body === 'object' &&
       body !== null &&
-      (body as { code?: unknown }).code === 'STEP_UP_REQUIRED'
+      STEP_UP_CODES.has((body as { code?: unknown }).code)
     );
   } catch {
     return false;

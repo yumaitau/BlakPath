@@ -9,11 +9,22 @@ import type { Instrumentation } from 'next';
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+
+  // Fail boot when the Drizzle auth tables cannot store a field an enabled
+  // Better Auth plugin writes. The adapter would otherwise drop the write.
+  const { assertAuthSchemaCoverage } = await import('@/lib/auth/schema-coverage');
+  assertAuthSchemaCoverage();
+
+  // Fail boot on invalid configuration. Later steps are best-effort and must
+  // not swallow this.
+  const { env } = await import('@/lib/env');
+  void env.NODE_ENV;
+
   const { start } = await import('@/lib/observability/otel');
   await start();
 
-  // Inject the real SMTP transport so better-auth's verification/reset emails
-  // actually send. Best-effort: a wiring failure here must not crash boot.
+  // Inject the auth transport. Verification sends now; password reset is
+  // queued by that transport. Best-effort: a wiring failure must not crash boot.
   try {
     const [{ setAuthMailer }, { authMailer }] = await Promise.all([
       import('@/lib/auth/emails'),

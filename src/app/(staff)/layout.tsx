@@ -1,50 +1,49 @@
-import { getSessionCookie } from 'better-auth/cookies';
-import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { SessionWatch } from '@/components/auth/session-watch';
+import { TenantKeyUnavailable } from '@/components/encryption/tenant-key-unavailable';
 import { StaffShell } from '@/components/staff/staff-shell';
 import {
-  CURRENT_PATH_HEADER,
-  selectOrganisationPath,
-  signInPath,
-} from '@/lib/auth/return-to';
-import { getServerSession } from '@/lib/auth/session';
+  membershipRequiresStaffMfa,
+  requireStaffMfa,
+  STAFF_MFA_ENROL_PATH,
+  StaffMfaRequiredError,
+} from '@/lib/auth/staff-policy';
+import { getOrganisationKey } from '@/domains/organisation-keys';
 import { env } from '@/lib/env';
-import {
-  getActiveOrganisationId,
-  listMembershipsForUser,
-} from '@/lib/tenancy/memberships';
+import { clientIp } from '@/lib/http/client-ip';
+import { loadStaffShell } from '@/lib/tenancy/staff-shell';
 
 /**
  * Authenticated staff shell. This is the UI guard as well as the navigation
- * surface: no staff route renders until the session and active membership have
- * been checked against the database.
+ * surface: no staff route renders until the session, active membership and
+ * staff second-factor policy have been checked against the database.
+ *
+ * A tenant key that is not active locks every page here. The encryption-keys
+ * settings page lives in the `(key-custody)` group so an administrator can
+ * still see the key's status and check it while records are locked.
  */
 export default async function StaffLayout({ children }: { children: ReactNode }) {
-  const h = await headers();
-  // The page being requested, so sign-in and the organisation picker can send
-  // the person back to it (validated by `safeReturnTo` before any use).
-  const currentPath = h.get(CURRENT_PATH_HEADER);
+  const { session, organisations, activeOrganisationId } = await loadStaffShell();
 
-  const session = await getServerSession();
-  if (!session) {
-    // A leftover session cookie with no live session means it expired
-    // (presence check only — it is never trusted for access); this only changes
-    // the notice shown at sign-in.
-    const expired = getSessionCookie(h, { cookiePrefix: 'blakpath' }) !== null;
-    redirect(signInPath(currentPath, expired ? 'expired' : undefined));
+  if (await membershipRequiresStaffMfa(session.user.id, activeOrganisationId)) {
+    const h = await headers();
+    try {
+      await requireStaffMfa(session.user.id, {
+        organisationId: activeOrganisationId,
+        sessionId: session.session.id,
+        ipAddress: clientIp({ headers: h }),
+        userAgent: h.get('user-agent'),
+      });
+    } catch (error) {
+      if (error instanceof StaffMfaRequiredError) redirect(STAFF_MFA_ENROL_PATH);
+      throw error;
+    }
   }
 
-  const activeOrganisationId = getActiveOrganisationId(session);
-  if (!activeOrganisationId) redirect(selectOrganisationPath(currentPath));
-
-  const organisations = await listMembershipsForUser(session.user.id);
-  // A stale session can name a membership that was revoked after sign-in. Treat
-  // it exactly like no selection, instead of rendering a misleading shell.
-  if (!organisations.some((org) => org.organisationId === activeOrganisationId)) {
-    redirect(selectOrganisationPath(currentPath));
-  }
+  const key = await getOrganisationKey(activeOrganisationId);
+  const locked = key && key.status !== 'active' ? key.status : null;
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -53,7 +52,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
         activeOrganisationId={activeOrganisationId}
       />
       <main id="main-content" tabIndex={-1} className="flex-1">
-        {children}
+        {locked ? <TenantKeyUnavailable status={locked} /> : children}
       </main>
       <SessionWatch idleTimeoutMinutes={env.STAFF_IDLE_TIMEOUT_MINUTES} />
     </div>

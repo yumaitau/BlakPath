@@ -54,6 +54,15 @@ describe('installSessionExpiryGuard', () => {
     expect(onExpired).not.toHaveBeenCalled();
   });
 
+  it('does not treat a failed step-up completion as expiry', async () => {
+    const { host } = hostReturning(() => json(401, { code: 'REAUTH_FAILED' }));
+    const onExpired = vi.fn();
+    installSessionExpiryGuard(host, ORIGIN, onExpired);
+
+    await host.fetch('/api/session/step-up/complete', { method: 'POST' });
+    expect(onExpired).not.toHaveBeenCalled();
+  });
+
   it('treats a non-JSON 401 as expiry', async () => {
     const { host } = hostReturning(() => new Response('nope', { status: 401 }));
     const onExpired = vi.fn();

@@ -14,7 +14,11 @@ incident ticket.
    service, then retry the existing job; never mark evidence clean manually.
 4. For email/webhook/export, confirm whether the side effect happened before
    retrying. Processors are designed to be idempotent, but the operator must
-   verify the external service response.
+   verify the external service response. A webhook marked `destination not allowed`
+   or `endpoint secret unavailable` will not succeed on retry: correct the
+   endpoint URL, or rotate the signing secret from the management API. The
+   secret is shown once at creation and once at rotation. Do not copy it into
+   the ticket.
 5. Record the remediation and confirm the queue’s failed count returns to its
    expected baseline.
 
@@ -65,4 +69,19 @@ Stop the drill or recovery, preserve its target, and do not promote a partial
 restore. Confirm the source recovery point is immutable, open an incident, and
 repeat into a new isolated target after correcting the fault. A restore is usable
 only after sign-in, tenant records, evidence authorisation and every audit chain
-have been verified.
+have been verified. Re-establish the client key grant before reading tenant
+ciphertext. If the key was deleted, AWS Backup copies of that ciphertext are not
+readable ([`key-lifecycle.md`](key-lifecycle.md)).
+
+## Tenant key unavailable
+
+1. Staff see a lock, not a generic 500. Public forms and verify pages say the
+   encryption key is unavailable. They do not say the link or certificate is
+   missing.
+2. That tenant's jobs are delayed, not failed. Do not drain them by marking
+   them complete, and do not copy plaintext out by another path.
+3. If the client disabled the key or removed the grant, wait for them to
+   restore it. The next health probe (within the data-key cache TTL) sets an
+   `unavailable` row back to `active` and resumes paused jobs. `disabled` and
+   `pending_deletion` stay off until an operator changes the status.
+4. Other tenants keep running. A probe network error does not pause them.

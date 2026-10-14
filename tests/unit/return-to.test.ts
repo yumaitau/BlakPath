@@ -82,6 +82,7 @@ describe('selectOrganisationPath', () => {
     );
     expect(selectOrganisationPath('//evil.example')).toBe('/select-organisation');
     expect(selectOrganisationPath(null)).toBe('/select-organisation');
+    expect(selectOrganisationPath('/dashboard')).toBe('/select-organisation');
   });
 });
 

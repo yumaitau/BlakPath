@@ -13,7 +13,7 @@ import {
   getForm,
   listInvitations,
   listResponses,
-  type FormInvitationRow,
+  type PublicFormInvitation,
   type FormResponseRow,
   type FormRow,
 } from '@/domains/forms';
@@ -34,7 +34,7 @@ import {
 
 interface LoadedForm {
   form: FormRow;
-  invitations: FormInvitationRow[];
+  invitations: PublicFormInvitation[];
   responses: FormResponseRow[];
 }
 
@@ -50,7 +50,7 @@ function answerEntries(answers: unknown): Array<[string, string]> {
   });
 }
 
-function toInvitationListItem(row: FormInvitationRow): InvitationListItem {
+function toInvitationListItem(row: PublicFormInvitation): InvitationListItem {
   return {
     id: row.id,
     recipientName: row.recipientName,

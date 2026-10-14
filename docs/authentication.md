@@ -11,14 +11,14 @@ data on its own — that comes from a DB-verified membership plus permissions
 
 ## Tables and what they hold
 
-| Table           | Better Auth model | Notes                                                                                          |
-| --------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
-| `users`         | `user`            | Account identity. `isPlatformOperator` marks BlakPath staff and grants **no** tenant access.   |
-| `accounts`      | `account`         | Credential/OAuth links. `password` is **Better-Auth-hashed** (argon2) — never plaintext.       |
-| `sessions`      | `session`         | Active sessions. `activeOrganisationId` is advisory; `lastAuthenticatedAt` drives step-up.     |
-| `verifications` | `verification`    | Single-use, expiring values for email verification, reset, OTP.                                |
-| `passkeys`      | passkey plugin    | WebAuthn credentials; **public key only**, no private material stored.                         |
-| `twoFactors`    | twoFactor plugin  | TOTP `secret` and `backupCodes` stored **envelope-encrypted (AES-256-GCM)** — ciphertext only. |
+| Table           | Better Auth model | Notes                                                                                                                                                                                |
+| --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `users`         | `user`            | Account identity. `isPlatformOperator` marks BlakPath staff and grants **no** tenant access. `twoFactorEnabled` is set only after a TOTP code is confirmed.                          |
+| `accounts`      | `account`         | Credential/OAuth links. `password` is **Better-Auth-hashed** (argon2) — never plaintext.                                                                                             |
+| `sessions`      | `session`         | Active sessions. `activeOrganisationId` is advisory; `lastAuthenticatedAt` drives step-up.                                                                                           |
+| `verifications` | `verification`    | Single-use, expiring values for email verification, reset, OTP.                                                                                                                      |
+| `passkeys`      | passkey plugin    | WebAuthn credentials; **public key only**, no private material stored. Includes the authenticator `aaguid`.                                                                          |
+| `twoFactors`    | twoFactor plugin  | TOTP `secret` and `backupCodes` stored **envelope-encrypted (AES-256-GCM)** — ciphertext only. `verified`, `failedVerificationCount` and `lockedUntil` record enrolment and lockout. |
 
 ## Better Auth setup
 
@@ -30,6 +30,9 @@ data on its own — that comes from a DB-verified membership plus permissions
   plaintext credential.
 - **Plugins enabled:** email/password, email verification, password reset,
   **passkey** (WebAuthn), **two-factor** (TOTP + recovery codes).
+- **Schema coverage:** startup and `pnpm test` compare those plugins' fields
+  with the Drizzle auth tables (`src/lib/auth/schema-coverage.ts`). A missing
+  field refuses to boot. The adapter would otherwise drop the write.
 - **Region:** all auth data resides in `ap-southeast-2` like the rest of the
   platform (`docs/privacy-architecture.md`).
 
@@ -52,10 +55,13 @@ data on its own — that comes from a DB-verified membership plus permissions
 ## Staff MFA requirement
 
 **Every organisation staff member must have a second factor** (a passkey, or TOTP
-with recovery codes) before they can act on tenant data. Sign-in for a staff
-account that has not completed MFA enrolment is routed to enrolment, not to the
-workspace. Applicants using the public application flow are encouraged, but not
-forced, to enable MFA. Platform operators must use MFA unconditionally.
+with recovery codes) before they can act on tenant data. A TOTP row counts only
+after the user confirms a code (`two_factors.verified`). Sign-in for a staff
+account that has not completed that enrolment is routed to `/mfa/enrol`, not to
+the workspace. The staff shell and `withTenant` (every tenant `/api/*` handler)
+enforce this before any tenant work runs, and a refusal is audited. Applicants
+using the public application flow are encouraged, but not forced, to enable MFA.
+Platform operators must use MFA unconditionally.
 
 ## Organisation invitations
 
@@ -79,10 +85,28 @@ forced, to enable MFA. Platform operators must use MFA unconditionally.
 - `activeOrganisationId` records which tenant a session is currently acting
   within — **advisory only.** Every request re-derives and DB-verifies the tenant
   context regardless (`docs/tenant-isolation.md`).
-- Sessions can be listed and revoked by the user; changing a password or a
-  security factor invalidates other sessions.
+- Sessions can be listed and revoked by the user. Completing a password reset
+  revokes existing sessions for that account (`revokeSessionsOnPasswordReset`).
+  Changing a security factor invalidates other sessions.
+- A session with an active organisation expires 12 hours after it is created.
+  It also expires after an idle period of 30–60 minutes (default 45). An
+  organisation administrator with `tenant:configure` sets that period with
+  `PATCH /api/organisations/session-policy` (`idleTimeoutMinutes`). `GET` on
+  the same path returns the resolved timeout in seconds. Sessions with no
+  active organisation keep the 7-day ceiling.
+- Idle is measured from the session row's `updatedAt`. Activity older than 60
+  seconds refreshes `expiresAt` to the sooner of the 12-hour cap and now plus
+  the idle timeout. An idle or over-age staff session is deleted; the person
+  must sign in again.
 - `lastAuthenticatedAt` records the most recent successful authentication and
-  gates step-up (below).
+  gates step-up (below). A null value falls back to `createdAt`.
+- Cookie-authenticated `/api` mutations must come from the `APP_URL` origin
+  with `Content-Type: application/json`. Bearer, Better Auth, SCIM, provider
+  webhooks, token-addressed public forms and the CSP report sink are exempt.
+- Production session cookies use the `__Host-` prefix (`Secure`, `Path=/`, no
+  `Domain`), so they cannot be issued for a parent domain. Development keeps
+  the `blakpath` prefix without `Secure` so plain HTTP on a non-loopback host
+  can still sign in.
 
 ### Expiry, return-to and inactivity in the staff UI
 
@@ -114,14 +138,24 @@ forced, to enable MFA. Platform operators must use MFA unconditionally.
 ## Step-up / re-authentication for sensitive actions
 
 Certain actions require a **recent** authentication, not just a valid session.
-Before performing one, the app checks `sessions.lastAuthenticatedAt` against a
-freshness window; if stale, the user must re-authenticate (password + second
-factor, or passkey) which refreshes the timestamp.
+The route map is `STEP_UP_ROUTES` in `src/lib/auth/step-up-policy.ts`. Windows
+are 5 minutes (privileged), 10 minutes (sensitive actions such as evidence
+download, export, and certificate revocation), and 15 minutes (destructive
+retention changes).
 
-Actions requiring step-up include: recording a determination (`decision:record`),
-issuing/revoking a certificate (`certificate:issue` / `certificate:revoke`),
-managing security-sensitive settings, changing MFA factors, and **all break-glass
-operations** (`break_glass_requests.stepUpVerified` must be true).
+Before the handler reads params or a body, it checks `lastAuthenticatedAt`
+(or `createdAt` when that is null). A stale session gets HTTP 401 with
+`code: "STEP_UP_REQUIRED"`. The staff UI then asks for the password and, when
+an authenticator is enrolled, a TOTP or backup code — or a passkey. That check
+mints a new session and retries the action. It does not sign the person out.
+
+The mapped routes are evidence download, report export create and download,
+certificate revoke, API key create, webhook create, SSO provider create,
+retention hold release, retention policy delete, and break-glass deny and
+revoke. Certificate signing, break-glass approval and activation, and
+membership changes are gated the same way.
+
+Re-authentication stamps `lastAuthenticatedAt` on the new session.
 
 ## Authentication sequence
 
@@ -162,8 +196,18 @@ sequenceDiagram
 
 - **Recovery codes** are issued at TOTP enrolment, envelope-encrypted, and each
   is single-use. Using one is an audited event.
-- Repeated failed attempts are rate-limited (Redis-backed, tenant/identity
-  prefixed) to slow credential-stuffing.
+- Repeated failed sign-in attempts are limited per client address and, separately,
+  delayed then locked per account. The counters live in Redis and are shared
+  across replicas. See `docs/rate-limits.md`. The address in the bucket is
+  `clientIp`: `CF-Connecting-IP` after the origin-verify secret matches. A
+  client-supplied forwarded-for value is not used. An unverified origin shares
+  one bucket instead of skipping the limit.
+- Failed TOTP verifications are also counted on the factor row. After 10
+  consecutive failures the factor stays locked for 15 minutes. A later success
+  clears the count. The deadline is stored in Postgres, not only in memory.
+- Password-reset mail is queued. The HTTP response does not wait on the mail
+  relay, and the handler spends a fixed budget so a known address and an
+  unknown address take the same time when the work finishes inside that budget.
 - Account recovery that would reset a factor is treated as sensitive and audited;
   it never silently disables MFA for staff.
 
@@ -175,9 +219,13 @@ Enterprise sign-on is not in Phase 1, but the design leaves room for it:
   (`providerId`, tokens), so an OIDC/SAML provider slots in as another account
   type. Organisation-to-provider mapping will hang off the tenancy domain (e.g.
   via `organisation_domains` for email-domain routing).
-- **SCIM provisioning:** membership lifecycle already lives in `memberships` /
-  `membership_roles` with clear statuses, so SCIM create/update/deactivate maps
-  onto membership status transitions rather than a parallel identity store.
+- **SCIM provisioning:** each organisation issues its own bearer credential
+  (`POST /api/scim/credentials`). Only the SHA-256 hash is stored. The
+  organisation is taken from that credential; a path that names another
+  organisation is rejected. Group names replace the managed role set.
+  `organisation-admin` is not assignable unless the credential opts in.
+  A revoked membership stays revoked. Suspend and directory delete also end
+  the user's sessions.
 
 Neither changes the invariant: **authentication never bypasses tenant isolation
 or permission checks**, and every sign-in and factor change is audited

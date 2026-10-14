@@ -14,6 +14,7 @@ export BLAKPATH_MAILPIT_UI_PORT="${BLAKPATH_MAILPIT_UI_PORT:-58025}"
 export BLAKPATH_LIVE_WEB_PORT="${BLAKPATH_LIVE_WEB_PORT:-3018}"
 
 export NODE_ENV=development
+export ALLOW_DEV_SEED=1
 export APP_URL="http://localhost:${BLAKPATH_LIVE_WEB_PORT}"
 export BETTER_AUTH_URL="$APP_URL"
 export BETTER_AUTH_SECRET="live-stack-only-secret-with-at-least-32-characters"

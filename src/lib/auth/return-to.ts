@@ -86,11 +86,12 @@ export function signInPath(returnTo?: string | null, reason?: SignInReason): str
 
 /**
  * Builds the organisation-picker URL that continues to `returnTo` once an
- * organisation is chosen (a fresh sign-in has none selected yet).
+ * organisation is chosen (a fresh sign-in has none selected yet). The default
+ * destination is implied, so it is not carried.
  */
 export function selectOrganisationPath(returnTo?: string | null): string {
   const safe = safeReturnTo(returnTo, '');
-  return safe
+  return safe && safe !== DEFAULT_RETURN_PATH
     ? `/select-organisation?${new URLSearchParams({ returnTo: safe })}`
     : '/select-organisation';
 }
