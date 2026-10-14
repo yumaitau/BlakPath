@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import { requireRecentAuth, STEP_UP_WINDOWS } from '@/lib/auth/session';
 import { signCertificate } from '@/domains/certificates';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * POST /api/certificates/[id]/sign — sign a draft certificate.
@@ -11,16 +12,12 @@ import { signCertificate } from '@/domains/certificates';
  * capability the service checks. A long-lived "remember me" session must never
  * be enough on its own.
  */
-export async function POST(
+export const POST = tenantHandler(async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    await requireRecentAuth(STEP_UP_WINDOWS.sensitiveAction);
-    const { id } = await params;
-    const certificate = await withRequestTenant(() => signCertificate(id));
-    return NextResponse.json({ id: certificate.id, status: certificate.status });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  await requireRecentAuth(STEP_UP_WINDOWS.sensitiveAction);
+  const { id } = await params;
+  const certificate = await withRequestTenant(() => signCertificate(id));
+  return NextResponse.json({ id: certificate.id, status: certificate.status });
+});

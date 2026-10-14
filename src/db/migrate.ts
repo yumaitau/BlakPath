@@ -13,6 +13,7 @@ import {
   runMigrations,
   type MigrationClient,
 } from './migrator';
+import { postgresClientOptions } from './postgres-options';
 
 /**
  * Migration entrypoint for `pnpm db:migrate` and the release migrate Job.
@@ -27,10 +28,22 @@ async function main(): Promise<void> {
     process.env.MIGRATIONS_FOLDER ??
     fileURLToPath(new URL('./migrations', import.meta.url));
   const migrations = loadMigrationFiles(folder);
+  // Verified TLS (sslmode=verify-full, pinned RDS bundle) from the shared
+  // options. The runner's own lock and statement timeouts also go on the
+  // startup packet so the session never runs without them.
+  const options = postgresClientOptions({
+    role: 'migrate',
+    poolMax: 1,
+    databaseUrl: url,
+  });
   const sql = postgres(url, {
-    max: 1,
+    ...options,
     connect_timeout: 30,
-    connection: { application_name: 'blakpath-migrate' },
+    connection: {
+      ...options.connection,
+      lock_timeout: timeouts.lockTimeoutMs,
+      statement_timeout: timeouts.statementTimeoutMs,
+    },
   });
   try {
     console.log('[migrate] applying migrations…');

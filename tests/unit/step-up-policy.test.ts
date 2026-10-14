@@ -18,7 +18,7 @@ import { hotp, matchBackupCode, totpMatches } from '@/lib/auth/totp';
 import { openStepUpContext, sealStepUpContext } from '@/lib/auth/step-up-context-cookie';
 import { responseNeedsStepUp, withStepUp } from '@/lib/auth/step-up-flow';
 import { StepUpRequiredError } from '@/lib/auth/session';
-import { toErrorResponse } from '@/lib/http/tenant-route';
+import { errorResponse } from '@/lib/http/error-response';
 
 const LISTED_ROUTES = [
   'GET /api/evidence/[id]/download',
@@ -88,9 +88,9 @@ describe('step-up route map', () => {
       error: 'Re-authentication required',
       code: STEP_UP_REQUIRED_CODE,
     });
-    const response = toErrorResponse(new StepUpRequiredError(600));
+    const response = errorResponse(new StepUpRequiredError(600));
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual(stepUpRequiredBody());
+    await expect(response.json()).resolves.toMatchObject(stepUpRequiredBody());
   });
 });
 

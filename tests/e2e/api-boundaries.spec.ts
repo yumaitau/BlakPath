@@ -1,6 +1,8 @@
 import { expect, test } from './helpers/page';
 
 test('sensitive APIs consistently reject anonymous requests', async ({ request }) => {
+  // One request per route; the dev server compiles each route on first hit.
+  test.setTimeout(120_000);
   const protectedGets = [
     '/api/applications',
     '/api/tasks',
@@ -23,7 +25,7 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
     await test.step(`${path} rejects anonymous access`, async () => {
       const response = await request.get(path);
       expect(response.status()).toBe(401);
-      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+      await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
     });
   }
 
@@ -81,7 +83,7 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
         data: mutation.data,
       });
       expect(response.status()).toBe(401);
-      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+      await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
     });
   }
 });

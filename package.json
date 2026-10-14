@@ -10,18 +10,15 @@
       "ioredis": "^5.11.1",
       "form-data": "^4.0.6",
       "vite": "^6.4.3",
-      "esbuild@<=0.24.2": ">=0.25.0",
-      "file-type@>=13.0.0 <21.3.1": ">=21.3.1",
-      "postcss@<8.5.10": ">=8.5.10",
-      "uuid@<11.1.1": ">=11.1.1",
-      "next@<16.3.8": ">=16.3.8",
-      "postcss@<8.5.18": ">=8.5.18",
-      "nanoid@<3.3.18": ">=3.3.18",
-      "browserslist@<=4.28.6": ">=4.28.7",
-      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0",
-      "@grpc/grpc-js@<1.14.5": ">=1.14.5",
-      "sharp@<0.35.5": ">=0.35.5",
-      "source-map-js@<1.2.2": ">=1.2.2"
+      "esbuild@<=0.24.2": "^0.25.0",
+      "file-type@>=13.0.0 <21.3.1": "^21.3.1",
+      "uuid@<11.1.1": "^11.1.1",
+      "postcss@<8.5.18": "^8.5.18",
+      "nanoid@<3.3.18": "^3.3.18",
+      "browserslist@<=4.28.6": "^4.28.7",
+      "@grpc/grpc-js@<1.14.5": "^1.14.5",
+      "sharp@<0.35.5": "^0.35.5",
+      "source-map-js@<1.2.2": "^1.2.2"
     },
     "peerDependencyRules": {
       "ignoreMissing": [
@@ -29,9 +26,7 @@
       ]
     },
     "auditConfig": {
-      "ignoreGhsas": [
-        "GHSA-q7rr-3cgh-j5r3"
-      ]
+      "ignoreGhsas": []
     }
   },
   "engines": {
@@ -45,6 +40,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "deps:check": "DATABASE_URL=postgres://blakpath:blakpath@localhost:5432/blakpath knip --no-progress && depcheck",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -65,8 +61,8 @@
     "db:seed": "tsx src/db/seeds/index.ts",
     "certificates:backfill-signing-keys": "tsx scripts/backfill-coa-signing-keys.ts",
     "admin:invite": "tsx scripts/invite-first-admin.ts",
-    "worker": "tsx worker/index.ts",
-    "worker:dev": "tsx watch worker/index.ts"
+    "worker": "BLAKPATH_PROCESS=worker tsx worker/index.ts",
+    "worker:dev": "BLAKPATH_PROCESS=worker tsx watch worker/index.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1130.0",
@@ -77,7 +73,6 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@hookform/resolvers": "^5.0.0",
     "@node-rs/argon2": "^2.0.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/auto-instrumentations-node": "^0.80.0",
@@ -88,14 +83,12 @@
     "@radix-ui/react-dropdown-menu": "^2.1.2",
     "@radix-ui/react-label": "^2.1.0",
     "@radix-ui/react-slot": "^1.1.0",
-    "@radix-ui/react-tabs": "^1.1.1",
-    "@radix-ui/react-toast": "^1.2.2",
     "better-auth": "^1.6.0",
     "bullmq": "^5.21.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.0",
-    "file-type": "^19.5.0",
+    "file-type": "^22.1.1",
     "ioredis": "^5.4.1",
     "lucide-react": "^0.454.0",
     "nanoid": "^5.1.16",
@@ -107,10 +100,9 @@
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-hook-form": "^7.53.0",
     "shamir-secret-sharing": "0.0.4",
     "tailwind-merge": "^2.5.4",
-    "undici": "^6.29.0",
+    "undici": "^7.30.0",
     "uuidv7": "^1.0.2",
     "zod": "^4.0.0"
   },
@@ -125,6 +117,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.6.0",
     "axe-core": "^4.10.0",
+    "depcheck": "^1.4.7",
     "dotenv": "^16.4.5",
     "drizzle-kit": "^0.31.0",
     "eslint": "^9.13.0",
@@ -132,6 +125,7 @@
     "eslint-config-prettier": "^9.1.0",
     "jsdom": "^25.0.1",
     "jsqr": "^1.4.0",
+    "knip": "^6.41.0",
     "pdfjs-dist": "^4.10.38",
     "pino-pretty": "^13.0.0",
     "prettier": "^3.3.3",

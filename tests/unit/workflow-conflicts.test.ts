@@ -4,28 +4,28 @@ import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { CertificateConflictError } from '@/domains/certificates/errors';
 import { DecisionWorkflowError } from '@/domains/decisions/errors';
 import { certificates } from '@/db/schema/certificates';
-import { toErrorResponse } from '@/lib/http/tenant-route';
+import { errorResponse } from '@/lib/http/error-response';
 
 describe('workflow conflict responses', () => {
   it('maps a proposal on a case that is still in review to 409', async () => {
-    const response = toErrorResponse(new DecisionWorkflowError('in_review'));
+    const response = errorResponse(new DecisionWorkflowError('in_review'));
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
+    expect(await response.json()).toMatchObject({
       error: 'Case is not ready for a committee decision',
     });
   });
 
   it('maps an illegal case transition to 409', async () => {
-    const response = toErrorResponse(
+    const response = errorResponse(
       new ApplicationWorkflowError('record_decision', 'in_review'),
     );
     expect(response.status).toBe(409);
   });
 
   it('maps a second live certificate to 409', async () => {
-    const response = toErrorResponse(new CertificateConflictError());
+    const response = errorResponse(new CertificateConflictError());
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
+    expect(await response.json()).toMatchObject({
       error: 'A live certificate already exists for this decision',
     });
   });

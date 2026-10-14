@@ -11,6 +11,9 @@ data:
   PORT: '3000'
   NODE_ENV: production
   NEXT_TELEMETRY_DISABLED: '1'
+  # Web pool. The worker deployment overrides BLAKPATH_PROCESS and
+  # DATABASE_WORKER_POOL_MAX. Budget: docs/eks-runbook.md.
+  DATABASE_POOL_MAX: '10'
   LOG_LEVEL: info
   S3_REGION: ap-southeast-2
   S3_BUCKET_EVIDENCE: blakpath-prod-evidence-959038055523-ap-southeast-2
