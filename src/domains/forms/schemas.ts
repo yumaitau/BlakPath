@@ -24,12 +24,17 @@ export const updateFormSchema = z
   );
 export type UpdateFormInput = z.input<typeof updateFormSchema>;
 
-/** Presign a file-field upload on a public form. The field must be type `file`. */
-export const publicFileUploadSchema = requestUploadSchema
-  .omit({ fulfilsRequestId: true })
-  .extend({
-    fieldKey: z.string().regex(/^[a-z][a-z0-9_]{0,40}$/),
-  });
+/**
+ * Presign a file-field upload on a public form. The field must be type `file`.
+ * Same name, type and size rules as a case upload. No request link and no
+ * on-behalf receipt: the recipient is uploading their own file.
+ */
+export const publicFileUploadSchema = z.object({
+  fileName: requestUploadSchema.shape.fileName,
+  contentType: requestUploadSchema.shape.contentType,
+  sizeBytes: requestUploadSchema.shape.sizeBytes,
+  fieldKey: z.string().regex(/^[a-z][a-z0-9_]{0,40}$/),
+});
 export type PublicFileUploadInput = z.input<typeof publicFileUploadSchema>;
 
 /**
