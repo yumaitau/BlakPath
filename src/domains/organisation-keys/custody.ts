@@ -6,10 +6,7 @@ import { parseKeyArn } from '@/lib/encryption/key-provider';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 import { requireTenantContext } from '@/lib/tenancy/context';
-import {
-  checkOrganisationKeyHealth,
-  type OrganisationKeyHealthResult,
-} from './health';
+import { checkOrganisationKeyHealth, type OrganisationKeyHealthResult } from './health';
 import {
   cloudTrailLinks,
   escrowView,

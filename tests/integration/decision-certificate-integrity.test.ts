@@ -69,6 +69,8 @@ integration('decision and certificate integrity', () => {
       slug: `integrity-${suffix}`,
       status: 'active',
     });
+    const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+    await ensureOrganisationKey(organisationId);
     await runtime.db.insert(runtime.schema.memberships).values({
       id: membershipId,
       organisationId,

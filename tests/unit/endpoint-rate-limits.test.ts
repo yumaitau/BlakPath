@@ -26,10 +26,16 @@ vi.mock('@/domains/applications', () => ({
 
 vi.mock('@/domains/mcp', () => ({
   handleMcpMessage: vi.fn(async () => ({ jsonrpc: '2.0', id: 1, result: {} })),
+  mcpHttpStatus: vi.fn(() => 200),
+  hasMcpScope: vi.fn(() => true),
+  tenantAiOptedIn: vi.fn(async () => true),
+  consumeMcpRateLimit: vi.fn(async () => undefined),
+  mcpAuditAfter: vi.fn(() => ({})),
+  McpRateLimitError: class McpRateLimitError extends Error {},
 }));
 
 vi.mock('@/domains/scim', () => ({
-  verifyScimBearer: vi.fn(),
+  authenticateScim: vi.fn(),
   provisionScimUser: vi.fn(async () => ({ id: 'scim-1', userName: 'ada@example.com' })),
   setScimUserActive: vi.fn(),
 }));
@@ -62,7 +68,7 @@ import { createInvitedAccount, acceptMembershipInvitation } from '@/domains/memb
 import { submitPublicResponse } from '@/domains/forms';
 import { listApplications } from '@/domains/applications';
 import { handleMcpMessage } from '@/domains/mcp';
-import { verifyScimBearer, provisionScimUser } from '@/domains/scim';
+import { authenticateScim, provisionScimUser } from '@/domains/scim';
 import { resolveApiKeyContext } from '@/domains/api-keys';
 import { requireSession } from '@/lib/auth/session';
 import { __resetEnvCache } from '@/lib/env';
@@ -71,6 +77,7 @@ import {
   setCounterStore,
   type MemoryCounterStore,
 } from '@/lib/http/counter-store';
+import { ORIGIN_VERIFY_HEADER } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, counterKey, hashIdentity } from '@/lib/http/request-limits';
 import { POST as createAccount } from '@/app/api/membership-invitations/create-account/route';
 import { POST as acceptInvite } from '@/app/api/membership-invitations/accept/route';
@@ -86,21 +93,29 @@ const acceptMock = vi.mocked(acceptMembershipInvitation);
 const submitMock = vi.mocked(submitPublicResponse);
 const listMock = vi.mocked(listApplications);
 const mcpMock = vi.mocked(handleMcpMessage);
-const scimVerify = vi.mocked(verifyScimBearer);
+const scimVerify = vi.mocked(authenticateScim);
 const scimProvision = vi.mocked(provisionScimUser);
 const resolveKey = vi.mocked(resolveApiKeyContext);
 const sessionMock = vi.mocked(requireSession);
 
 let store: MemoryCounterStore;
 
+/** Client addresses count only on requests that carry the origin-verify secret. */
+const ORIGIN_SECRET = 'origin-verify-secret-for-rate-limit-tests';
+
 beforeEach(() => {
   store = createMemoryCounterStore();
   setCounterStore(store);
   process.env.EMAIL_WEBHOOK_SECRET = 'webhook-secret-value';
+  process.env.ORIGIN_VERIFY_SECRET = ORIGIN_SECRET;
+  process.env.EMAIL_SNS_TOPIC_ARN =
+    'arn:aws:sns:ap-southeast-2:000000000000:email-events';
   __resetEnvCache();
 });
 
 afterEach(() => {
+  delete process.env.ORIGIN_VERIFY_SECRET;
+  delete process.env.EMAIL_SNS_TOPIC_ARN;
   setCounterStore(undefined);
   vi.clearAllMocks();
 });
@@ -116,6 +131,7 @@ function post(
     headers: {
       'content-type': 'application/json',
       'cf-connecting-ip': ip,
+      [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
       ...headers,
     },
     body: JSON.stringify(body),
@@ -248,7 +264,10 @@ describe('endpoint request limits', () => {
     await saturate(form.scope, 'ip', '203.0.113.16', form.ipMax, form.windowSec);
     const blocked = await proxy(
       new NextRequest('http://localhost/form/page-token', {
-        headers: { 'cf-connecting-ip': '203.0.113.16' },
+        headers: {
+          'cf-connecting-ip': '203.0.113.16',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
+        },
       }),
     );
     expect(blocked.status).toBe(429);
@@ -264,13 +283,19 @@ describe('endpoint request limits', () => {
     );
     const tokenBlocked = await proxy(
       new NextRequest('http://localhost/form/page-token', {
-        headers: { 'cf-connecting-ip': '203.0.113.17' },
+        headers: {
+          'cf-connecting-ip': '203.0.113.17',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
+        },
       }),
     );
     expect(tokenBlocked.status).toBe(429);
     const other = await proxy(
       new NextRequest('http://localhost/form/other-token', {
-        headers: { 'cf-connecting-ip': '203.0.113.17' },
+        headers: {
+          'cf-connecting-ip': '203.0.113.17',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
+        },
       }),
     );
     expect(other.status).toBe(200);
@@ -285,13 +310,19 @@ describe('endpoint request limits', () => {
     );
     const codeBlocked = await proxy(
       new NextRequest('http://localhost/verify/CERT1', {
-        headers: { 'cf-connecting-ip': '203.0.113.18' },
+        headers: {
+          'cf-connecting-ip': '203.0.113.18',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
+        },
       }),
     );
     expect(codeBlocked.status).toBe(429);
     const codeAllowed = await proxy(
       new NextRequest('http://localhost/verify/CERT2', {
-        headers: { 'cf-connecting-ip': '203.0.113.18' },
+        headers: {
+          'cf-connecting-ip': '203.0.113.18',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
+        },
       }),
     );
     expect(codeAllowed.status).toBe(200);
@@ -305,6 +336,7 @@ describe('endpoint request limits', () => {
         headers: {
           authorization: 'Bearer bp_key_a_0123456789',
           'cf-connecting-ip': '203.0.113.20',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
         },
       }),
     );
@@ -319,6 +351,7 @@ describe('endpoint request limits', () => {
         headers: {
           authorization: 'Bearer bp_key_a_0123456789',
           'cf-connecting-ip': '203.0.113.21',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
         },
       }),
     );
@@ -331,6 +364,7 @@ describe('endpoint request limits', () => {
         headers: {
           authorization: 'Bearer bp_key_b_0123456789',
           'cf-connecting-ip': '203.0.113.21',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
         },
       }),
     );
@@ -443,6 +477,7 @@ describe('endpoint request limits', () => {
         headers: {
           'content-type': 'application/json',
           'cf-connecting-ip': '203.0.113.41',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
           'x-email-webhook-secret': 'webhook-secret-value',
         },
         body: JSON.stringify({ Type: 'Notification' }),
@@ -457,6 +492,7 @@ describe('endpoint request limits', () => {
           headers: {
             'content-type': 'application/json',
             'cf-connecting-ip': '203.0.113.41',
+            [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
           },
           body: JSON.stringify({ Type: 'Notification' }),
         },

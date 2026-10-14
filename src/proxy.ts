@@ -68,7 +68,10 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     appOrigin,
   });
   if (!decision.allow) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: policyHeaders(contentSecurityPolicy) });
+    return NextResponse.json(
+      { error: 'Forbidden' },
+      { status: 403, headers: policyHeaders(contentSecurityPolicy) },
+    );
   }
 
   const { pathname } = request.nextUrl;

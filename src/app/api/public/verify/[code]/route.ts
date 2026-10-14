@@ -26,7 +26,7 @@ export async function POST(
   { params }: { params: Promise<{ code: string }> },
 ): Promise<Response> {
   const { code } = await params;
-  const ipAddress = clientIp(request.headers.get('x-forwarded-for'));
+  const ipAddress = clientIp(request);
   const userAgent = request.headers.get('user-agent');
 
   let body: unknown = null;

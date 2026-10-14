@@ -18,6 +18,7 @@ export {
   rotateOrganisationKey,
   setOrganisationKeyStatus,
   toPublicOrganisationKey,
+  validateOrganisationKey,
   withdrawEscrow,
 } from './service';
 export { OrganisationActivationError, activateCurrentOrganisation } from './activation';

@@ -14,7 +14,10 @@ import { AuthorizationError } from '@/lib/permissions/errors';
 
 /** IP first, then the presented bearer. A missing bearer still spends the IP budget. */
 async function limitScim(request: NextRequest): Promise<Response | null> {
-  const ipLimited = await limitIp(REQUEST_LIMITS.scim, clientIpForLimits(request.headers));
+  const ipLimited = await limitIp(
+    REQUEST_LIMITS.scim,
+    clientIpForLimits(request.headers),
+  );
   if (ipLimited) return ipLimited;
   const header = request.headers.get('authorization');
   const match = header ? /^Bearer\s+(.+)$/i.exec(header.trim()) : null;

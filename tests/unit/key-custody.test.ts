@@ -36,7 +36,19 @@ function keyRow(overrides: Partial<OrganisationKeyRow> = {}): OrganisationKeyRow
     kmsKeyArn: clientArn,
     keyVersion: 2,
     status: 'active',
+    previousKmsKeyArn: null,
+    previousKeyVersion: null,
+    validationStatus: 'passed',
+    validatedAt: null,
+    validationFailure: null,
+    canaryCiphertext: null,
+    lastHealthAt: null,
+    lastHealthState: null,
     escrow: false,
+    escrowConsentReference: null,
+    escrowConsentedAt: null,
+    escrowPackageDigest: null,
+    blindIndexWrappedDek: null,
     rotatedAt: new Date('2026-10-01T00:00:00Z'),
     createdAt: new Date('2026-09-01T00:00:00Z'),
     updatedAt: new Date('2026-10-01T00:00:00Z'),
@@ -93,6 +105,7 @@ describe('checkOrganisationKeyHealth', () => {
         calls.push(input.encryptionContext);
         return localProvider.decrypt(input);
       },
+      wrap: (input) => localProvider.wrap(input),
     };
 
     const { checkOrganisationKeyHealth } = await import('@/domains/organisation-keys');
@@ -120,6 +133,7 @@ describe('checkOrganisationKeyHealth', () => {
     const provider: KeyProvider = {
       generateDataKey: () => Promise.reject(new KmsKeyAccessError('DisabledException')),
       decrypt: () => Promise.reject(new Error('not reached')),
+      wrap: () => Promise.reject(new Error('not reached')),
     };
 
     const { checkOrganisationKeyHealth } = await import('@/domains/organisation-keys');
@@ -143,6 +157,7 @@ describe('checkOrganisationKeyHealth', () => {
         return { ...out, keyId: 'arn:aws:kms:ap-southeast-2:333333333333:key/other' };
       },
       decrypt: (input) => localProvider.decrypt(input),
+      wrap: (input) => localProvider.wrap(input),
     };
 
     const { checkOrganisationKeyHealth } = await import('@/domains/organisation-keys');
@@ -156,6 +171,7 @@ describe('checkOrganisationKeyHealth', () => {
     const provider: KeyProvider = {
       generateDataKey: vi.fn(),
       decrypt: vi.fn(),
+      wrap: vi.fn(),
     };
 
     const { checkOrganisationKeyHealth } = await import('@/domains/organisation-keys');

@@ -77,7 +77,10 @@ function redactPaths(keys: readonly string[], depth: number): string[] {
   return paths;
 }
 
-const REDACT_PATHS = [...redactPaths(SENSITIVE_KEYS, REDACT_DEPTH), ...inventoryRedactPaths()];
+const REDACT_PATHS = [
+  ...redactPaths(SENSITIVE_KEYS, REDACT_DEPTH),
+  ...inventoryRedactPaths(),
+];
 
 const REDACTED = '[redacted]';
 

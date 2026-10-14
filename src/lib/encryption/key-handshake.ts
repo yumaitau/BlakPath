@@ -145,5 +145,11 @@ export function withLocalKeyPolicy(provider: KeyProvider, orgId: string): KeyPro
     decrypt(input) {
       return provider.decrypt(input);
     },
+    async wrap(input) {
+      if (input.encryptionContext.org_id !== orgId) {
+        throw new KmsKeyAccessError('AccessDeniedException');
+      }
+      return provider.wrap(input);
+    },
   };
 }

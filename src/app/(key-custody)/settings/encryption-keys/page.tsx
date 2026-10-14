@@ -35,6 +35,7 @@ const STATUS_TONE: Record<OrganisationKeyStatus, 'success' | 'warning' | 'destru
     disabled: 'warning',
     pending_deletion: 'destructive',
     unavailable: 'destructive',
+    pending_validation: 'warning',
   };
 
 function formatDateTime(value: Date): string {

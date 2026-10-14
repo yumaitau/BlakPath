@@ -50,18 +50,10 @@ integration('staff second-factor enrolment matrix', () => {
 
   afterAll(async () => {
     if (!runtime) return;
-    const {
-      auditEvents,
-      membershipRoles,
-      memberships,
-      passkeys,
-      roles,
-      twoFactors,
-      users,
-    } = runtime.schema;
+    const { membershipRoles, memberships, passkeys, roles, twoFactors, users } =
+      runtime.schema;
     if (userIds.length > 0) {
       for (const userId of userIds) {
-        await runtime.db.delete(auditEvents).where(eq(auditEvents.actorUserId, userId));
         await runtime.db.delete(passkeys).where(eq(passkeys.userId, userId));
         await runtime.db.delete(twoFactors).where(eq(twoFactors.userId, userId));
       }

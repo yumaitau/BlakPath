@@ -75,6 +75,7 @@ integration('key custody settings per custody mode', () => {
         custodyMode: mode,
         kmsKeyArn: ARN_FOR[mode],
       });
+      await runtime.keys.validateOrganisationKey(id, ARN_FOR[mode]);
     }
   });
 
@@ -105,6 +106,7 @@ integration('key custody settings per custody mode', () => {
     });
     expect(overview?.history.map((entry) => entry.summary)).toEqual([
       'Health check passed',
+      'Key validated',
       'Key registered',
     ]);
     expect(overview?.history[0]?.actor).toBe('Key Custody Administrator');

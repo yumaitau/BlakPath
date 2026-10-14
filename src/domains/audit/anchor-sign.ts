@@ -13,6 +13,7 @@ import {
   type SigningAlgorithmSpec,
 } from '@aws-sdk/client-kms';
 import { env, isProduction } from '@/lib/env';
+import { DEV_LOCAL_KEY } from '@/lib/encryption/provider';
 import type { AnchorSigner } from './anchor';
 
 /**
@@ -142,6 +143,9 @@ export function loadAnchorSigner(): AnchorSigner {
   if (isProduction()) {
     throw new Error('AUDIT_ANCHOR_SIGNING_KEY_ID is required in production');
   }
-  const secret = env.AUDIT_ANCHOR_HMAC_KEY ?? env.ENCRYPTION_MASTER_KEY;
+  const secret =
+    env.AUDIT_ANCHOR_HMAC_KEY ??
+    env.ENCRYPTION_MASTER_KEY ??
+    DEV_LOCAL_KEY.toString('base64');
   return createHmacAnchorSigner(secret);
 }

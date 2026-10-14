@@ -92,7 +92,7 @@ async function authRequest(
 ): Promise<{ status: number; body: Record<string, unknown> | null }> {
   const headers = new Headers({
     origin: env.BETTER_AUTH_URL,
-    'x-forwarded-for': nextIp(),
+    'cf-connecting-ip': nextIp(),
   });
   const cookie = [...options.jar.entries()]
     .map(([name, value]) => `${name}=${value}`)
