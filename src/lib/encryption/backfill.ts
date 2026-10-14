@@ -417,7 +417,7 @@ async function backfillWebhooks(
 ): Promise<Step> {
   const tenant = tenantScope(organisationId);
   const rows = await tenant.db
-    .select({ id: webhookEndpoints.id, secret: webhookEndpoints.secret })
+    .select({ id: webhookEndpoints.id, secret: webhookEndpoints.secretCiphertext })
     .from(webhookEndpoints)
     .where(
       tenant.where(
@@ -438,7 +438,7 @@ async function backfillWebhooks(
     if (!saved.changed || saved.value === null) continue;
     await tenant.db
       .update(webhookEndpoints)
-      .set({ secret: saved.value })
+      .set({ secretCiphertext: saved.value })
       .where(
         and(
           eq(webhookEndpoints.organisationId, organisationId),

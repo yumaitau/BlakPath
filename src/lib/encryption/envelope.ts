@@ -173,6 +173,11 @@ export function encryptFieldV1(plaintext: string): EncryptedFieldV1 {
   };
 }
 
+/** Platform-key sealer kept for invitation tokens and webhook secrets. */
+export function encryptField(plaintext: string): EncryptedFieldV1 {
+  return encryptFieldV1(plaintext);
+}
+
 /** Migration-only reader. No AAD and no tenant check. Do not use for new data. */
 export function decryptFieldV1(field: EncryptedFieldV1): string {
   const kek = masterKey();
@@ -195,6 +200,14 @@ export function decryptFieldV1(field: EncryptedFieldV1): string {
   } finally {
     dek.fill(0);
   }
+}
+
+/** Opens a platform-key envelope. Tenant envelopes must go through `scopeFor`. */
+export function decryptField(field: EncryptedField): string {
+  if (isEnvelopeV2(field)) {
+    throw new Error('decryptField only opens version 1 envelopes');
+  }
+  return decryptFieldV1(field);
 }
 
 /**

@@ -147,11 +147,17 @@ integration('inventoried columns are tenant ciphertext', () => {
       proposedOutcome: 'confirmed',
       rationale: CANARY.rationale,
     });
+    const webhookId = randomUUID();
+    const sealedWebhookSecret = await runtime.fields.sealWebhookSecret(
+      organisationId,
+      webhookId,
+      CANARY.webhookSecret,
+    );
     await runtime.db.insert(runtime.schema.webhookEndpoints).values({
-      id: randomUUID(),
+      id: webhookId,
       organisationId,
       url: 'https://example.test/hooks',
-      secret: CANARY.webhookSecret,
+      secretCiphertext: sealedWebhookSecret,
     });
     await runtime.db.insert(runtime.schema.consentRecords).values({
       id: randomUUID(),

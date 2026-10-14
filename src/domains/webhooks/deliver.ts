@@ -3,7 +3,7 @@ import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { logger } from '@/lib/observability/logger';
-import { assertWebhookDestinationForCreate, isDestinationRejection } from './destination';
+import { isDestinationRejection } from './destination';
 import { deliverWebhookRequest, deliveryDisposition } from './dispatch';
 import { openWebhookSecret } from './secret';
 import {
