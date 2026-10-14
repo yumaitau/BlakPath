@@ -1,6 +1,8 @@
 import { headers } from 'next/headers';
 import { recordAudit } from '@/domains/audit/service';
 import { resolveBreakGlassContext } from '@/domains/break-glass';
+import { clientIp } from '@/lib/http/client-ip';
+import { currentRequestIds } from '@/lib/observability/correlation';
 import { requirePlatformOperatorIdentity } from '@/lib/http/platform-route';
 import { runWithTenantContext, type TenantContext } from '@/lib/tenancy/context';
 
@@ -19,12 +21,13 @@ export async function withBreakGlassAccess<T>(
 ): Promise<T> {
   const operator = await requirePlatformOperatorIdentity();
   const h = await headers();
+  const bound = currentRequestIds();
   const ctx = await resolveBreakGlassContext({
     requestId,
     userId: operator.userId,
-    correlationId: globalThis.crypto.randomUUID(),
-    reqId: globalThis.crypto.randomUUID(),
-    ipAddress: h.get('x-forwarded-for') ?? undefined,
+    correlationId: bound?.correlationId ?? globalThis.crypto.randomUUID(),
+    reqId: bound?.requestId ?? globalThis.crypto.randomUUID(),
+    ipAddress: clientIp({ headers: h }) ?? undefined,
     userAgent: h.get('user-agent') ?? undefined,
   });
 

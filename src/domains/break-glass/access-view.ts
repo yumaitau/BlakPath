@@ -18,7 +18,7 @@ export interface BreakGlassApplicationView {
 
 export interface BreakGlassEvidenceView {
   id: string;
-  applicationId: string;
+  applicationId: string | null;
   fileName: string;
   status: string;
   classification: string | null;
@@ -49,7 +49,7 @@ export function projectBreakGlassApplication(row: {
 
 export function projectBreakGlassEvidence(row: {
   id: string;
-  applicationId: string;
+  applicationId: string | null;
   fileName: string;
   status: string;
   classification: string | null;

@@ -3,12 +3,17 @@ import {
   TenantBreakGlass,
   type BreakGlassListItem,
 } from '@/components/break-glass/tenant-break-glass';
+import {
+  StaffToolFrame,
+  ToolUnavailable,
+} from '@/components/staff-tools/staff-tool-frame';
 import { listBreakGlassRequests, type BreakGlassRow } from '@/domains/break-glass';
-import { withRequestTenant } from '@/lib/http/tenant-route';
+import { loadToolPage } from '@/lib/staff/load-tool-page';
 
-export const metadata: Metadata = {
-  title: 'Break-glass',
-};
+export const metadata: Metadata = { title: 'Break-glass — BlakPath' };
+
+const description =
+  'Emergency read access for a named support case. Approving it does not decide Aboriginality. After access starts, record a review within 5 business days.';
 
 function serialize(row: BreakGlassRow): BreakGlassListItem {
   return {
@@ -27,36 +32,17 @@ function serialize(row: BreakGlassRow): BreakGlassListItem {
 }
 
 export default async function BreakGlassSettingsPage() {
-  let items: BreakGlassListItem[] = [];
-  let denied = false;
-  try {
-    const rows = await withRequestTenant(() => listBreakGlassRequests());
-    items = rows.map(serialize);
-  } catch {
-    denied = true;
-  }
+  const loaded = await loadToolPage('/settings/break-glass', async () =>
+    (await listBreakGlassRequests()).map(serialize),
+  );
 
   return (
-    <section
-      aria-labelledby="break-glass-heading"
-      className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6"
-    >
-      <h1 id="break-glass-heading" className="text-2xl font-semibold tracking-tight">
-        Break-glass
-      </h1>
-      <p className="text-muted-foreground mt-2 text-sm leading-6">
-        Emergency read access for a named support case. Approving it does not decide
-        Aboriginality. After access starts, record a review within 5 business days.
-      </p>
-      <div className="mt-6">
-        {denied ? (
-          <p className="text-muted-foreground text-sm">
-            You need permission to approve emergency access in this organisation.
-          </p>
-        ) : (
-          <TenantBreakGlass initialItems={items} />
-        )}
-      </div>
-    </section>
+    <StaffToolFrame title="Break-glass" description={description}>
+      {loaded.kind === 'ready' ? (
+        <TenantBreakGlass initialItems={loaded.data} />
+      ) : (
+        <ToolUnavailable kind={loaded.kind} />
+      )}
+    </StaffToolFrame>
   );
 }

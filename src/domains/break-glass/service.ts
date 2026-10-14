@@ -8,7 +8,8 @@ import {
   rolePermissions,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { auditReason } from '@/domains/audit/hash';
+import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import { createNotification } from '@/domains/notifications';
 import { logger } from '@/lib/observability/logger';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
@@ -171,39 +172,45 @@ async function notifyApprovers(input: {
 
 async function auditExpiries(
   rows: readonly { id: string; organisationId: string }[],
+  tx: AuditTransaction,
 ): Promise<void> {
   for (const row of rows) {
-    await recordAudit({
-      action: 'break_glass.expired',
-      resourceType: 'break_glass_request',
-      resourceId: row.id,
-      result: 'success',
-      organisationId: row.organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
-    });
+    await recordAudit(
+      {
+        action: 'break_glass.expired',
+        resourceType: 'break_glass_request',
+        resourceId: row.id,
+        result: 'success',
+        organisationId: row.organisationId,
+        actorUserId: null,
+        actingRole: 'system',
+        sessionId: null,
+      },
+      tx,
+    );
   }
 }
 
 /** Move elapsed active grants to `expired`. System actor, not whoever listed them. */
 async function expireElapsedInTenant(): Promise<void> {
   const scope = currentScope();
-  const stale = await scope.db
-    .update(breakGlassRequests)
-    .set({ status: 'expired' })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.status, 'active'),
-        lt(breakGlassRequests.expiresAt, new Date()),
-      ),
-    )
-    .returning({
-      id: breakGlassRequests.id,
-      organisationId: breakGlassRequests.organisationId,
-    });
-  await auditExpiries(stale);
+  await scope.db.transaction(async (tx) => {
+    const stale = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'expired' })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.status, 'active'),
+          lt(breakGlassRequests.expiresAt, new Date()),
+        ),
+      )
+      .returning({
+        id: breakGlassRequests.id,
+        organisationId: breakGlassRequests.organisationId,
+      });
+    await auditExpiries(stale, tx);
+  });
 }
 
 async function assertNoOverdueReview(organisationId: string): Promise<void> {
@@ -240,32 +247,41 @@ export async function requestBreakGlass(params: {
   }
 
   const expiresAt = new Date(Date.now() + input.expiresInMinutes * 60 * 1000);
-  const inserted = await db
-    .insert(breakGlassRequests)
-    .values({
-      organisationId: input.organisationId,
-      supportCaseRef: input.supportCaseRef,
-      requestedByUserId: params.requestedByUserId,
-      purpose: input.purpose,
-      scope: input.scope,
-      status: 'requested',
-      stepUpVerified: true,
-      expiresAt,
-    })
-    .returning();
-  const row = must(inserted[0], 'break-glass request');
+  const row = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(breakGlassRequests)
+      .values({
+        organisationId: input.organisationId,
+        supportCaseRef: input.supportCaseRef,
+        requestedByUserId: params.requestedByUserId,
+        purpose: input.purpose,
+        scope: input.scope,
+        status: 'requested',
+        stepUpVerified: true,
+        expiresAt,
+      })
+      .returning();
+    const row = must(inserted[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.requested',
-    resourceType: 'break_glass_request',
-    resourceId: row.id,
-    result: 'success',
-    organisationId: input.organisationId,
-    actorUserId: params.requestedByUserId,
-    actingRole: 'platform-operator',
-    sessionId: null,
-    correlationId: params.correlationId,
-    after: { data: { supportCaseRef: input.supportCaseRef }, allow: ['supportCaseRef'] },
+    await recordAudit(
+      {
+        action: 'break_glass.requested',
+        resourceType: 'break_glass_request',
+        resourceId: row.id,
+        result: 'success',
+        organisationId: input.organisationId,
+        actorUserId: params.requestedByUserId,
+        actingRole: 'platform-operator',
+        sessionId: null,
+        correlationId: params.correlationId,
+        after: {
+          data: { supportCaseRef: input.supportCaseRef },
+          allow: ['supportCaseRef'],
+        },
+      },
+      tx,
+    );
+    return row;
   });
 
   try {
@@ -357,34 +373,41 @@ export async function activateBreakGlass(params: {
     throw new BreakGlassNotifyError('Tenant notification could not be sent.');
   }
 
-  const notified = await db
-    .update(breakGlassRequests)
-    .set({ tenantNotifiedAt: new Date() })
-    .where(eq(breakGlassRequests.id, activated.id))
-    .returning();
-  const row = must(notified[0], 'break-glass request');
+  // The grant is not usable until `tenantNotifiedAt` is set (see
+  // resolveBreakGlassContext). Setting it and both audit events commit together.
+  return db.transaction(async (tx) => {
+    const notified = await tx
+      .update(breakGlassRequests)
+      .set({ tenantNotifiedAt: new Date() })
+      .where(eq(breakGlassRequests.id, activated.id))
+      .returning();
+    const row = must(notified[0], 'break-glass request');
 
-  for (const action of [
-    'break_glass.activated',
-    'break_glass.tenant_notified',
-  ] as const) {
-    await recordAudit({
-      action,
-      resourceType: 'break_glass_request',
-      resourceId: row.id,
-      result: 'success',
-      organisationId: row.organisationId,
-      actorUserId: params.activatingUserId,
-      actingRole: 'platform-operator',
-      sessionId: null,
-      correlationId: params.correlationId,
-      after: {
-        data: { reviewDueAt: reviewDueAt.toISOString() },
-        allow: ['reviewDueAt'],
-      },
-    });
-  }
-  return row;
+    for (const action of [
+      'break_glass.activated',
+      'break_glass.tenant_notified',
+    ] as const) {
+      await recordAudit(
+        {
+          action,
+          resourceType: 'break_glass_request',
+          resourceId: row.id,
+          result: 'success',
+          organisationId: row.organisationId,
+          actorUserId: params.activatingUserId,
+          actingRole: 'platform-operator',
+          sessionId: null,
+          correlationId: params.correlationId,
+          after: {
+            data: { reviewDueAt: reviewDueAt.toISOString() },
+            allow: ['reviewDueAt'],
+          },
+        },
+        tx,
+      );
+    }
+    return row;
+  });
 }
 
 /** Grants raised by this operator. No other operator's requests are included. */
@@ -425,25 +448,30 @@ export async function approveBreakGlass(requestId: string): Promise<BreakGlassRo
   assertDifferentActor(ctx.userId, request.requestedByUserId);
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(breakGlassRequests)
-    .set({ status: 'approved', approvedByUserId: ctx.userId })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.id, requestId),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'break-glass request');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'approved', approvedByUserId: ctx.userId })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.id, requestId),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.approved',
-    resourceType: 'break_glass_request',
-    resourceId: requestId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'break_glass.approved',
+        resourceType: 'break_glass_request',
+        resourceId: requestId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function denyBreakGlass(
@@ -461,26 +489,31 @@ export async function denyBreakGlass(
   }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(breakGlassRequests)
-    .set({ status: 'denied' })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.id, requestId),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'break-glass request');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'denied', denialReason: input.reason })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.id, requestId),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.denied',
-    resourceType: 'break_glass_request',
-    resourceId: requestId,
-    result: 'success',
-    reason: input.reason,
+    await recordAudit(
+      {
+        action: 'break_glass.denied',
+        resourceType: 'break_glass_request',
+        resourceId: requestId,
+        result: 'success',
+        reason: auditReason('break_glass.denied', requestId),
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function revokeBreakGlass(requestId: string): Promise<BreakGlassRow> {
@@ -494,25 +527,30 @@ export async function revokeBreakGlass(requestId: string): Promise<BreakGlassRow
   }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(breakGlassRequests)
-    .set({ status: 'revoked', revokedAt: new Date() })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.id, requestId),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'break-glass request');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'revoked', revokedAt: new Date() })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.id, requestId),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.revoked',
-    resourceType: 'break_glass_request',
-    resourceId: requestId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'break_glass.revoked',
+        resourceType: 'break_glass_request',
+        resourceId: requestId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /**
@@ -541,33 +579,39 @@ export async function reviewBreakGlass(
   assertDifferentActor(ctx.userId, request.requestedByUserId);
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(breakGlassRequests)
-    .set({
-      reviewedAt: new Date(),
-      reviewedByUserId: ctx.userId,
-      reviewNotes: input.notes,
-    })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.id, requestId),
-        isNull(breakGlassRequests.reviewedAt),
-      ),
-    )
-    .returning();
-  const row = updated[0];
-  if (!row)
-    throw new AuthorizationError('POLICY_DENIED', 'This request cannot be reviewed.');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({
+        reviewedAt: new Date(),
+        reviewedByUserId: ctx.userId,
+        reviewNotes: input.notes,
+      })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.id, requestId),
+          isNull(breakGlassRequests.reviewedAt),
+        ),
+      )
+      .returning();
+    const row = updated[0];
+    if (!row)
+      throw new AuthorizationError('POLICY_DENIED', 'This request cannot be reviewed.');
 
-  await recordAudit({
-    action: 'break_glass.reviewed',
-    resourceType: 'break_glass_request',
-    resourceId: requestId,
-    result: 'success',
-    reason: input.notes,
+    // The notes stay on the mutable row. The append-only trail gets a code.
+    await recordAudit(
+      {
+        action: 'break_glass.reviewed',
+        resourceType: 'break_glass_request',
+        resourceId: requestId,
+        result: 'success',
+        reason: auditReason('break_glass.reviewed'),
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listBreakGlassRequests(): Promise<BreakGlassRow[]> {
@@ -651,25 +695,32 @@ export async function resolveBreakGlassContext(params: {
     request.expiresAt &&
     request.expiresAt.getTime() <= now.getTime()
   ) {
-    const expired = await db
-      .update(breakGlassRequests)
-      .set({ status: 'expired' })
-      .where(
-        and(
-          eq(breakGlassRequests.id, request.id),
-          eq(breakGlassRequests.status, 'active'),
-        ),
-      )
-      .returning({
-        id: breakGlassRequests.id,
-        organisationId: breakGlassRequests.organisationId,
-      });
-    await auditExpiries(expired);
-    await auditDeniedAccess(request, params, 'grant expired');
+    await db.transaction(async (tx) => {
+      const expired = await tx
+        .update(breakGlassRequests)
+        .set({ status: 'expired' })
+        .where(
+          and(
+            eq(breakGlassRequests.id, request.id),
+            eq(breakGlassRequests.status, 'active'),
+          ),
+        )
+        .returning({
+          id: breakGlassRequests.id,
+          organisationId: breakGlassRequests.organisationId,
+        });
+      await auditExpiries(expired, tx);
+    });
+    await auditDeniedAccess(request, params, 'break_glass.grant_expired');
     throw new BreakGlassError();
   }
-  if (!request || !isLive(request.status as BreakGlassStatus, request.expiresAt, now)) {
-    if (request) await auditDeniedAccess(request, params, 'grant not live');
+  // A grant is usable only once the tenant has been notified of activation.
+  if (
+    !request ||
+    !request.tenantNotifiedAt ||
+    !isLive(request.status as BreakGlassStatus, request.expiresAt, now)
+  ) {
+    if (request) await auditDeniedAccess(request, params, 'break_glass.grant_not_live');
     throw new BreakGlassError();
   }
 

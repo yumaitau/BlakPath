@@ -2,11 +2,14 @@
 
 import { AlertTriangle, Check, Clock, ShieldAlert, X } from 'lucide-react';
 import { useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { withStepUp } from '@/lib/auth/step-up-flow';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 export interface BreakGlassListItem {
   id: string;
@@ -59,13 +62,18 @@ function reviewOverdue(item: BreakGlassListItem): boolean {
   return new Date(item.reviewDueAt).getTime() < Date.now();
 }
 
-async function postJson(url: string, body?: unknown): Promise<string | null> {
-  const init: RequestInit = { method: 'POST' };
-  if (body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' };
-    init.body = JSON.stringify(body);
-  }
-  const response = await fetch(url, init);
+async function postJson(
+  url: string,
+  reauthenticate: () => Promise<boolean>,
+  body?: unknown,
+): Promise<string | null> {
+  // Every mutation is JSON so the cookie-mutation guard accepts it.
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  };
+  const response = await withStepUp(() => fetch(url, init), reauthenticate);
   if (response.ok) return null;
   if (response.status === 401) return 'Sign in again to confirm this action.';
   const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -83,6 +91,9 @@ export function TenantBreakGlass({
   const [error, setError] = useState<string | null>(null);
   const [denyReason, setDenyReason] = useState<Record<string, string>>({});
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const hydrated = useHydrated();
+  const stepUp = useStepUp();
+  const reauthenticate = () => stepUp.request();
 
   async function reload() {
     const response = await fetch('/api/break-glass');
@@ -170,10 +181,10 @@ export function TenantBreakGlass({
                   <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
-                      disabled={busyId === item.id}
+                      disabled={!hydrated || busyId === item.id}
                       onClick={() =>
                         void run(item.id, () =>
-                          postJson(`/api/break-glass/${item.id}/approve`),
+                          postJson(`/api/break-glass/${item.id}/approve`, reauthenticate),
                         )
                       }
                     >
@@ -195,10 +206,10 @@ export function TenantBreakGlass({
                     <Button
                       type="button"
                       variant="destructive"
-                      disabled={busyId === item.id || !(denyReason[item.id] ?? '').trim()}
+                      disabled={!hydrated || busyId === item.id || !(denyReason[item.id] ?? '').trim()}
                       onClick={() =>
                         void run(item.id, () =>
-                          postJson(`/api/break-glass/${item.id}/deny`, {
+                          postJson(`/api/break-glass/${item.id}/deny`, reauthenticate, {
                             reason: denyReason[item.id] ?? '',
                           }),
                         )
@@ -214,10 +225,10 @@ export function TenantBreakGlass({
                 <Button
                   type="button"
                   variant="destructive"
-                  disabled={busyId === item.id}
+                  disabled={!hydrated || busyId === item.id}
                   onClick={() =>
                     void run(item.id, () =>
-                      postJson(`/api/break-glass/${item.id}/revoke`),
+                      postJson(`/api/break-glass/${item.id}/revoke`, reauthenticate),
                     )
                   }
                 >
@@ -231,7 +242,7 @@ export function TenantBreakGlass({
                   onSubmit={(event) => {
                     event.preventDefault();
                     void run(item.id, () =>
-                      postJson(`/api/break-glass/${item.id}/review`, {
+                      postJson(`/api/break-glass/${item.id}/review`, reauthenticate, {
                         notes: reviewNotes[item.id] ?? '',
                       }),
                     );
@@ -253,7 +264,7 @@ export function TenantBreakGlass({
                     Record whether this access matched the support case. Due within 5
                     business days of activation (Australia/Sydney weekdays).
                   </p>
-                  <Button type="submit" disabled={busyId === item.id}>
+                  <Button type="submit" disabled={!hydrated || busyId === item.id}>
                     Record review
                   </Button>
                 </form>
@@ -271,6 +282,7 @@ export function TenantBreakGlass({
           </Card>
         );
       })}
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
     </div>
   );
 }

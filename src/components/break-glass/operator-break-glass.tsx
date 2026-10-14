@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { withStepUp } from '@/lib/auth/step-up-flow';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 export interface OperatorGrantItem {
   id: string;
@@ -48,6 +51,10 @@ export function OperatorBreakGlass({
   const [expiresInMinutes, setExpiresInMinutes] = useState('60');
   const [openGrantId, setOpenGrantId] = useState<string | null>(null);
   const [applications, setApplications] = useState<ApplicationView[]>([]);
+  const hydrated = useHydrated();
+  const stepUp = useStepUp();
+  const reauthenticate = () => stepUp.request();
+  const locked = !hydrated || busy;
 
   async function reload() {
     const response = await fetch('/api/break-glass/mine');
@@ -64,17 +71,21 @@ export function OperatorBreakGlass({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/break-glass', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          organisationId,
-          supportCaseRef,
-          purpose,
-          scope,
-          expiresInMinutes: Number(expiresInMinutes),
-        }),
-      });
+      const response = await withStepUp(
+        () =>
+          fetch('/api/break-glass', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              organisationId,
+              supportCaseRef,
+              purpose,
+              scope,
+              expiresInMinutes: Number(expiresInMinutes),
+            }),
+          }),
+        reauthenticate,
+      );
       if (!response.ok) {
         setError(await readError(response));
         return;
@@ -93,7 +104,15 @@ export function OperatorBreakGlass({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`/api/break-glass/${id}/activate`, { method: 'POST' });
+      const response = await withStepUp(
+        () =>
+          fetch(`/api/break-glass/${id}/activate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }),
+        reauthenticate,
+      );
       if (!response.ok) {
         setError(await readError(response));
         return;
@@ -185,7 +204,7 @@ export function OperatorBreakGlass({
                 required
               />
             </div>
-            <Button type="submit" disabled={busy}>
+            <Button type="submit" disabled={locked}>
               Request access
             </Button>
           </form>
@@ -213,7 +232,7 @@ export function OperatorBreakGlass({
                 {item.status === 'approved' ? (
                   <Button
                     type="button"
-                    disabled={busy}
+                    disabled={locked}
                     onClick={() => void activate(item.id)}
                   >
                     Activate
@@ -223,7 +242,7 @@ export function OperatorBreakGlass({
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={busy}
+                    disabled={locked}
                     onClick={() => void openAccess(item.id)}
                   >
                     Read applications
@@ -250,6 +269,7 @@ export function OperatorBreakGlass({
           </Card>
         ))}
       </div>
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
     </div>
   );
 }

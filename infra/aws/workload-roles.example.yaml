@@ -1,108 +1,305 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Least-privilege BlakPath ECS workload roles with no standing access keys.
+Description: >
+  Least-privilege BlakPath EKS Pod Identity roles. Web and worker only.
+  ClamAV and migrate have no role. No standing access keys. Reviewed in
+  infra/aws/unused-access-review.md. Mail send is attached by
+  eks-boundary.example.yaml (one From address).
 
 Parameters:
+  ClusterName:
+    Type: String
+    Description: EKS cluster name. Trust policy pins eks-cluster-name to this value.
   EvidenceBucketArn:
     Type: String
   QuarantineBucketArn:
     Type: String
   EvidenceKmsKeyArn:
     Type: String
-  RuntimeSecretArn:
+    Description: CMK used for SSE-KMS on both buckets (alias/blakpath-prod-evidence).
+  CoaSigningKeyArn:
     Type: String
-  RuntimeSecretKmsKeyArn:
+    Description: Asymmetric SIGN_VERIFY CMK (alias/blakpath-coa-signing). Web only.
+  AuditAnchorBucketArn:
+    Type: String
+  AuditAnchorSigningKeyArn:
+    Type: String
+    Description: Asymmetric SIGN_VERIFY CMK for daily audit anchors. Worker only.
+  # Informational. Tenant and platform envelope calls are authorised by the
+  # encryption-context condition below, because BYOK / XKS ARNs are not known
+  # when this role is deployed. The customer key policy must grant these roles
+  # kms:Decrypt, kms:Encrypt, kms:GenerateDataKey and kms:DescribeKey.
+  # DescribeKey has no encryption context, so it is a separate statement on
+  # the worker role only. S3 object encryption uses the tenant CMK via
+  # kms:ViaService, not the purpose condition.
+  PlatformKmsKeyArn:
     Type: String
 
 Resources:
-  WebTaskRole:
+  WebWorkloadRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: blakpath-web
+      Description: BlakPath web. Certificate signing and reads. Cannot delete evidence.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
+          - Sid: AllowEksAuthToAssumeRoleForPodIdentity
+            Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            # Session tags stay enabled on the association. A mismatch fails closed.
+            Condition:
+              StringEquals:
+                'aws:RequestTag/kubernetes-namespace': blakpath
+                'aws:RequestTag/kubernetes-service-account': blakpath-web
+                'aws:RequestTag/eks-cluster-name': !Ref ClusterName
       Policies:
-        - PolicyName: BlakPathWebEvidenceAccess
+        - PolicyName: BlakPathWeb
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: BucketReadiness
+              - Sid: EvidenceBucketReadiness
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: [!Ref EvidenceBucketArn]
-              - Sid: QuarantineUploads
+                Resource: !Ref EvidenceBucketArn
+              - Sid: QuarantinePresign
                 Effect: Allow
                 Action: s3:PutObject
-                Resource: [!Sub '${QuarantineBucketArn}/*']
-              - Sid: CleanEvidenceDownloads
+                Resource: !Sub '${QuarantineBucketArn}/*/applications/*/evidence/*'
+              - Sid: CertificatePdfWrite
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${EvidenceBucketArn}/*/certificates/*'
+              - Sid: EvidenceRead
                 Effect: Allow
                 Action: s3:GetObject
-                Resource: [!Sub '${EvidenceBucketArn}/*']
-              - Sid: EvidenceKms
+                Resource:
+                  - !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+                  - !Sub '${EvidenceBucketArn}/*/certificates/*'
+                  - !Sub '${EvidenceBucketArn}/*/exports/*'
+              - Sid: EvidenceKmsViaS3
                 Effect: Allow
-                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
-                Resource: [!Ref EvidenceKmsKeyArn]
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref EvidenceKmsKeyArn
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+              - Sid: CoaSignAndPublicKey
+                Effect: Allow
+                Action:
+                  - kms:Sign
+                  - kms:GetPublicKey
+                Resource: !Ref CoaSigningKeyArn
+              - Sid: PlatformEnvelopeKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref PlatformKmsKeyArn
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
+                      - blind-index
+                      - key_validation
+                      # Wrap-and-unwrap check from Settings → Encryption keys.
+                      # Web only; no record data is wrapped under it.
+                      - key_health
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
+              - Sid: DenyEvidenceDelete
+                Effect: Deny
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: !Sub '${EvidenceBucketArn}/*'
 
-  WorkerTaskRole:
+  WorkerWorkloadRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: blakpath-worker
+      Description: >
+        BlakPath worker. Evidence lifecycle, key rewrap, audit anchors and queued
+        mail. Cannot kms:Sign anything except the audit anchor key.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
+          - Sid: AllowEksAuthToAssumeRoleForPodIdentity
+            Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Condition:
+              StringEquals:
+                'aws:RequestTag/kubernetes-namespace': blakpath
+                'aws:RequestTag/kubernetes-service-account': blakpath-worker
+                'aws:RequestTag/eks-cluster-name': !Ref ClusterName
       Policies:
-        - PolicyName: BlakPathWorkerEvidenceLifecycle
+        - PolicyName: BlakPathWorker
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: BucketReadiness
+              - Sid: QuarantineScan
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: !Sub '${QuarantineBucketArn}/*/applications/*/evidence/*'
+              - Sid: EvidencePromoteAndExport
+                Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  - !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+                  - !Sub '${EvidenceBucketArn}/*/exports/*'
+              # Tenant key rewrap copies each evidence object onto itself.
+              - Sid: EvidenceRewrapRead
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+              # Retention removes every version of a purged key. On a versioned
+              # bucket s3:DeleteObject alone only writes a delete marker.
+              - Sid: EvidenceRetentionDelete
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+              - Sid: RetentionVersionList
+                Effect: Allow
+                Action: s3:ListBucketVersions
+                Resource:
+                  - !Ref EvidenceBucketArn
+                  - !Ref QuarantineBucketArn
+              - Sid: EvidenceKmsViaS3
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref EvidenceKmsKeyArn
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+              - Sid: AuditAnchorList
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: [!Ref EvidenceBucketArn, !Ref QuarantineBucketArn]
-              - Sid: QuarantineReadDelete
+                Resource: !Ref AuditAnchorBucketArn
+              - Sid: AuditAnchorObjects
                 Effect: Allow
-                Action: [s3:GetObject, s3:DeleteObject]
-                Resource: [!Sub '${QuarantineBucketArn}/*']
-              - Sid: EvidencePromote
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub '${AuditAnchorBucketArn}/*'
+              - Sid: AuditAnchorSign
                 Effect: Allow
-                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
-                Resource: [!Sub '${EvidenceBucketArn}/*']
-              - Sid: EvidenceKms
+                Action:
+                  - kms:Sign
+                  - kms:GetPublicKey
+                  - kms:DescribeKey
+                Resource: !Ref AuditAnchorSigningKeyArn
+              - Sid: AuditAnchorNoDelete
+                Effect: Deny
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:BypassGovernanceRetention
+                Resource:
+                  - !Ref AuditAnchorBucketArn
+                  - !Sub '${AuditAnchorBucketArn}/*'
+              - Sid: PlatformEnvelopeKey
                 Effect: Allow
-                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
-                Resource: [!Ref EvidenceKmsKeyArn]
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref PlatformKmsKeyArn
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
+                      - blind-index
+                      - key_validation
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
+              - Sid: TenantKeyDescribe
+                Effect: Allow
+                Action: kms:DescribeKey
+                Resource: '*'
+              # Certificates are signed by web. The only key this role may sign
+              # with is the audit anchor key, even if a later statement allows more.
+              - Sid: DenyCoaSigning
+                Effect: Deny
+                Action: kms:Sign
+                NotResource: !Ref AuditAnchorSigningKeyArn
 
-  TaskExecutionRole:
-    Type: AWS::IAM::Role
+  WebPodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-      Policies:
-        - PolicyName: ReadRuntimeSecret
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: [!Ref RuntimeSecretArn]
-              - Effect: Allow
-                Action: kms:Decrypt
-                Resource: [!Ref RuntimeSecretKmsKeyArn]
+      ClusterName: !Ref ClusterName
+      Namespace: blakpath
+      ServiceAccount: blakpath-web
+      RoleArn: !GetAtt WebWorkloadRole.Arn
+
+  WorkerPodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: blakpath
+      ServiceAccount: blakpath-worker
+      RoleArn: !GetAtt WorkerWorkloadRole.Arn
 
 Outputs:
-  WebTaskRoleArn:
-    Value: !GetAtt WebTaskRole.Arn
-  WorkerTaskRoleArn:
-    Value: !GetAtt WorkerTaskRole.Arn
-  TaskExecutionRoleArn:
-    Value: !GetAtt TaskExecutionRole.Arn
+  WebRoleArn:
+    Value: !GetAtt WebWorkloadRole.Arn
+  WorkerRoleArn:
+    Value: !GetAtt WorkerWorkloadRole.Arn
+  WebPodIdentityAssociationArn:
+    Value: !GetAtt WebPodIdentity.AssociationArn
+  WorkerPodIdentityAssociationArn:
+    Value: !GetAtt WorkerPodIdentity.AssociationArn
