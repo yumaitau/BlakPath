@@ -87,6 +87,7 @@ Resources:
       ConfigurationSetAttributes:
         ConfigurationSetName: !Ref ConfigurationSet
 
+  # trivy:ignore:AWS-0095 KmsMasterKeyId is the EventsTopicKmsKeyArn parameter, which Trivy cannot resolve.
   EventsTopic:
     Type: AWS::SNS::Topic
     Properties:
