@@ -10,6 +10,7 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { cn } from '@/lib/utils';
 
 /**
@@ -190,6 +191,13 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
         setSubmit({ status: 'done' });
         // Move focus to the confirmation so screen readers announce it.
         requestAnimationFrame(() => successRef.current?.focus());
+        return;
+      }
+
+      const conflict = await readConflictMessage(res);
+      if (conflict) {
+        setSubmit({ status: 'error', message: conflict });
+        requestAnimationFrame(() => errorRef.current?.focus());
         return;
       }
 

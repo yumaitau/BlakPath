@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import {
+  beforeConditionalWrite,
+  nextRowVersion,
+  takeVersionText,
+  versionedSelection,
+  versionMatches,
+} from '@/lib/concurrency/claim';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
@@ -69,13 +77,24 @@ function hashToken(token: string): string {
 }
 
 async function loadForm(id: string): Promise<FormRow | null> {
+  const loaded = await loadFormClaim(id);
+  return loaded?.row ?? null;
+}
+
+async function loadFormClaim(
+  id: string,
+): Promise<{ row: FormRow; versionText: string } | null> {
   const scope = currentScope();
   const rows = await scope.db
-    .select()
+    .select(versionedSelection(forms))
     .from(forms)
     .where(scope.where(forms.organisationId, eq(forms.id, id), isNull(forms.deletedAt)))
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) return null;
+  const split = takeVersionText(owned);
+  if (!split) return null;
+  return { row: split.record as FormRow, versionText: split.versionText };
 }
 
 /* ---------------------------------------------------------------------------
@@ -155,15 +174,29 @@ async function setFormStatus(
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
 
-  const existing = await loadForm(formId);
-  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadFormClaim(formId);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const existing = loaded.row;
 
   const scope = currentScope();
+  await beforeConditionalWrite();
   const updated = await scope.db
     .update(forms)
-    .set({ status })
-    .where(scope.where(forms.organisationId, eq(forms.id, formId)))
+    .set({ status, version: nextRowVersion() })
+    .where(
+      scope.where(
+        forms.organisationId,
+        eq(forms.id, formId),
+        eq(forms.status, existing.status),
+        versionMatches(forms.version, loaded.versionText),
+      ),
+    )
     .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError(
+      'This form changed while you were working. Refresh and try again.',
+    );
+  }
   const row = must(updated[0], 'form');
 
   await recordAudit({
@@ -282,13 +315,35 @@ export async function revokeInvitation(
   requireAny(subjectFromContext(ctx), FORM_MANAGE);
 
   const scope = currentScope();
+  const existingRows = await scope.db
+    .select({
+      id: formInvitations.id,
+      status: formInvitations.status,
+      organisationId: formInvitations.organisationId,
+    })
+    .from(formInvitations)
+    .where(
+      scope.where(formInvitations.organisationId, eq(formInvitations.id, invitationId)),
+    )
+    .limit(1);
+  const existing = scope.assertOwned(existingRows[0]);
+  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+
+  await beforeConditionalWrite();
   const updated = await scope.db
     .update(formInvitations)
     .set({ status: 'revoked' })
     .where(
-      scope.where(formInvitations.organisationId, eq(formInvitations.id, invitationId)),
+      scope.where(
+        formInvitations.organisationId,
+        eq(formInvitations.id, invitationId),
+        inArray(formInvitations.status, ['pending', 'opened']),
+      ),
     )
     .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError('This invitation can no longer be revoked.');
+  }
   const row = must(updated[0], 'invitation');
 
   await recordAudit({
@@ -397,20 +452,26 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
   const { invitation, form } = await resolveUsableInvitation(token);
 
   if (invitation.status === 'pending') {
-    await db
+    // Status predicate stops a late "opened" write from clobbering `completed`.
+    const opened = await db
       .update(formInvitations)
       .set({ status: 'opened', openedAt: new Date() })
-      .where(eq(formInvitations.id, invitation.id));
-    await recordAudit({
-      action: 'form.invitation_opened',
-      resourceType: 'form_invitation',
-      resourceId: invitation.id,
-      result: 'success',
-      organisationId: invitation.organisationId,
-      actorUserId: null,
-      actingRole: 'public',
-      sessionId: null,
-    });
+      .where(
+        and(eq(formInvitations.id, invitation.id), eq(formInvitations.status, 'pending')),
+      )
+      .returning({ id: formInvitations.id });
+    if (opened.length > 0) {
+      await recordAudit({
+        action: 'form.invitation_opened',
+        resourceType: 'form_invitation',
+        resourceId: invitation.id,
+        result: 'success',
+        organisationId: invitation.organisationId,
+        actorUserId: null,
+        actingRole: 'public',
+        sessionId: null,
+      });
+    }
   }
 
   return {
@@ -445,22 +506,37 @@ export async function submitPublicResponse(
     answers: parsed.data,
     respondentEmail: invitation.recipientEmail,
   });
-  await scope.db.insert(formResponses).values(
-    scope.insertValues({
-      id: responseId,
-      formId: form.id,
-      invitationId: invitation.id,
-      answers: sealed.answers,
-      respondentName: invitation.recipientName,
-      respondentEmail: sealed.respondentEmail,
-      ipAddress: ipAddress ?? null,
-    }),
-  );
+  // Claim the single-use token before inserting. Two submits can both pass
+  // the earlier read; only one update matches pending/opened.
+  await scope.db.transaction(async (tx) => {
+    await beforeConditionalWrite();
+    const claimed = await tx
+      .update(formInvitations)
+      .set({ status: 'completed', completedAt: new Date() })
+      .where(
+        and(
+          eq(formInvitations.id, invitation.id),
+          eq(formInvitations.organisationId, invitation.organisationId),
+          inArray(formInvitations.status, ['pending', 'opened']),
+        ),
+      )
+      .returning({ id: formInvitations.id });
+    if (claimed.length === 0) {
+      throw new ConcurrencyConflictError('This form was already submitted.');
+    }
 
-  await db
-    .update(formInvitations)
-    .set({ status: 'completed', completedAt: new Date() })
-    .where(eq(formInvitations.id, invitation.id));
+    await tx.insert(formResponses).values(
+      scope.insertValues({
+        id: responseId,
+        formId: form.id,
+        invitationId: invitation.id,
+        answers: sealed.answers,
+        respondentName: invitation.recipientName,
+        respondentEmail: sealed.respondentEmail,
+        ipAddress: ipAddress ?? null,
+      }),
+    );
+  });
 
   await recordAudit({
     action: 'form.response_submitted',

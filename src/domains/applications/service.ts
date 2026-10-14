@@ -2,6 +2,14 @@ import { and, desc, eq, exists, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import type { Database } from '@/db/client';
 import {
+  beforeConditionalWrite,
+  nextRowVersion,
+  takeVersionText,
+  versionedSelection,
+  versionMatches,
+} from '@/lib/concurrency/claim';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
+import {
   applications,
   applicationAssignments,
   applicationNotes,
@@ -133,27 +141,37 @@ function liveApplication(where: SQL): SQL {
   return and(where, isNull(applications.deletedAt)) as SQL;
 }
 
-/** Load a single application within scope, or return null. */
-async function loadApplicationOn(
+/**
+ * Load a single application within scope plus the exact `version` text a
+ * conditional update must match, or return null. One statement so status and
+ * version cannot diverge between queries.
+ */
+async function loadApplicationClaimOn(
   executor: DbExecutor,
   id: string,
-): Promise<ApplicationRow | null> {
+): Promise<{ row: ApplicationRow; versionText: string } | null> {
   const scope = currentScope();
   const rows = await executor
-    .select()
+    .select(versionedSelection(applications))
     .from(applications)
     .where(
       liveApplication(scope.where(applications.organisationId, eq(applications.id, id))),
     )
     .limit(1);
-  const row = scope.assertOwned(rows[0]) ?? null;
-  if (!row) return null;
-  const [opened] = await openApplicationRows(scope.organisationId, [row]);
-  return opened ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) return null;
+  const split = takeVersionText(owned);
+  if (!split) return null;
+  const [opened] = await openApplicationRows(scope.organisationId, [
+    split.record as ApplicationRow,
+  ]);
+  return opened ? { row: opened, versionText: split.versionText } : null;
 }
 
+/** Load a single application within scope, or return null. */
 async function loadApplication(id: string): Promise<ApplicationRow | null> {
-  return loadApplicationOn(currentScope().db, id);
+  const loaded = await loadApplicationClaimOn(currentScope().db, id);
+  return loaded?.row ?? null;
 }
 
 /** Load the user ids with an ACTIVE assignment on an application. */
@@ -557,8 +575,9 @@ export async function applyApplicationTransition(
   requireAny(subject, permissionsForAction(action));
 
   const input = transitionApplicationSchema.parse(rawInput);
-  const existing = await loadApplicationOn(executor, id);
-  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadApplicationClaimOn(executor, id);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const existing = loaded.row;
 
   const from = existing.status as ApplicationStatus;
   const to = nextStatus(action, from);
@@ -575,11 +594,28 @@ export async function applyApplicationTransition(
   if (action === 'close') patch.closedAt = now;
 
   const note = input.note ?? null;
+  // Both racers pass the in-memory check. Only the update whose status and
+  // version still match the read may write; the loser throws and rolls back
+  // the caller's transaction, so status history cannot gain a second row for
+  // the same move.
+  await beforeConditionalWrite();
   const updated = await executor
     .update(applications)
-    .set(patch)
-    .where(scope.where(applications.organisationId, eq(applications.id, id)))
+    .set({ ...patch, version: nextRowVersion() })
+    .where(
+      scope.where(
+        applications.organisationId,
+        eq(applications.id, id),
+        eq(applications.status, from),
+        versionMatches(applications.version, loaded.versionText),
+      ),
+    )
     .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError(
+      'This application changed while you were working. Refresh and try again.',
+    );
+  }
 
   const history = await executor
     .insert(applicationStatusHistory)
