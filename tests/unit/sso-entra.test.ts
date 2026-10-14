@@ -272,9 +272,14 @@ describe('entra provider', () => {
 
   it('rejects a tampered transaction', async () => {
     const flow = await startFlow();
-    await expect(
-      complete(flow, { transaction: `${flow.transaction.slice(0, -2)}AA` }),
-    ).rejects.toThrow(/transaction/);
+    // Flip a character in the middle: the last base64url character can carry
+    // only padding bits, so changing it may not change the decoded bytes.
+    const at = Math.floor(flow.transaction.length / 2);
+    const swapped = flow.transaction[at] === 'A' ? 'B' : 'A';
+    const tampered = `${flow.transaction.slice(0, at)}${swapped}${flow.transaction.slice(at + 1)}`;
+    await expect(complete(flow, { transaction: tampered })).rejects.toThrow(
+      /transaction/,
+    );
   });
 
   it('rejects organisation, issuer and client mismatches', async () => {
