@@ -4,6 +4,7 @@ import {
   applicationNotes,
   applications,
   clients,
+  conflictDeclarations,
   consentRecords,
   decisions,
   encryptionBackfillRuns,
@@ -44,6 +45,7 @@ const ORDER = [
   'form_responses',
   'clients',
   'decisions',
+  'conflict_declarations',
   'webhook_endpoints',
   'consent_records',
   'membership_invitations',
@@ -228,6 +230,7 @@ async function backfillFamily(
       relativeName: familyLinks.relativeName,
       community: familyLinks.community,
       notes: familyLinks.notes,
+      decisionNote: familyLinks.decisionNote,
     })
     .from(familyLinks)
     .where(
@@ -243,7 +246,9 @@ async function backfillFamily(
     const nameReady = isTenantCiphertext(row.relativeName);
     const communityReady = row.community == null || isTenantCiphertext(row.community);
     const notesReady = row.notes == null || isTenantCiphertext(row.notes);
-    if (nameReady && communityReady && notesReady) continue;
+    const decisionNoteReady =
+      row.decisionNote == null || isTenantCiphertext(row.decisionNote);
+    if (nameReady && communityReady && notesReady && decisionNoteReady) continue;
     const name = nameReady
       ? row.relativeName
       : ((
@@ -265,9 +270,18 @@ async function backfillFamily(
     const notes = notesReady
       ? row.notes
       : (await resaveText(scope, bind('family_links', 'notes', row.id), row.notes)).value;
+    const decisionNote = decisionNoteReady
+      ? row.decisionNote
+      : (
+          await resaveText(
+            scope,
+            bind('family_links', 'decision_note', row.id),
+            row.decisionNote,
+          )
+        ).value;
     await tenant.db
       .update(familyLinks)
-      .set({ relativeName: name, community, notes })
+      .set({ relativeName: name, community, notes, decisionNote })
       .where(
         and(eq(familyLinks.organisationId, organisationId), eq(familyLinks.id, row.id)),
       );
@@ -415,6 +429,47 @@ async function backfillDecisions(
       .update(decisions)
       .set({ rationale: saved.value })
       .where(and(eq(decisions.organisationId, organisationId), eq(decisions.id, row.id)));
+    count += 1;
+  }
+  return { count, lastId: rows.at(-1)?.id ?? null, full: rows.length === BATCH };
+}
+
+/** Conflict reasons written before they were sealed. Later columns are sealed on write. */
+async function backfillConflicts(
+  organisationId: string,
+  afterId: string | null,
+  scope: EncryptionScope,
+): Promise<Step> {
+  const tenant = tenantScope(organisationId);
+  const rows = await tenant.db
+    .select({ id: conflictDeclarations.id, reason: conflictDeclarations.reason })
+    .from(conflictDeclarations)
+    .where(
+      tenant.where(
+        conflictDeclarations.organisationId,
+        afterId ? gt(conflictDeclarations.id, afterId) : undefined,
+      ),
+    )
+    .orderBy(asc(conflictDeclarations.id))
+    .limit(BATCH);
+  let count = 0;
+  for (const row of rows) {
+    if (row.reason == null || isTenantCiphertext(row.reason)) continue;
+    const saved = await resaveText(
+      scope,
+      bind('conflict_declarations', 'reason', row.id),
+      row.reason,
+    );
+    if (!saved.changed || saved.value === null) continue;
+    await tenant.db
+      .update(conflictDeclarations)
+      .set({ reason: saved.value })
+      .where(
+        and(
+          eq(conflictDeclarations.organisationId, organisationId),
+          eq(conflictDeclarations.id, row.id),
+        ),
+      );
     count += 1;
   }
   return { count, lastId: rows.at(-1)?.id ?? null, full: rows.length === BATCH };
@@ -639,6 +694,8 @@ async function runStep(
       return backfillClients(organisationId, afterId, scope);
     case 'decisions':
       return backfillDecisions(organisationId, afterId, scope);
+    case 'conflict_declarations':
+      return backfillConflicts(organisationId, afterId, scope);
     case 'webhook_endpoints':
       return backfillWebhooks(organisationId, afterId, scope);
     case 'consent_records':
@@ -705,50 +762,60 @@ export async function runBackfillBatch(
       scope,
     );
     const moved = advance(position.table, step);
-    const updated = await db
-      .update(encryptionBackfillRuns)
-      .set({
-        cursor: moved.cursor,
-        rowsEncrypted: sql`${encryptionBackfillRuns.rowsEncrypted} + ${step.count}`,
-        status: moved.done ? 'completed' : 'running',
-        finishedAt: moved.done ? new Date() : null,
-      })
-      .where(eq(encryptionBackfillRuns.id, run.id))
-      .returning({ rowsEncrypted: encryptionBackfillRuns.rowsEncrypted });
-    if (step.count > 0) {
-      await recordAudit({
-        action: 'encryption.backfill_batch',
-        resourceType: 'organisation',
-        resourceId: input.organisationId,
-        result: 'success',
-        organisationId: input.organisationId,
-        actorUserId: null,
-        actingRole: 'system',
-        sessionId: null,
-        correlationId: input.correlationId,
-        after: {
-          data: { table: position.table, rowsEncrypted: step.count },
-          allow: ['table', 'rowsEncrypted'],
-        },
-      });
-    }
-    if (moved.done) {
-      await recordAudit({
-        action: 'encryption.backfill_completed',
-        resourceType: 'organisation',
-        resourceId: input.organisationId,
-        result: 'success',
-        organisationId: input.organisationId,
-        actorUserId: null,
-        actingRole: 'system',
-        sessionId: null,
-        correlationId: input.correlationId,
-        after: {
-          data: { rowsEncrypted: updated[0]?.rowsEncrypted ?? step.count },
-          allow: ['rowsEncrypted'],
-        },
-      });
-    }
+    // Progress and its audit commit together. The re-sealed rows above are
+    // idempotent, so a rolled-back batch is simply redone from the old cursor.
+    await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(encryptionBackfillRuns)
+        .set({
+          cursor: moved.cursor,
+          rowsEncrypted: sql`${encryptionBackfillRuns.rowsEncrypted} + ${step.count}`,
+          status: moved.done ? 'completed' : 'running',
+          finishedAt: moved.done ? new Date() : null,
+        })
+        .where(eq(encryptionBackfillRuns.id, run.id))
+        .returning({ rowsEncrypted: encryptionBackfillRuns.rowsEncrypted });
+      if (step.count > 0) {
+        await recordAudit(
+          {
+            action: 'encryption.backfill_batch',
+            resourceType: 'organisation',
+            resourceId: input.organisationId,
+            result: 'success',
+            organisationId: input.organisationId,
+            actorUserId: null,
+            actingRole: 'system',
+            sessionId: null,
+            correlationId: input.correlationId,
+            after: {
+              data: { table: position.table, rowsEncrypted: step.count },
+              allow: ['table', 'rowsEncrypted'],
+            },
+          },
+          tx,
+        );
+      }
+      if (moved.done) {
+        await recordAudit(
+          {
+            action: 'encryption.backfill_completed',
+            resourceType: 'organisation',
+            resourceId: input.organisationId,
+            result: 'success',
+            organisationId: input.organisationId,
+            actorUserId: null,
+            actingRole: 'system',
+            sessionId: null,
+            correlationId: input.correlationId,
+            after: {
+              data: { rowsEncrypted: updated[0]?.rowsEncrypted ?? step.count },
+              allow: ['rowsEncrypted'],
+            },
+          },
+          tx,
+        );
+      }
+    });
     return {
       done: moved.done,
       cursor: moved.cursor,

@@ -11,6 +11,7 @@ vi.mock('@/lib/auth/session', async () => {
 import { StepUpRequiredError } from '@/lib/auth/session';
 import { POST as revokeCertificate } from '@/app/api/certificates/[id]/revoke/route';
 import { GET as downloadEvidence } from '@/app/api/evidence/[id]/download/route';
+import { GET as readMeetingPack } from '@/app/api/meetings/[id]/pack/route';
 import { POST as denyBreakGlass } from '@/app/api/break-glass/[id]/deny/route';
 import { POST as revokeBreakGlass } from '@/app/api/break-glass/[id]/revoke/route';
 import { POST as createKey } from '@/app/api/keys/route';
@@ -20,6 +21,9 @@ import { DELETE as releaseHold } from '@/app/api/retention/holds/[id]/route';
 import { DELETE as deletePolicy } from '@/app/api/retention/policies/[id]/route';
 import { POST as createSso } from '@/app/api/sso/providers/route';
 import { POST as createWebhook } from '@/app/api/webhooks/route';
+import { POST as sendLetter } from '@/app/api/applications/[id]/correspondence/[correspondenceId]/send/route';
+import { POST as notifyEvidenceRequest } from '@/app/api/applications/[id]/evidence-requests/[requestId]/notify/route';
+import { POST as redeliverWebhook } from '@/app/api/webhooks/[id]/deliveries/[deliveryId]/redeliver/route';
 
 const params = {
   params: Promise.resolve({ id: '00000000-0000-7000-8000-000000000001' }),
@@ -60,11 +64,48 @@ describe('listed routes require a fresh session', () => {
       STEP_UP_ROUTES['POST /api/certificates/[id]/revoke'],
     );
     requireRecentAuth.mockClear();
+    await expectStale(
+      readMeetingPack(new Request('http://localhost/pack'), params),
+      STEP_UP_ROUTES['GET /api/meetings/[id]/pack'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      sendLetter(post(), {
+        params: Promise.resolve({
+          id: '00000000-0000-7000-8000-000000000001',
+          correspondenceId: '00000000-0000-7000-8000-000000000002',
+        }),
+      }),
+      STEP_UP_ROUTES[
+        'POST /api/applications/[id]/correspondence/[correspondenceId]/send'
+      ],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      notifyEvidenceRequest(post(), {
+        params: Promise.resolve({
+          id: '00000000-0000-7000-8000-000000000001',
+          requestId: '00000000-0000-7000-8000-000000000002',
+        }),
+      }),
+      STEP_UP_ROUTES['POST /api/applications/[id]/evidence-requests/[requestId]/notify'],
+    );
+    requireRecentAuth.mockClear();
     await expectStale(createKey(post() as never), STEP_UP_ROUTES['POST /api/keys']);
     requireRecentAuth.mockClear();
     await expectStale(
       createWebhook(post() as never),
       STEP_UP_ROUTES['POST /api/webhooks'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      redeliverWebhook(post() as never, {
+        params: Promise.resolve({
+          id: '00000000-0000-7000-8000-000000000001',
+          deliveryId: '00000000-0000-7000-8000-000000000002',
+        }),
+      }),
+      STEP_UP_ROUTES['POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver'],
     );
     requireRecentAuth.mockClear();
     await expectStale(

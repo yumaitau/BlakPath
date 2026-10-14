@@ -32,7 +32,7 @@ vi.mock('@/db/client', () => {
 const { resolveApiKeyContext, ApiKeyError } = await import('@/domains/api-keys/resolve');
 const { OrganisationUnavailableError } =
   await import('@/lib/tenancy/organisation-status');
-const { apiErrorResponse } = await import('@/lib/http/api-route');
+const { errorResponse } = await import('@/lib/http/error-response');
 
 const trace = { correlationId: 'corr-1', requestId: 'req-1' };
 const keyRow = {
@@ -58,7 +58,7 @@ describe('resolveApiKeyContext organisation status', () => {
   });
 
   it('maps that refusal to 403', () => {
-    const response = apiErrorResponse(new OrganisationUnavailableError());
+    const response = errorResponse(new OrganisationUnavailableError());
     expect(response.status).toBe(403);
   });
 

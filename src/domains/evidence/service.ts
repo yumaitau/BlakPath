@@ -3,7 +3,11 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { evidence, evidenceRequests } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
-import { recordAudit, type AuditMetaInput } from '@/domains/audit/service';
+import {
+  recordAudit,
+  type AuditMetaInput,
+  type AuditTransaction,
+} from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -194,13 +198,48 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
   const problem = quarantineUploadProblem(existing.sizeBytes, head);
   if (problem) throw new EvidenceUploadIncompleteError(problem);
 
-  const updated = await scope.db
-    .update(evidence)
-    .set({ status: 'quarantined' })
-    .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
-    .returning();
-  const row = must(updated[0], 'evidence');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({ status: 'quarantined' })
+      .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
+      .returning();
+    const saved = must(updated[0], 'evidence');
 
+    const after: { data: Record<string, unknown>; allow: string[] } = {
+      data: { applicationId: saved.applicationId },
+      allow: ['applicationId'],
+    };
+    // Coded channel and civil date only. Never the file name or free text.
+    if (saved.receiptChannel) {
+      after.data.receiptChannel = saved.receiptChannel;
+      after.data.receivedOn = saved.receivedOn;
+      after.allow.push('receiptChannel', 'receivedOn');
+    }
+    await recordAudit(
+      {
+        action: 'evidence.uploaded',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+        after,
+      },
+      tx,
+    );
+    await recordAudit(
+      {
+        action: 'evidence.scan_started',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+      },
+      tx,
+    );
+    return saved;
+  });
+
+  // Enqueue only after the quarantine and its audit have committed. A lost
+  // enqueue is redriven by the stuck-scan sweeper.
   await enqueueMalwareScan({
     organisationId: scope.organisationId,
     correlationId: ctx.correlationId,
@@ -208,31 +247,188 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     jobId: evidenceId,
   });
 
-  const after: { data: Record<string, unknown>; allow: string[] } = {
-    data: { applicationId: row.applicationId },
-    allow: ['applicationId'],
-  };
-  // Coded channel and civil date only. Never the file name or free text.
-  if (row.receiptChannel) {
-    after.data.receiptChannel = row.receiptChannel;
-    after.data.receivedOn = row.receivedOn;
-    after.allow.push('receiptChannel', 'receivedOn');
-  }
-  await recordAudit({
-    action: 'evidence.uploaded',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-    after,
+  return row;
+}
+
+/**
+ * Start a public form file upload. The caller has already resolved the
+ * invitation token. Bytes are presigned into quarantine, same as a case upload.
+ * `applicationId` is set only when the form is already linked to a case in the
+ * same organisation; otherwise the row waits on `formInvitationId` until staff
+ * link the response.
+ */
+export async function requestFormFileUpload(input: {
+  organisationId: string;
+  applicationId: string | null;
+  formInvitationId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+}): Promise<{ evidence: EvidenceRow; upload: PresignedUpload }> {
+  const scope = scopeFor(input.organisationId);
+  const id = uuidv7();
+  const key = objectKey(
+    scope.organisationId,
+    ...(input.applicationId
+      ? (['applications', input.applicationId, 'evidence', id] as const)
+      : (['forms', input.formInvitationId, 'evidence', id] as const)),
+  );
+
+  const inserted = await scope.db
+    .insert(evidence)
+    .values(
+      scope.insertValues({
+        id,
+        applicationId: input.applicationId,
+        formInvitationId: input.formInvitationId,
+        uploadedByUserId: null,
+        fileName: input.fileName,
+        declaredContentType: input.contentType,
+        sizeBytes: input.sizeBytes,
+        status: 'pending',
+        quarantineKey: key,
+      }),
+    )
+    .returning();
+  const row = must(inserted[0], 'evidence');
+
+  const upload = await presignUpload({
+    organisationId: scope.organisationId,
+    key,
+    contentType: input.contentType,
+    contentLength: input.sizeBytes,
   });
-  await recordAudit({
-    action: 'evidence.scan_started',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
+
+  return { evidence: row, upload };
+}
+
+/**
+ * Confirm a public form file landed in quarantine and enqueue the same malware
+ * scan as every other upload. Idempotent once the row has left `pending`. A
+ * missing object or size mismatch leaves the row `pending`, like a case upload.
+ */
+export async function completeFormFileUpload(input: {
+  organisationId: string;
+  formInvitationId: string;
+  evidenceId: string;
+  correlationId: string;
+}): Promise<EvidenceRow> {
+  const scope = scopeFor(input.organisationId);
+  const rows = await scope.db
+    .select()
+    .from(evidence)
+    .where(
+      scope.where(
+        evidence.organisationId,
+        eq(evidence.id, input.evidenceId),
+        eq(evidence.formInvitationId, input.formInvitationId),
+        isNull(evidence.deletedAt),
+      ),
+    )
+    .limit(1);
+  const existing = rows[0];
+  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  if (existing.status !== 'pending') return existing;
+  if (!existing.quarantineKey) {
+    throw new EvidenceUploadIncompleteError('missing');
+  }
+
+  const head = await headObject({
+    bucket: QUARANTINE_BUCKET,
+    key: existing.quarantineKey,
+    organisationId: scope.organisationId,
+  }).catch((err: unknown) => {
+    if (isMissingObject(err)) return null;
+    throw err;
+  });
+  const problem = quarantineUploadProblem(existing.sizeBytes, head);
+  if (problem) throw new EvidenceUploadIncompleteError(problem);
+
+  const publicActor = {
+    organisationId: scope.organisationId,
+    actorUserId: null,
+    actingRole: 'public',
+    sessionId: null,
+    correlationId: input.correlationId,
+  } as const;
+
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({ status: 'quarantined' })
+      .where(
+        scope.where(
+          evidence.organisationId,
+          eq(evidence.id, input.evidenceId),
+          eq(evidence.status, 'pending'),
+        ),
+      )
+      .returning();
+    const saved = updated[0];
+    if (!saved) return null;
+
+    // Ids only. Never the file name.
+    const after: Record<string, string> = { formInvitationId: input.formInvitationId };
+    if (saved.applicationId) after.applicationId = saved.applicationId;
+    await recordAudit(
+      {
+        ...publicActor,
+        action: 'evidence.uploaded',
+        resourceType: 'evidence',
+        resourceId: input.evidenceId,
+        result: 'success',
+        after: { data: after, allow: ['applicationId', 'formInvitationId'] },
+      },
+      tx,
+    );
+    await recordAudit(
+      {
+        ...publicActor,
+        action: 'evidence.scan_started',
+        resourceType: 'evidence',
+        resourceId: input.evidenceId,
+        result: 'success',
+      },
+      tx,
+    );
+    return saved;
+  });
+  // A concurrent complete already moved it on.
+  if (!row) return existing;
+
+  // Enqueue only after the quarantine and its audit have committed. A lost
+  // enqueue is redriven by the stuck-scan sweeper.
+  await enqueueMalwareScan({
+    organisationId: scope.organisationId,
+    correlationId: input.correlationId,
+    evidenceId: input.evidenceId,
+    jobId: input.evidenceId,
   });
 
   return row;
+}
+
+/**
+ * Point form-file evidence that has no case yet at the case staff just linked.
+ * Rows already attached to a case are left alone.
+ */
+export async function attachFormEvidenceToApplication(
+  formInvitationId: string,
+  applicationId: string,
+  tx?: AuditTransaction,
+): Promise<void> {
+  const scope = currentScope();
+  await (tx ?? scope.db)
+    .update(evidence)
+    .set({ applicationId })
+    .where(
+      scope.where(
+        evidence.organisationId,
+        eq(evidence.formInvitationId, formInvitationId),
+        isNull(evidence.applicationId),
+        isNull(evidence.deletedAt),
+      ),
+    );
 }
 
 /**
@@ -249,8 +445,11 @@ export async function getDownloadUrl(
   const row = await loadEvidence(evidenceId);
   if (!row) throw new AuthorizationError('POLICY_DENIED');
 
-  // Enforce readability of the parent application (audits the view).
-  await getApplication(row.applicationId);
+  // A case upload is readable only when the parent application is. A form file
+  // that is not on a case yet stays inside the tenant and this download permission.
+  if (row.applicationId) {
+    await getApplication(row.applicationId);
+  }
 
   if (!isServable(row.status) || !row.evidenceKey) {
     // Never reveal that an infected/unscanned object exists.
@@ -330,30 +529,38 @@ export async function classifyEvidence(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(evidence)
-    .set({
-      classification: input.classification,
-      classifiedByUserId: ctx.userId,
-      classifiedAt: new Date(),
-    })
-    .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
-    .returning();
-  const row = must(updated[0], 'evidence');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({
+        classification: input.classification,
+        classifiedByUserId: ctx.userId,
+        classifiedAt: new Date(),
+      })
+      .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
+      .returning();
+    const row = must(updated[0], 'evidence');
 
-  await recordAudit({
-    action: 'evidence.classified',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-    before: {
-      data: { classification: existing.classification },
-      allow: ['classification'],
-    },
-    after: { data: { classification: row.classification }, allow: ['classification'] },
+    await recordAudit(
+      {
+        action: 'evidence.classified',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+        before: {
+          data: { classification: existing.classification },
+          allow: ['classification'],
+        },
+        after: {
+          data: { classification: row.classification },
+          allow: ['classification'],
+        },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Ask an applicant to supply further evidence on an application. */
@@ -369,29 +576,36 @@ export async function requestFurtherEvidence(
   await getApplication(applicationId);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(evidenceRequests)
-    .values(
-      scope.insertValues({
-        applicationId,
-        requestedByUserId: ctx.userId,
-        description: input.description,
-        dueAt: input.dueAt ?? null,
-        status: 'open',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'evidence request');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(evidenceRequests)
+      .values(
+        scope.insertValues({
+          applicationId,
+          requestedByUserId: ctx.userId,
+          description: input.description,
+          dueAt: input.dueAt ?? null,
+          status: 'open',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'evidence request');
 
-  await recordAudit({
-    action: 'evidence.requested',
-    resourceType: 'evidence',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { applicationId }, allow: ['applicationId'] },
+    await recordAudit(
+      {
+        action: 'evidence.requested',
+        resourceType: 'evidence',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { applicationId }, allow: ['applicationId'] },
+      },
+      tx,
+    );
+
+    // Recording the request does not notify the applicant. A person sends that
+    // notice, with the due date, through correspondence.
+    return row;
   });
-
-  return row;
 }
 
 /* ---------------------------------------------------------------------------
@@ -409,15 +623,19 @@ function systemAudit(
   organisationId: string,
   correlationId: string,
   fields: Parameters<typeof recordAudit>[0],
+  tx?: AuditTransaction,
 ) {
-  return recordAudit({
-    ...fields,
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-  });
+  return recordAudit(
+    {
+      ...fields,
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+    },
+    tx,
+  );
 }
 
 /** Pass chunks through unchanged while feeding them to a hash. */
@@ -485,13 +703,20 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     result: 'success',
   });
 
-  const settle = async (patch: EvidencePatch) => {
-    await scope.db
-      .update(evidence)
-      .set(patch)
-      .where(
-        and(eq(evidence.organisationId, organisationId), eq(evidence.id, evidenceId)),
-      );
+  // The status change and its audit commit or roll back together.
+  const settle = async (
+    patch: EvidencePatch,
+    audit: Parameters<typeof recordAudit>[0],
+  ) => {
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(evidence)
+        .set(patch)
+        .where(
+          and(eq(evidence.organisationId, organisationId), eq(evidence.id, evidenceId)),
+        );
+      await systemAudit(organisationId, correlationId, audit, tx);
+    });
   };
 
   const rejectUpload = async (
@@ -501,20 +726,22 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     after: AuditMetaInput,
   ) => {
     await deleteObject({ bucket: QUARANTINE_BUCKET, key });
-    await settle({
-      status: 'rejected',
-      detectedContentType: detected,
-      scanResult,
-      scannedAt: new Date(),
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.rejected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason,
-      after,
-    });
+    await settle(
+      {
+        status: 'rejected',
+        detectedContentType: detected,
+        scanResult,
+        scannedAt: new Date(),
+      },
+      {
+        action: 'evidence.rejected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason,
+        after,
+      },
+    );
   };
 
   // A missing quarantine object is terminal, not transient: retrying it only
@@ -543,36 +770,40 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       } finally {
         promotedBody.destroy();
       }
-      await settle({
-        status: 'clean',
-        evidenceKey: key,
-        // Set from the verified type when the object was promoted.
-        detectedContentType: promoted.contentType ?? null,
-        sha256: promotedHash.digest('hex'),
-        scanResult: 'clean',
-        scannedAt: new Date(),
-      });
-      await systemAudit(organisationId, correlationId, {
-        action: 'evidence.scan_clean',
-        resourceType: 'evidence',
-        resourceId: evidenceId,
-        result: 'success',
-        reason: 'evidence.promoted_object_present',
-      });
+      await settle(
+        {
+          status: 'clean',
+          evidenceKey: key,
+          // Set from the verified type when the object was promoted.
+          detectedContentType: promoted.contentType ?? null,
+          sha256: promotedHash.digest('hex'),
+          scanResult: 'clean',
+          scannedAt: new Date(),
+        },
+        {
+          action: 'evidence.scan_clean',
+          resourceType: 'evidence',
+          resourceId: evidenceId,
+          result: 'success',
+          reason: 'evidence.promoted_object_present',
+        },
+      );
       return;
     }
-    await settle({
-      status: 'rejected',
-      scanResult: 'rejected:missing-object',
-      scannedAt: new Date(),
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.rejected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: 'evidence.quarantine_object_missing',
-    });
+    await settle(
+      {
+        status: 'rejected',
+        scanResult: 'rejected:missing-object',
+        scannedAt: new Date(),
+      },
+      {
+        action: 'evidence.rejected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason: 'evidence.quarantine_object_missing',
+      },
+    );
   };
 
   // Verify the stored size against the declaration; any other storage error
@@ -657,20 +888,22 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   if (!verdict.clean) {
     await deleteObject({ bucket: QUARANTINE_BUCKET, key });
-    await settle({
-      status: 'infected',
-      detectedContentType: verifiedType,
-      scanSignature: verdict.signature ?? 'unknown',
-      scanResult: 'infected',
-      scannedAt: new Date(),
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.scan_infected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: 'evidence.malware_detected',
-    });
+    await settle(
+      {
+        status: 'infected',
+        detectedContentType: verifiedType,
+        scanSignature: verdict.signature ?? 'unknown',
+        scanResult: 'infected',
+        scannedAt: new Date(),
+      },
+      {
+        action: 'evidence.scan_infected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason: 'evidence.malware_detected',
+      },
+    );
 
     // Let the uploader know, calmly and without file details. Best-effort: a
     // notification failure must never change the fail-secure scan outcome.
@@ -706,20 +939,22 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     contentType: verifiedType,
     ifMatch: etag,
   });
-  await settle({
-    status: 'clean',
-    evidenceKey: key,
-    detectedContentType: verifiedType,
-    sha256,
-    scanResult: 'clean',
-    scannedAt: new Date(),
-  });
-  await systemAudit(organisationId, correlationId, {
-    action: 'evidence.scan_clean',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-  });
+  await settle(
+    {
+      status: 'clean',
+      evidenceKey: key,
+      detectedContentType: verifiedType,
+      sha256,
+      scanResult: 'clean',
+      scannedAt: new Date(),
+    },
+    {
+      action: 'evidence.scan_clean',
+      resourceType: 'evidence',
+      resourceId: evidenceId,
+      result: 'success',
+    },
+  );
   logger.debug(
     { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },
     'evidence promoted',

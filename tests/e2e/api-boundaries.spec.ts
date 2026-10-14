@@ -1,6 +1,8 @@
 import { expect, test } from './helpers/page';
 
 test('sensitive APIs consistently reject anonymous requests', async ({ request }) => {
+  // One request per route; the dev server compiles each route on first hit.
+  test.setTimeout(120_000);
   const protectedGets = [
     '/api/applications',
     '/api/tasks',
@@ -10,17 +12,20 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
     '/api/memberships',
     '/api/membership-invitations',
     '/api/reports/exports',
+    '/api/audit/events',
+    '/api/audit/events/export',
     '/api/keys',
     '/api/webhooks',
     '/api/retention/holds',
     '/api/retention/policies',
+    '/api/retention/preview',
   ];
 
   for (const path of protectedGets) {
     await test.step(`${path} rejects anonymous access`, async () => {
       const response = await request.get(path);
       expect(response.status()).toBe(401);
-      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+      await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
     });
   }
 
@@ -65,6 +70,11 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
       path: `/api/decisions/${resourceId}`,
       data: { operation: 'vote', choice: 'abstain' },
     },
+    {
+      method: 'post',
+      path: `/api/webhooks/${resourceId}/deliveries/${resourceId}/redeliver`,
+      data: {},
+    },
   ] as const;
 
   for (const mutation of protectedMutations) {
@@ -73,7 +83,7 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
         data: mutation.data,
       });
       expect(response.status()).toBe(401);
-      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+      await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
     });
   }
 });

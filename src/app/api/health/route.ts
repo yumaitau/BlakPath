@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { detailedHealthForbidden } from '@/lib/health/access';
 import { readinessReport } from '@/lib/health/checks';
 import { env } from '@/lib/env';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * Detailed operator health report.
@@ -18,7 +19,9 @@ import { env } from '@/lib/env';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request): Promise<NextResponse> {
+export const GET = tenantHandler(async function GET(
+  request: Request,
+): Promise<NextResponse> {
   if (detailedHealthForbidden(request.headers)) {
     return NextResponse.json(
       { error: 'Forbidden' },
@@ -42,4 +45,4 @@ export async function GET(request: Request): Promise<NextResponse> {
       headers: { 'Cache-Control': 'no-store' },
     },
   );
-}
+});

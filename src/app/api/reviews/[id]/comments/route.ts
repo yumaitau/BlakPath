@@ -1,24 +1,21 @@
 import { NextResponse } from 'next/server';
 import { addReviewComment, addReviewCommentSchema } from '@/domains/reviews';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /** POST /api/reviews/[id]/comments — add a comment to a draft review. */
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const input = addReviewCommentSchema.parse(await request.json().catch(() => null));
-    const row = await withRequestTenant(() => addReviewComment(id, input));
-    return NextResponse.json({
-      comment: {
-        id: row.id,
-        body: row.body,
-        createdAt: row.createdAt.toISOString(),
-      },
-    });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const input = addReviewCommentSchema.parse(await request.json().catch(() => null));
+  const row = await withRequestTenant(() => addReviewComment(id, input));
+  return NextResponse.json({
+    comment: {
+      id: row.id,
+      body: row.body,
+      createdAt: row.createdAt.toISOString(),
+    },
+  });
+});

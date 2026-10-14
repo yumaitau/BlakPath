@@ -15,10 +15,11 @@ be HTTPS and non-local. Web and worker run the same rules at boot when
 `NODE_ENV=production`, except the `DATABASE_MIGRATION_URL` checks: runtime pods
 never mount the migrator secret.
 
-- [ ] Roll out with `scripts/eks-deploy.sh <image-tag>` or the Deploy workflow.
-      That runs `node release-check.cjs` in the candidate web and worker images
-      against the production ConfigMap, runtime Secret and migrator URL, and
-      applies workloads only after the Job exits 0. Attach the key-only output to
+- [ ] Roll out with `scripts/eks-deploy.sh` (app and worker `@sha256` digests
+      and the git sha) or the Deploy workflow. That runs `node release-check.cjs`
+      in the candidate web and worker images against the production ConfigMap,
+      runtime Secret and migrator URL, then the release-pinned migrate Job, and
+      applies workloads only after both Jobs exit 0. Attach the key-only output to
       the release record. `pnpm release:check` is the same gate on a machine that
       has the source tree.
       The check fails when `PILOT_BOOTSTRAP_TOKEN` is set. Leave that variable
@@ -45,6 +46,12 @@ never mount the migrator secret.
       enabled. Client addresses come from `clientIp` (`src/lib/http/client-ip.ts`).
 - [ ] Configure database point-in-time recovery and versioned, encrypted object
       storage backups. Redis is not a durable source of record.
+- [ ] Use RDS Postgres of at least 2 GiB (`max_connections` ≥ 225) with RDS Proxy
+      in front. `DATABASE_URL` must set `sslmode=verify-full` against the proxy
+      or instance hostname. The connection budget in `docs/eks-runbook.md` must
+      still hold if pools or replica limits change.
+- [ ] After cutover, under load, confirm `DatabaseConnectionsCurrentlySessionPinned`
+      stays near zero and `SHOW statement_timeout` from an app session is not 0.
 - [ ] Run a documented restore drill into an isolated environment. Confirm a
       tenant can sign in, their records are present, objects can be read only after
       the normal authorisation checks, and `audit-verify` reports a clean chain.
@@ -66,10 +73,13 @@ never mount the migrator secret.
       An invitation and a password reset must reach an external mailbox with
       `dkim=pass spf=pass dmarc=pass`, and simulator bounce/complaint events
       must create suppressions in staging (`docs/eks-runbook.md#email`).
-- [ ] Review `infra/k8s/network-policy.example.yaml` against the live VPC,
-      database, Redis and object-storage endpoints, then apply a policy that
-      keeps webhook delivery off in-cluster and link-local addresses. Rotate
-      any webhook endpoint whose stored secret is not envelope ciphertext.
+- [ ] Narrow the RFC1918 blocks in `infra/k8s/network-policy.yaml` to the live
+      VPC database, Redis and endpoint subnets. Webhook delivery stays off
+      in-cluster and link-local addresses. Rotate any webhook endpoint whose
+      stored secret is not envelope ciphertext.
+- [ ] Enable the EKS Auto Mode network policy controller and apply
+      `infra/k8s/network-policy.yaml`. A pod outside `blakpath` must not reach
+      BlakPath ports. Steps and the allow list are in `docs/eks-runbook.md`.
 
 ## Signals and response
 

@@ -1,7 +1,9 @@
 # Private freshclam mirror. This is the only ClamAV pod that may reach the
 # public signature servers. It uses the same role-less ServiceAccount as the
-# scanner. Egress excepts the entire link-local range so the pod cannot read
-# node IMDS or the EKS Pod Identity agent.
+# scanner. Egress to database.clamav.net on 80/443 is public only: it excepts
+# the entire link-local range (node IMDS, EKS Pod Identity agent) and the
+# private and CGNAT ranges, so the mirror cannot reach RDS, ElastiCache or
+# VPC endpoints.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -216,7 +218,13 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
               - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
       ports:
         - protocol: TCP
           port: 80

@@ -11,28 +11,56 @@ import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
-import { forms, formInvitations, formResponses } from '@/db/schema';
+import {
+  applications,
+  evidence,
+  forms,
+  formInvitations,
+  formResponses,
+} from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type RecordAuditInput } from '@/domains/audit/service';
+import { createApplication, getApplication } from '@/domains/applications/service';
+import {
+  attachFormEvidenceToApplication,
+  completeFormFileUpload,
+  requestFormFileUpload,
+} from '@/domains/evidence/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { assertOrganisationOperational } from '@/lib/tenancy/organisation-status';
 import { env } from '@/lib/env';
 import { queueInvitationEmail } from '@/lib/email/queue';
 import { logger } from '@/lib/observability/logger';
-import { requireAny, subjectFromContext } from '@/lib/permissions/check';
-import { AuthorizationError } from '@/lib/permissions/errors';
-import { parseFieldsJson, validateResponse, type FormField } from '@/lib/forms/fields';
 import {
+  requireAny,
+  requirePermission,
+  subjectFromContext,
+} from '@/lib/permissions/check';
+import { AuthorizationError } from '@/lib/permissions/errors';
+import {
+  draftIsCurrent,
+  isSubmittableFormFileStatus,
+  parseFieldsJson,
+  validateDraft,
+  validateResponse,
+  type FormField,
+} from '@/lib/forms/fields';
+import {
+  openFormDraft,
   openFormResponses,
+  sealFormDraft,
   sealFormResponse,
   sealInvitationToken,
 } from '@/lib/encryption/tenant-fields';
 import {
   createFormSchema,
   createInvitationSchema,
+  linkResponseSchema,
+  publicFileUploadSchema,
   updateFormSchema,
   type CreateFormInput,
   type CreateInvitationInput,
+  type LinkResponseInput,
   type UpdateFormInput,
 } from './schemas';
 
@@ -52,12 +80,15 @@ import {
 
 export type FormRow = typeof forms.$inferSelect;
 export type FormInvitationRow = typeof formInvitations.$inferSelect;
-/** Invitation row safe to return from an API. The delivery seal stays server-side. */
-export type PublicFormInvitation = Omit<FormInvitationRow, 'tokenSeal'>;
+/**
+ * Invitation row safe to return from an API. The delivery seal stays
+ * server-side, and a recipient's unsubmitted draft is only for that recipient.
+ */
+export type PublicFormInvitation = Omit<FormInvitationRow, 'tokenSeal' | 'draftAnswers'>;
 export type FormResponseRow = typeof formResponses.$inferSelect;
 
 function presentInvitation(row: FormInvitationRow): PublicFormInvitation {
-  const { tokenSeal: _tokenSeal, ...invitation } = row;
+  const { tokenSeal: _tokenSeal, draftAnswers: _draftAnswers, ...invitation } = row;
   return invitation;
 }
 
@@ -107,29 +138,34 @@ export async function createForm(rawInput: CreateFormInput): Promise<FormRow> {
 
   const input = createFormSchema.parse(rawInput);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(forms)
-    .values(
-      scope.insertValues({
-        title: input.title,
-        description: input.description ?? null,
-        applicationId: input.applicationId ?? null,
-        createdByUserId: ctx.userId,
-        fields: [],
-        status: 'draft',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(forms)
+      .values(
+        scope.insertValues({
+          title: input.title,
+          description: input.description ?? null,
+          applicationId: input.applicationId ?? null,
+          createdByUserId: ctx.userId,
+          fields: [],
+          status: 'draft',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'form');
 
-  await recordAudit({
-    action: 'form.created',
-    resourceType: 'form',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { title: row.title }, allow: ['title'] },
+    await recordAudit(
+      {
+        action: 'form.created',
+        resourceType: 'form',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { title: row.title }, allow: ['title'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function updateForm(
@@ -149,20 +185,25 @@ export async function updateForm(
   if (input.fields !== undefined) patch.fields = input.fields;
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(forms)
-    .set(patch)
-    .where(scope.where(forms.organisationId, eq(forms.id, formId)))
-    .returning();
-  const row = must(updated[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(forms)
+      .set(patch)
+      .where(scope.where(forms.organisationId, eq(forms.id, formId)))
+      .returning();
+    const row = must(updated[0], 'form');
 
-  await recordAudit({
-    action: 'form.updated',
-    resourceType: 'form',
-    resourceId: formId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'form.updated',
+        resourceType: 'form',
+        resourceId: formId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Publish or close a form (status transition). */
@@ -180,32 +221,37 @@ async function setFormStatus(
 
   const scope = currentScope();
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(forms)
-    .set({ status, version: nextRowVersion() })
-    .where(
-      scope.where(
-        forms.organisationId,
-        eq(forms.id, formId),
-        eq(forms.status, existing.status),
-        versionMatches(forms.version, loaded.versionText),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError(
-      'This form changed while you were working. Refresh and try again.',
-    );
-  }
-  const row = must(updated[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(forms)
+      .set({ status, version: nextRowVersion() })
+      .where(
+        scope.where(
+          forms.organisationId,
+          eq(forms.id, formId),
+          eq(forms.status, existing.status),
+          versionMatches(forms.version, loaded.versionText),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This form changed while you were working. Refresh and try again.',
+      );
+    }
+    const row = must(updated[0], 'form');
 
-  await recordAudit({
-    action,
-    resourceType: 'form',
-    resourceId: formId,
-    result: 'success',
+    await recordAudit(
+      {
+        action,
+        resourceType: 'form',
+        resourceId: formId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export function publishForm(formId: string): Promise<FormRow> {
@@ -258,30 +304,36 @@ export async function createInvitation(
   const tokenSeal = input.recipientEmail
     ? await sealInvitationToken(scope.organisationId, 'form_invitations', id, token)
     : null;
-  const inserted = await scope.db
-    .insert(formInvitations)
-    .values(
-      scope.insertValues({
-        id,
-        formId,
-        tokenHash: hashToken(token),
-        tokenSeal,
-        recipientName: input.recipientName ?? null,
-        recipientEmail: input.recipientEmail ?? null,
-        sentByUserId: ctx.userId,
-        status: 'pending',
-        expiresAt,
-      }),
-    )
-    .returning();
-  const invitation = must(inserted[0], 'invitation');
+  const invitation = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(formInvitations)
+      .values(
+        scope.insertValues({
+          id,
+          formId,
+          tokenHash: hashToken(token),
+          tokenSeal,
+          recipientName: input.recipientName ?? null,
+          recipientEmail: input.recipientEmail ?? null,
+          sentByUserId: ctx.userId,
+          status: 'pending',
+          expiresAt,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'invitation');
 
-  await recordAudit({
-    action: 'form.invitation_sent',
-    resourceType: 'form_invitation',
-    resourceId: invitation.id,
-    result: 'success',
-    after: { data: { formId }, allow: ['formId'] },
+    await recordAudit(
+      {
+        action: 'form.invitation_sent',
+        resourceType: 'form_invitation',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { formId }, allow: ['formId'] },
+      },
+      tx,
+    );
+    return created;
   });
 
   // Queue the invitation id. The worker loads the row, opens the seal and
@@ -330,27 +382,33 @@ export async function revokeInvitation(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(formInvitations)
-    .set({ status: 'revoked' })
-    .where(
-      scope.where(
-        formInvitations.organisationId,
-        eq(formInvitations.id, invitationId),
-        inArray(formInvitations.status, ['pending', 'opened']),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError('This invitation can no longer be revoked.');
-  }
-  const row = must(updated[0], 'invitation');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(formInvitations)
+      .set({ status: 'revoked' })
+      .where(
+        scope.where(
+          formInvitations.organisationId,
+          eq(formInvitations.id, invitationId),
+          inArray(formInvitations.status, ['pending', 'opened']),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError('This invitation can no longer be revoked.');
+    }
+    const revoked = must(updated[0], 'invitation');
 
-  await recordAudit({
-    action: 'form.invitation_revoked',
-    resourceType: 'form_invitation',
-    resourceId: invitationId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'form.invitation_revoked',
+        resourceType: 'form_invitation',
+        resourceId: invitationId,
+        result: 'success',
+      },
+      tx,
+    );
+    return revoked;
   });
   return presentInvitation(row);
 }
@@ -376,7 +434,13 @@ export async function listResponses(formId: string): Promise<FormResponseRow[]> 
   const rows = await scope.db
     .select()
     .from(formResponses)
-    .where(scope.where(formResponses.organisationId, eq(formResponses.formId, formId)))
+    .where(
+      scope.where(
+        formResponses.organisationId,
+        eq(formResponses.formId, formId),
+        isNull(formResponses.deletedAt),
+      ),
+    )
     .orderBy(desc(formResponses.submittedAt));
   return openFormResponses(scope.organisationId, rows);
 }
@@ -395,12 +459,41 @@ export class FormTokenError extends Error {
   }
 }
 
+/** Raised when staff try to link a response that already has a case. */
+export class FormResponseLinkError extends Error {
+  readonly code = 'FORM_RESPONSE_ALREADY_LINKED';
+  readonly status = 409;
+  constructor() {
+    super('This response is already linked to a case.');
+    this.name = 'FormResponseLinkError';
+  }
+}
+
 /** The recipient-facing view of a form (no internal ids beyond what's needed). */
+export interface PublicFormDraft {
+  answers: Record<string, unknown>;
+  /** ISO timestamp. After this the same token no longer restores answers. */
+  expiresAt: string;
+}
+
 export interface PublicForm {
   formId: string;
   title: string;
   description: string | null;
   fields: FormField[];
+  draft: PublicFormDraft | null;
+}
+
+/** A submitted response as shown on the case it belongs to. */
+export interface CaseFormResponse {
+  id: string;
+  formId: string;
+  formTitle: string;
+  fields: FormField[];
+  respondentName: string | null;
+  respondentEmail: string | null;
+  submittedAt: Date;
+  answers: Record<string, unknown>;
 }
 
 /** Resolve an invitation by its raw token, enforcing usability. Internal. */
@@ -452,17 +545,90 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
   const { invitation, form } = await resolveUsableInvitation(token);
 
   if (invitation.status === 'pending') {
-    // Status predicate stops a late "opened" write from clobbering `completed`.
-    const opened = await db
+    await db.transaction(async (tx) => {
+      // Status predicate stops a late "opened" write from clobbering `completed`.
+      const opened = await tx
+        .update(formInvitations)
+        .set({ status: 'opened', openedAt: new Date() })
+        .where(
+          and(
+            eq(formInvitations.id, invitation.id),
+            eq(formInvitations.status, 'pending'),
+          ),
+        )
+        .returning({ id: formInvitations.id });
+      if (opened.length > 0) {
+        await recordAudit(
+          {
+            action: 'form.invitation_opened',
+            resourceType: 'form_invitation',
+            resourceId: invitation.id,
+            result: 'success',
+            organisationId: invitation.organisationId,
+            actorUserId: null,
+            actingRole: 'public',
+            sessionId: null,
+          },
+          tx,
+        );
+      }
+    });
+  }
+
+  const fields = parseFieldsJson(form.fields);
+  return {
+    formId: form.id,
+    title: form.title,
+    description: form.description,
+    fields,
+    draft: await readDraft(invitation, fields),
+  };
+}
+
+/**
+ * Save a partial answer set against the same token. Required fields may be
+ * blank. The draft dies when the invitation expires. Unauthenticated.
+ */
+export async function savePublicDraft(
+  token: string,
+  rawAnswers: unknown,
+): Promise<{ ok: true; expiresAt: string }> {
+  const { invitation, form } = await resolveUsableInvitation(token);
+  const fields = parseFieldsJson(form.fields);
+  const parsed = validateDraft(fields, rawAnswers);
+  if (!parsed.success) {
+    throw new AuthorizationError('POLICY_DENIED', 'Some answers are invalid.');
+  }
+
+  const expiresAt =
+    invitation.expiresAt ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  if (!draftIsCurrent(expiresAt)) throw new FormTokenError();
+
+  // Partial answers are the same personal data as a response: sealed under
+  // the tenant key and bound to this invitation row.
+  const draftAnswers = await sealFormDraft(
+    invitation.organisationId,
+    invitation.id,
+    parsed.data,
+  );
+
+  await db.transaction(async (tx) => {
+    const updated = await tx
       .update(formInvitations)
-      .set({ status: 'opened', openedAt: new Date() })
+      .set({ draftAnswers, draftSavedAt: new Date(), draftExpiresAt: expiresAt })
       .where(
-        and(eq(formInvitations.id, invitation.id), eq(formInvitations.status, 'pending')),
+        and(
+          eq(formInvitations.id, invitation.id),
+          eq(formInvitations.organisationId, invitation.organisationId),
+          inArray(formInvitations.status, ['pending', 'opened']),
+        ),
       )
       .returning({ id: formInvitations.id });
-    if (opened.length > 0) {
-      await recordAudit({
-        action: 'form.invitation_opened',
+    if (!updated[0]) throw new FormTokenError();
+
+    await recordAudit(
+      {
+        action: 'form.draft_saved',
         resourceType: 'form_invitation',
         resourceId: invitation.id,
         result: 'success',
@@ -470,16 +636,65 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
         actorUserId: null,
         actingRole: 'public',
         sessionId: null,
-      });
-    }
+        after: { data: { formId: form.id }, allow: ['formId'] },
+      },
+      tx,
+    );
+  });
+
+  return { ok: true, expiresAt: expiresAt.toISOString() };
+}
+
+/**
+ * Mint a quarantine upload for one file field. The answer recorded later is
+ * the evidence id, never the bytes.
+ */
+export async function requestPublicFileUpload(
+  token: string,
+  rawInput: unknown,
+): Promise<{
+  evidenceId: string;
+  upload: { url: string; headers: Readonly<Record<string, string>> };
+}> {
+  const { invitation, form } = await resolveUsableInvitation(token);
+  const input = publicFileUploadSchema.parse(rawInput);
+  const field = parseFieldsJson(form.fields).find((item) => item.key === input.fieldKey);
+  if (!field || field.type !== 'file') {
+    throw new AuthorizationError('POLICY_DENIED', 'Some answers are invalid.');
   }
 
+  const applicationId = await applicationInOrg(
+    form.applicationId,
+    invitation.organisationId,
+  );
+  const prepared = await requestFormFileUpload({
+    organisationId: invitation.organisationId,
+    applicationId,
+    formInvitationId: invitation.id,
+    fileName: input.fileName,
+    contentType: input.contentType,
+    sizeBytes: input.sizeBytes,
+  });
+
   return {
-    formId: form.id,
-    title: form.title,
-    description: form.description,
-    fields: parseFieldsJson(form.fields),
+    evidenceId: prepared.evidence.id,
+    upload: { url: prepared.upload.url, headers: prepared.upload.headers },
   };
+}
+
+/** Confirm the PUT and enqueue the malware scan. */
+export async function completePublicFileUpload(
+  token: string,
+  evidenceId: string,
+): Promise<{ ok: true }> {
+  const { invitation } = await resolveUsableInvitation(token);
+  await completeFormFileUpload({
+    organisationId: invitation.organisationId,
+    formInvitationId: invitation.id,
+    evidenceId,
+    correlationId: globalThis.crypto.randomUUID(),
+  });
+  return { ok: true };
 }
 
 /**
@@ -499,6 +714,12 @@ export async function submitPublicResponse(
   if (!parsed.success) {
     throw new AuthorizationError('POLICY_DENIED', 'Some answers are invalid.');
   }
+  await assertFileAnswers(fields, parsed.data, invitation.id, invitation.organisationId);
+
+  const applicationId = await applicationInOrg(
+    form.applicationId,
+    invitation.organisationId,
+  );
 
   const scope = scopeFor(invitation.organisationId);
   const responseId = uuidv7();
@@ -512,7 +733,13 @@ export async function submitPublicResponse(
     await beforeConditionalWrite();
     const claimed = await tx
       .update(formInvitations)
-      .set({ status: 'completed', completedAt: new Date() })
+      .set({
+        status: 'completed',
+        completedAt: new Date(),
+        draftAnswers: null,
+        draftSavedAt: null,
+        draftExpiresAt: null,
+      })
       .where(
         and(
           eq(formInvitations.id, invitation.id),
@@ -530,25 +757,292 @@ export async function submitPublicResponse(
         id: responseId,
         formId: form.id,
         invitationId: invitation.id,
+        applicationId,
         answers: sealed.answers,
         respondentName: invitation.recipientName,
         respondentEmail: sealed.respondentEmail,
         ipAddress: ipAddress ?? null,
       }),
     );
-  });
 
-  await recordAudit({
-    action: 'form.response_submitted',
-    resourceType: 'form_response',
-    resourceId: invitation.id,
-    result: 'success',
-    organisationId: invitation.organisationId,
-    actorUserId: null,
-    actingRole: 'public',
-    sessionId: null,
-    ...(ipAddress ? { ipAddress } : {}),
+    await recordAudit(
+      {
+        action: 'form.response_submitted',
+        resourceType: 'form_response',
+        resourceId: invitation.id,
+        result: 'success',
+        organisationId: invitation.organisationId,
+        actorUserId: null,
+        actingRole: 'public',
+        sessionId: null,
+        ...(ipAddress ? { ipAddress } : {}),
+        ...(applicationId
+          ? { after: { data: { applicationId }, allow: ['applicationId'] as const } }
+          : {}),
+      },
+      tx,
+    );
   });
 
   return { ok: true };
+}
+
+/**
+ * Responses linked to a case. Includes submissions to a form that was already
+ * tied to the case, and responses staff later attached. A human reads them;
+ * nothing here scores or decides Aboriginality.
+ */
+export async function listResponsesForApplication(
+  applicationId: string,
+): Promise<CaseFormResponse[]> {
+  await getApplication(applicationId);
+  const scope = currentScope();
+  const rows = await scope.db
+    .select({
+      id: formResponses.id,
+      formId: formResponses.formId,
+      formTitle: forms.title,
+      fields: forms.fields,
+      respondentName: formResponses.respondentName,
+      respondentEmail: formResponses.respondentEmail,
+      submittedAt: formResponses.submittedAt,
+      answers: formResponses.answers,
+    })
+    .from(formResponses)
+    .innerJoin(
+      forms,
+      and(
+        eq(forms.id, formResponses.formId),
+        eq(forms.organisationId, formResponses.organisationId),
+      ),
+    )
+    .where(
+      scope.where(
+        formResponses.organisationId,
+        eq(formResponses.applicationId, applicationId),
+        isNull(formResponses.deletedAt),
+      ),
+    )
+    .orderBy(desc(formResponses.submittedAt));
+  const opened = await openFormResponses(scope.organisationId, rows);
+
+  return opened.map((row) => ({
+    id: row.id,
+    formId: row.formId,
+    formTitle: row.formTitle,
+    fields: parseFieldsJson(row.fields),
+    respondentName: row.respondentName,
+    respondentEmail: row.respondentEmail,
+    submittedAt: row.submittedAt,
+    answers:
+      row.answers !== null &&
+      typeof row.answers === 'object' &&
+      !Array.isArray(row.answers)
+        ? (row.answers as Record<string, unknown>)
+        : {},
+  }));
+}
+
+/**
+ * Open a draft case from a response and point the response (and any form files)
+ * back at it. Requires permission to create a case. The new case stays `draft`
+ * until a person moves it — this does not approve or reject anyone.
+ */
+export async function createCaseFromResponse(
+  formId: string,
+  responseId: string,
+): Promise<{ applicationId: string; reference: string }> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), FORM_MANAGE);
+  requirePermission(subjectFromContext(ctx), 'application:create');
+
+  const response = await loadResponseForForm(formId, responseId);
+  if (!response) throw new AuthorizationError('POLICY_DENIED');
+  if (response.applicationId) throw new FormResponseLinkError();
+
+  const [opened] = await openFormResponses(currentScope().organisationId, [response]);
+  const rawName =
+    response.respondentName?.trim() || opened?.respondentEmail?.trim() || 'Form response';
+  const application = await createApplication({ applicantName: rawName.slice(0, 200) });
+  await linkResponseToCase(response, application.id, {
+    action: 'form.response_case_created',
+    resourceType: 'form_response',
+    resourceId: response.id,
+    result: 'success',
+    after: {
+      data: { applicationId: application.id, formId },
+      allow: ['applicationId', 'formId'],
+    },
+  });
+
+  return { applicationId: application.id, reference: application.reference };
+}
+
+/** Attach a response to a case the actor can already read. */
+export async function attachResponseToCase(
+  formId: string,
+  responseId: string,
+  rawInput: unknown,
+): Promise<{ applicationId: string }> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), FORM_MANAGE);
+
+  const input = linkResponseSchema.parse(rawInput);
+  const response = await loadResponseForForm(formId, responseId);
+  if (!response) throw new AuthorizationError('POLICY_DENIED');
+  if (response.applicationId) throw new FormResponseLinkError();
+
+  const applicationId = await resolveCaseId(input);
+  await linkResponseToCase(response, applicationId, {
+    action: 'form.response_attached',
+    resourceType: 'form_response',
+    resourceId: response.id,
+    result: 'success',
+    after: { data: { applicationId, formId }, allow: ['applicationId', 'formId'] },
+  });
+
+  return { applicationId };
+}
+
+async function readDraft(
+  invitation: FormInvitationRow,
+  fields: FormField[],
+): Promise<PublicFormDraft | null> {
+  const expiresAt = invitation.draftExpiresAt;
+  if (!draftIsCurrent(expiresAt) || !expiresAt) return null;
+  const stored = await openFormDraft(
+    invitation.organisationId,
+    invitation.id,
+    invitation.draftAnswers,
+  );
+  const parsed = validateDraft(fields, stored);
+  if (!parsed.success || Object.keys(parsed.data).length === 0) return null;
+  return {
+    answers: JSON.parse(JSON.stringify(parsed.data)) as Record<string, unknown>,
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
+/** Application id only when it belongs to this organisation and is not deleted. */
+async function applicationInOrg(
+  applicationId: string | null,
+  organisationId: string,
+): Promise<string | null> {
+  if (!applicationId) return null;
+  const rows = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.id, applicationId),
+        eq(applications.organisationId, organisationId),
+        isNull(applications.deletedAt),
+      ),
+    )
+    .limit(1);
+  return rows[0]?.id ?? null;
+}
+
+async function assertFileAnswers(
+  fields: readonly FormField[],
+  answers: Record<string, unknown>,
+  invitationId: string,
+  organisationId: string,
+): Promise<void> {
+  for (const field of fields) {
+    if (field.type !== 'file') continue;
+    const value = answers[field.key];
+    if (value == null) continue;
+    if (typeof value !== 'string') {
+      throw new AuthorizationError('POLICY_DENIED', 'Some answers are invalid.');
+    }
+    const rows = await db
+      .select({ id: evidence.id, status: evidence.status })
+      .from(evidence)
+      .where(
+        and(
+          eq(evidence.id, value),
+          eq(evidence.organisationId, organisationId),
+          eq(evidence.formInvitationId, invitationId),
+          isNull(evidence.deletedAt),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (!row || !isSubmittableFormFileStatus(row.status)) {
+      throw new AuthorizationError('POLICY_DENIED', 'Some answers are invalid.');
+    }
+  }
+}
+
+async function loadResponseForForm(
+  formId: string,
+  responseId: string,
+): Promise<FormResponseRow | null> {
+  const scope = currentScope();
+  const rows = await scope.db
+    .select()
+    .from(formResponses)
+    .where(
+      scope.where(
+        formResponses.organisationId,
+        eq(formResponses.id, responseId),
+        eq(formResponses.formId, formId),
+      ),
+    )
+    .limit(1);
+  return scope.assertOwned(rows[0]) ?? null;
+}
+
+/** Link, move form files, and audit in one transaction. */
+async function linkResponseToCase(
+  response: FormResponseRow,
+  applicationId: string,
+  audit: RecordAuditInput,
+): Promise<void> {
+  const scope = currentScope();
+  await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(formResponses)
+      .set({ applicationId })
+      .where(
+        scope.where(
+          formResponses.organisationId,
+          eq(formResponses.id, response.id),
+          isNull(formResponses.applicationId),
+        ),
+      )
+      .returning({ id: formResponses.id });
+    if (!updated[0]) throw new FormResponseLinkError();
+    if (response.invitationId) {
+      await attachFormEvidenceToApplication(response.invitationId, applicationId, tx);
+    }
+    await recordAudit(audit, tx);
+  });
+}
+
+async function resolveCaseId(input: LinkResponseInput): Promise<string> {
+  if (input.applicationId) {
+    await getApplication(input.applicationId);
+    return input.applicationId;
+  }
+  if (input.reference) {
+    const scope = currentScope();
+    const rows = await scope.db
+      .select({ id: applications.id })
+      .from(applications)
+      .where(
+        scope.where(
+          applications.organisationId,
+          eq(applications.reference, input.reference),
+          isNull(applications.deletedAt),
+        ),
+      )
+      .limit(1);
+    const id = rows[0]?.id;
+    if (!id) throw new AuthorizationError('POLICY_DENIED');
+    await getApplication(id);
+    return id;
+  }
+  throw new AuthorizationError('POLICY_DENIED');
 }

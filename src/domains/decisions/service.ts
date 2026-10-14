@@ -23,6 +23,7 @@ import {
   subjectFromContext,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { listMeetingsForApplication } from '@/domains/meetings/service';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
 import { openDecisionRows, sealRationale } from '@/lib/encryption/tenant-fields';
 import {
@@ -43,6 +44,7 @@ import {
   type VoteChoice,
   type VoteTally,
 } from './tally';
+import { resolveMeetingLink } from './meeting-link';
 
 /**
  * Decisions service — tenant-scoped, permission-checked, audited.
@@ -111,6 +113,41 @@ async function conflictedUserIds(applicationId: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.userId));
 }
 
+/** True when the current actor has an active conflict on this case. */
+export async function actorConflictedOnApplication(
+  applicationId: string,
+): Promise<boolean> {
+  const ctx = requireTenantContext();
+  const ids = await conflictedUserIds(applicationId);
+  return ids.has(ctx.userId);
+}
+
+/**
+ * Bind a decision to a meeting on the case's agenda. Refuses a silent
+ * finalisation when the case is already listed and nobody named the sitting.
+ */
+async function linkedMeetingId(
+  applicationId: string,
+  requested: string | null | undefined,
+  existing: string | null,
+): Promise<string | null> {
+  const agenda = await listMeetingsForApplication(applicationId);
+  const resolved = resolveMeetingLink({
+    requestedMeetingId: requested,
+    existingMeetingId: existing,
+    agendaMeetingIds: agenda.map((meeting) => meeting.id),
+  });
+  if (!resolved.ok) {
+    throw new AuthorizationError(
+      'POLICY_DENIED',
+      resolved.reason === 'meeting_required'
+        ? 'Record the meeting where the committee made this decision.'
+        : 'That meeting is not an agenda for this case.',
+    );
+  }
+  return resolved.meetingId;
+}
+
 /** Propose a decision for the committee to consider. */
 export async function proposeDecision(
   applicationId: string,
@@ -125,6 +162,7 @@ export async function proposeDecision(
     throw new DecisionWorkflowError(application.status);
   }
   assertNotConflicted(ctx.userId, await conflictedUserIds(applicationId));
+  const meetingId = await linkedMeetingId(applicationId, input.meetingId, null);
 
   const scope = currentScope();
   const id = uuidv7();
@@ -133,32 +171,37 @@ export async function proposeDecision(
     id,
     input.rationale ?? null,
   );
-  const inserted = await scope.db
-    .insert(decisions)
-    .values(
-      scope.insertValues({
-        id,
-        applicationId,
-        proposedByUserId: ctx.userId,
-        proposedOutcome: input.outcome,
-        rationale,
-        status: 'proposed',
-      }),
-    )
-    .returning();
-  const stored = must(inserted[0], 'decision');
-  const [row] = await openDecisionRows(scope.organisationId, [stored]);
-  const opened = must(row, 'decision');
+  const stored = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(decisions)
+      .values(
+        scope.insertValues({
+          id,
+          applicationId,
+          meetingId,
+          proposedByUserId: ctx.userId,
+          proposedOutcome: input.outcome,
+          rationale,
+          status: 'proposed',
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'decision');
 
-  await recordAudit({
-    action: 'decision.proposed',
-    resourceType: 'decision',
-    resourceId: opened.id,
-    result: 'success',
-    after: { data: { applicationId }, allow: ['applicationId'] },
+    await recordAudit(
+      {
+        action: 'decision.proposed',
+        resourceType: 'decision',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { applicationId }, allow: ['applicationId'] },
+      },
+      tx,
+    );
+    return created;
   });
-
-  return opened;
+  const [row] = await openDecisionRows(scope.organisationId, [stored]);
+  return must(row, 'decision');
 }
 
 /** Cast or change a committee vote on a proposed decision. */
@@ -195,41 +238,51 @@ export async function castVote(
     .limit(1);
   const existing = existingRows[0];
 
-  if (existing) {
-    const updated = await scope.db
-      .update(decisionVotes)
-      .set({ choice: input.choice, note: input.note ?? null })
-      .where(scope.where(decisionVotes.organisationId, eq(decisionVotes.id, existing.id)))
-      .returning();
-    const row = must(updated[0], 'vote');
-    await recordAudit({
-      action: 'vote.changed',
-      resourceType: 'vote',
-      resourceId: row.id,
-      result: 'success',
-    });
-    return row;
-  }
+  return scope.db.transaction(async (tx) => {
+    if (existing) {
+      const updated = await tx
+        .update(decisionVotes)
+        .set({ choice: input.choice, note: input.note ?? null })
+        .where(
+          scope.where(decisionVotes.organisationId, eq(decisionVotes.id, existing.id)),
+        )
+        .returning();
+      const row = must(updated[0], 'vote');
+      await recordAudit(
+        {
+          action: 'vote.changed',
+          resourceType: 'vote',
+          resourceId: row.id,
+          result: 'success',
+        },
+        tx,
+      );
+      return row;
+    }
 
-  const inserted = await scope.db
-    .insert(decisionVotes)
-    .values(
-      scope.insertValues({
-        decisionId,
-        voterUserId: ctx.userId,
-        choice: input.choice,
-        note: input.note ?? null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'vote');
-  await recordAudit({
-    action: 'vote.cast',
-    resourceType: 'vote',
-    resourceId: row.id,
-    result: 'success',
+    const inserted = await tx
+      .insert(decisionVotes)
+      .values(
+        scope.insertValues({
+          decisionId,
+          voterUserId: ctx.userId,
+          choice: input.choice,
+          note: input.note ?? null,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'vote');
+    await recordAudit(
+      {
+        action: 'vote.cast',
+        resourceType: 'vote',
+        resourceId: row.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Withdraw the caller's own vote on a still-open decision. */
@@ -244,21 +297,26 @@ export async function withdrawVote(decisionId: string): Promise<void> {
   }
 
   const scope = currentScope();
-  await scope.db
-    .delete(decisionVotes)
-    .where(
-      scope.where(
-        decisionVotes.organisationId,
-        eq(decisionVotes.decisionId, decisionId),
-        eq(decisionVotes.voterUserId, ctx.userId),
-      ),
-    );
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .delete(decisionVotes)
+      .where(
+        scope.where(
+          decisionVotes.organisationId,
+          eq(decisionVotes.decisionId, decisionId),
+          eq(decisionVotes.voterUserId, ctx.userId),
+        ),
+      );
 
-  await recordAudit({
-    action: 'vote.withdrawn',
-    resourceType: 'vote',
-    resourceId: decisionId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'vote.withdrawn',
+        resourceType: 'vote',
+        resourceId: decisionId,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }
 
@@ -281,6 +339,11 @@ export async function finaliseDecision(
     throw new AuthorizationError('POLICY_DENIED', 'This decision cannot be finalised.');
   }
   assertNotConflicted(ctx.userId, await conflictedUserIds(decision.applicationId));
+  const meetingId = await linkedMeetingId(
+    decision.applicationId,
+    input.meetingId,
+    decision.meetingId,
+  );
 
   const scope = currentScope();
   // Decision write and case transition share one transaction. If the case is
@@ -296,6 +359,7 @@ export async function finaliseDecision(
         finalOutcome: input.outcome,
         finalisedByUserId: ctx.userId,
         finalisedAt: new Date(),
+        meetingId,
         version: nextRowVersion(),
       })
       .where(
@@ -319,20 +383,27 @@ export async function finaliseDecision(
       'record_decision',
       { note: input.note },
     );
+    await recordApplicationTransitionAudit('record_decision', transition, tx);
+    await recordAudit(
+      {
+        action: 'decision.finalised',
+        resourceType: 'decision',
+        resourceId: decisionId,
+        result: 'success',
+        reason: input.note ? 'decision.finalise_note' : null,
+        after: {
+          data: { outcome: input.outcome, meetingId: row.meetingId },
+          allow: ['outcome', 'meetingId'],
+        },
+      },
+      tx,
+    );
     return { row, transition };
   });
 
-  await recordApplicationTransitionAudit('record_decision', committed.transition);
-
-  await recordAudit({
-    action: 'decision.finalised',
-    resourceType: 'decision',
-    resourceId: decisionId,
-    result: 'success',
-    reason: input.note ? 'decision.finalise_note' : null,
-    after: { data: { outcome: input.outcome }, allow: ['outcome'] },
-  });
-
+  // Outcome letters are not sent here. A person Sends correspondence only after
+  // this decision is finalised (src/domains/correspondence). Nothing in this
+  // function emails the applicant.
   // Notify subscribed webhook endpoints (best-effort; never fails the decision).
   await emitWebhookEventSafe({
     organisationId: ctx.organisationId,

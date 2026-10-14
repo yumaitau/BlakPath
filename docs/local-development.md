@@ -37,16 +37,16 @@ exceptions are `src/db/migrate.ts` and instrumentation).
 
 Key local defaults (see `.env.example`):
 
-| Variable                                      | Local value                                            | Notes                                                                             |
-| --------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres                                                                          |
-| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                                          |
-| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                             |
-| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                                |
-| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                                  |
-| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                                        |
-| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — external tool access stays hidden. Must never decide/score/infer |
-| `STAFF_IDLE_TIMEOUT_MINUTES`                  | `30`                                                   | Staff UI inactivity sign-out (5-720)                                              |
+| Variable                                      | Local value                                            | Notes                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres. No TLS locally. Production requires `sslmode=verify-full`. See `docs/database-migrations.md` for the migrator role. |
+| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                                                                                      |
+| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                                                                         |
+| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                                                                            |
+| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                                                                              |
+| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                                                                                    |
+| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — external tool access stays hidden. Must never decide/score/infer                                             |
+| `STAFF_IDLE_TIMEOUT_MINUTES`                  | `30`                                                   | Staff UI inactivity sign-out (5-720)                                                                                          |
 
 ## Local services (Docker)
 
@@ -95,8 +95,14 @@ Working on the schema:
 
 ```bash
 pnpm db:generate    # generate a migration from schema changes (drizzle-kit)
+pnpm db:check       # journal and snapshots agree
+pnpm db:drift       # check, then fail if generate would write a new migration
 pnpm db:studio      # browse data in Drizzle Studio
 ```
+
+`pnpm db:push` only runs when `DATABASE_URL` is loopback. It refuses every
+other host. Production schema changes are committed migrations. See
+`docs/database-migrations.md`.
 
 Schema lives in `src/db/schema/*`. Remember: every table must be re-exported from
 `src/db/schema/index.ts`, or it is invisible to the query builder and to
@@ -118,20 +124,22 @@ or email, keep it running.
 
 ## Common commands
 
-| Command                                                | Purpose                                     |
-| ------------------------------------------------------ | ------------------------------------------- |
-| `pnpm dev`                                             | Run the app in development                  |
-| `pnpm worker:dev`                                      | Run the worker in watch mode                |
-| `pnpm build` / `pnpm start`                            | Production build / start                    |
-| `pnpm typecheck`                                       | `tsc --noEmit` (strict; run before pushing) |
-| `pnpm lint` / `pnpm lint:fix`                          | ESLint                                      |
-| `pnpm format` / `pnpm format:check`                    | Prettier                                    |
-| `pnpm test` / `pnpm test:watch`                        | Vitest unit + integration                   |
-| `pnpm test:e2e`                                        | Playwright e2e                              |
-| `pnpm test:live`                                       | Disposable full-service Playwright drill    |
-| `pnpm test:restore`                                    | Disposable backup and restore exercise      |
-| `pnpm db:migrate` / `pnpm db:seed`                     | Migrate / seed                              |
-| `pnpm db:generate` / `pnpm db:push` / `pnpm db:studio` | Drizzle Kit tools                           |
+| Command                                                | Purpose                                       |
+| ------------------------------------------------------ | --------------------------------------------- |
+| `pnpm dev`                                             | Run the app in development                    |
+| `pnpm worker:dev`                                      | Run the worker in watch mode                  |
+| `pnpm build` / `pnpm start`                            | Production build / start                      |
+| `pnpm typecheck`                                       | `tsc --noEmit` (strict; run before pushing)   |
+| `pnpm lint` / `pnpm lint:fix`                          | ESLint                                        |
+| `pnpm format` / `pnpm format:check`                    | Prettier                                      |
+| `pnpm test` / `pnpm test:watch`                        | Vitest unit + integration                     |
+| `pnpm test:e2e`                                        | Playwright e2e                                |
+| `pnpm test:live`                                       | Disposable full-service Playwright drill      |
+| `pnpm test:restore`                                    | Disposable backup and restore exercise        |
+| `pnpm db:migrate` / `pnpm db:seed`                     | Migrate / seed                                |
+| `pnpm db:generate` / `pnpm db:check` / `pnpm db:drift` | Generate a migration, or fail on schema drift |
+| `pnpm db:push`                                         | Refused except on localhost                   |
+| `pnpm db:studio`                                       | Browse data in Drizzle Studio                 |
 
 ## Testing
 
@@ -141,7 +149,9 @@ or email, keep it running.
 - **E2E** runs under **Playwright** (`pnpm test:e2e`) and covers public/auth
   boundaries, tenant selection, applications, board persistence, meetings
   import/export, the full public-form lifecycle, membership/role changes,
-  account security, sign-out and automated accessibility acceptance.
+  account security, sign-out and automated accessibility acceptance. It starts
+  `next dev` by default. `PLAYWRIGHT_SERVER=production` serves an existing
+  `pnpm build` output with `next start` instead, as CI does.
 - **Live-stack E2E** (`pnpm test:live`) starts a disposable Compose project on
   isolated high ports, migrates and seeds its database, and proves real sign-in,
   MinIO quarantine, ClamAV promotion, worker queues, Mailpit delivery and public

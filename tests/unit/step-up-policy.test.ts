@@ -18,18 +18,24 @@ import { hotp, matchBackupCode, totpMatches } from '@/lib/auth/totp';
 import { openStepUpContext, sealStepUpContext } from '@/lib/auth/step-up-context-cookie';
 import { responseNeedsStepUp, withStepUp } from '@/lib/auth/step-up-flow';
 import { StepUpRequiredError } from '@/lib/auth/session';
-import { toErrorResponse } from '@/lib/http/tenant-route';
+import { errorResponse } from '@/lib/http/error-response';
 
 const LISTED_ROUTES = [
   'GET /api/evidence/[id]/download',
   'POST /api/reports/exports',
   'GET /api/reports/exports/[id]/download',
   'POST /api/certificates/[id]/revoke',
+  'GET /api/meetings/[id]/pack',
+  'POST /api/applications/[id]/correspondence/[correspondenceId]/send',
+  'POST /api/applications/[id]/evidence-requests/[requestId]/notify',
   'POST /api/keys',
   'POST /api/webhooks',
+  'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
   'POST /api/sso/providers',
   'DELETE /api/retention/holds/[id]',
   'DELETE /api/retention/policies/[id]',
+  'POST /api/retention/policies/[id]/activate',
+  'POST /api/retention/disposal-authorities',
   'POST /api/break-glass/[id]/deny',
   'POST /api/break-glass/[id]/revoke',
 ] as const;
@@ -52,8 +58,22 @@ describe('step-up route map', () => {
     expect(STEP_UP_ROUTES['POST /api/certificates/[id]/revoke']).toBe(
       STEP_UP_WINDOWS.sensitiveAction,
     );
+    expect(STEP_UP_ROUTES['GET /api/meetings/[id]/pack']).toBe(
+      STEP_UP_WINDOWS.sensitiveAction,
+    );
+    expect(
+      STEP_UP_ROUTES[
+        'POST /api/applications/[id]/correspondence/[correspondenceId]/send'
+      ],
+    ).toBe(STEP_UP_WINDOWS.sensitiveAction);
+    expect(
+      STEP_UP_ROUTES['POST /api/applications/[id]/evidence-requests/[requestId]/notify'],
+    ).toBe(STEP_UP_WINDOWS.sensitiveAction);
     expect(STEP_UP_ROUTES['POST /api/keys']).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['POST /api/webhooks']).toBe(STEP_UP_WINDOWS.privileged);
+    expect(
+      STEP_UP_ROUTES['POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver'],
+    ).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['POST /api/sso/providers']).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['DELETE /api/retention/holds/[id]']).toBe(
       STEP_UP_WINDOWS.destructive,
@@ -84,9 +104,9 @@ describe('step-up route map', () => {
       error: 'Re-authentication required',
       code: STEP_UP_REQUIRED_CODE,
     });
-    const response = toErrorResponse(new StepUpRequiredError(600));
+    const response = errorResponse(new StepUpRequiredError(600));
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual(stepUpRequiredBody());
+    await expect(response.json()).resolves.toMatchObject(stepUpRequiredBody());
   });
 });
 

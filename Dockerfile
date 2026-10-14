@@ -72,6 +72,12 @@ ENV DATABASE_URL=${DATABASE_URL} \
     S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Bundle the migrator into the app image so the migrate Job uses the same
+# digest as the web release. esbuild is already installed via tsx.
+RUN ESBUILD="$(find node_modules/.pnpm -path '*/node_modules/esbuild/bin/esbuild' -type f | sort | tail -1)" \
+  && test -n "$ESBUILD" \
+  && "$ESBUILD" src/db/migrate.ts \
+    --bundle --platform=node --target=node24 --format=cjs --outfile=migrate.cjs
 # Plain JS release gate. Runtime images do not ship pnpm, tsx, or the source
 # tree, so the pre-deploy Job runs `node release-check.cjs`.
 RUN node scripts/build-release-check.mjs
@@ -109,9 +115,17 @@ RUN addgroup -S -g 1001 nodejs \
   && adduser -S -u 1001 -G nodejs nextjs
 
 # Next.js standalone: server + only the node_modules it actually needs.
+# The RDS global CA is not traced into standalone; copy it so verify-full can
+# load certs/rds-global-bundle.pem from the working directory.
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
+# Same digest runs migrations. Layout matches src/db/migrate.ts: migrate.cjs
+# reads ./migrations next to itself unless MIGRATIONS_FOLDER is set. It verifies
+# the database against the RDS bundle below (cwd-relative, WORKDIR /app).
+COPY --from=build --chown=nextjs:nodejs /app/migrate.cjs ./migrate.cjs
+COPY --from=build --chown=nextjs:nodejs /app/src/db/migrations ./migrations
+COPY --from=build --chown=nextjs:nodejs /app/certs/rds-global-bundle.pem ./certs/rds-global-bundle.pem
 COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
 COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
 COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/migration-url.cjs ./migration-url.cjs
@@ -149,14 +163,18 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
   pnpm install --frozen-lockfile
 
 ENV NODE_ENV=production
+# Selects DATABASE_WORKER_POOL_MAX. The web image leaves this unset (web pool).
+ENV BLAKPATH_PROCESS=worker
 
 # Only the sources the worker needs: the worker entrypoint, the shared library
 # contracts it imports, the DB layer, operational scripts, and tsconfig for
-# path alias resolution (@/*) under tsx.
+# path alias resolution (@/*) under tsx. The CA bundle is the same file the
+# web image verifies against.
 COPY --chown=worker:nodejs tsconfig.json ./tsconfig.json
 COPY --from=build --chown=worker:nodejs /app/worker ./worker
 COPY --from=build --chown=worker:nodejs /app/src ./src
 COPY --from=build --chown=worker:nodejs /app/scripts ./scripts
+COPY --from=build --chown=worker:nodejs /app/certs/rds-global-bundle.pem ./certs/rds-global-bundle.pem
 COPY --from=build --chown=worker:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
 COPY --from=build --chown=worker:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
 COPY --from=build --chown=worker:nodejs /app/dist/release-check/migration-url.cjs ./migration-url.cjs

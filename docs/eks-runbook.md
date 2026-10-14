@@ -5,7 +5,9 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 ## Deploy
 
-1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
+1. Build web + worker images from the same commit, push to ECR
+   ap-southeast-2, and record both digests. The migrate Job uses the **app**
+   image digest, not a separate tag and not the worker image.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
    `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
@@ -18,6 +20,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    encryption backfill has completed for every organisation. Create a separate secret at
    `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
    `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
+   Apply `infra/postgres/audit-roles.sql` once as the RDS master before the
+   first migrate (see [Database roles](#database-roles)).
    The runtime secret also needs `COA_SIGNING_KEY_ID` (KMS key ARN or alias in
    ap-southeast-2). Do not set `COA_SIGNING_LOCAL_KEY_PEM`.
 3. In `infra/aws/eks-boundary.example.yaml`, replace `OIDC_ID` with the cluster
@@ -32,16 +36,24 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    for service accounts `blakpath-web` and `blakpath-worker` only. ClamAV and
    the migrate/seed jobs have no AWS role and mount no API token.
 5. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-6. Roll out with the Deploy workflow or `scripts/eks-deploy.sh <tag>` after
+6. Roll out with the Deploy workflow or `scripts/eks-deploy.sh` after
    replacing `ACCOUNT_ID`, host, role ARNs, certificate ARN, trust store ARN
-   and WAF ACL ARN. The script applies namespace, config and ExternalSecrets,
-   runs the release-check Job (`node release-check.cjs`) in the candidate web
-   and worker images, and applies `infra/k8s` only after the Job exits 0. A
-   failed gate does not roll the workloads. `kubectl apply -k infra/k8s` alone
-   skips that gate. Complete the edge section below first.
-   Rolling the app before the origin-verify header is live makes production
-   requests return 403. The namespace enforces Pod Security `restricted`;
-   every pod runs non-root with a read-only root filesystem.
+   and WAF ACL ARN. Pass `IMAGE` and `WORKER_IMAGE` as `@sha256` digests and
+   `RELEASE_ID` as the git sha. The script applies namespace, config and
+   ExternalSecrets, then runs three steps in order, each only after the
+   previous one succeeds:
+   1. the release-check Job (`node release-check.cjs`) in the candidate web
+      and worker images;
+   2. the per-release migrate Job (`blakpath-migrate-<git sha>`,
+      `ttlSecondsAfterFinished` 86400) from the app digest;
+   3. the web and worker Deployments at those digests.
+      A failed gate or migration does not roll the workloads. `DRY_RUN=1`
+      renders without applying. `kubectl apply -k infra/k8s` alone skips the
+      gate and the migration. Complete the edge section below first.
+      Rolling the app before the origin-verify header is live makes production
+      requests return 403. The namespace enforces Pod Security `restricted`;
+      every pod runs non-root with a read-only root filesystem. Enable the
+      network policy controller first (see [Network policy](#network-policy)).
 7. Moving from the shared `blakpath` service account: deploy step 4 before
    step 6, so the new associations exist when web and worker restart. Then
    delete the pod identity association for `blakpath/blakpath` and retire
@@ -53,14 +65,122 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    `COA_SIGNING_LOCAL_KEY_PEM`, and requires the SES sender config. SDK uses
    the EKS Pod Identity role. Do not put `PILOT_BOOTSTRAP_TOKEN` in the
    runtime secret.
-9. Apply the migrate job, then the seed job, then
+9. After the first release, apply the seed job, then
    `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
    The job emails an organisation-administrator invitation and does not create
    a password. That person enrols a passkey or authenticator before the
    organisation tools open.
 10. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
     Liveness and startup use `/api/live`. A public request to `/api/health` is
-    refused; read that report from inside the VPC.
+    refused; read that report from inside the VPC. From a pod in another
+    namespace, confirm it cannot open BlakPath ports.
+
+## Network policy
+
+The namespace is default-deny (`infra/k8s/network-policy.yaml`, plus the
+ClamAV policies in `clamav.yaml` and `clamav-mirror.yaml`). Nothing is
+enforced until the controller is on. This cluster is shared, so do not set
+the NodeClass `networkPolicy` field to `DefaultDeny` — that drops every pod
+on the node pool. Leave it `DefaultAllow`. BlakPath deny comes from the
+namespace policies. `networkPolicyEventLogs: Enabled` on that NodeClass is
+optional.
+
+1. Merge the controller flag. Do not replace the ConfigMap if it already
+   holds other keys:
+
+   ```bash
+   kubectl -n kube-system patch configmap amazon-vpc-cni --type merge \
+     -p '{"data":{"enable-network-policy-controller":"true"}}'
+   ```
+
+   The desired key is also in `infra/k8s/cluster/enable-network-policy.yaml`.
+
+2. Confirm the cluster service CIDR. CoreDNS on Auto Mode is the `.10`
+   address of that CIDR (`172.20.0.10` or `10.100.0.10` in the policy). If
+   this cluster uses another CIDR, change `blakpath-dns` before apply.
+3. Narrow the worker and job RFC1918 blocks to the RDS, ElastiCache and VPC
+   endpoint subnet CIDRs. The checked-in ranges are wide enough for a first
+   apply in `ap-southeast-2` and are not the final boundary.
+4. Apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
+   and `kubectl kustomize infra/k8s/cluster` only as a merge, per step 1.
+   The one-shot jobs carry their own pod labels (`blakpath-migrate` for the
+   per-release migrate Job, `blakpath-job` for seed, `blakpath-admin-job` for
+   invite-admin, `blakpath-release-check` for the `scripts/eks-deploy.sh`
+   gate). The policies ship in `infra/k8s`, so on a first deploy they apply
+   after the gate and migration; from the second release on they cover both.
+
+Allows, and nothing else:
+
+- ALB to web TCP 3000 (service port is 3000, same as the container). The
+  target-group health check uses the same port.
+- Web and worker to ClamAV TCP 3310. No other pod.
+- ClamAV scanner to the in-namespace mirror on TCP 8080 only.
+- The mirror to public TCP 80 and 443 (`database.clamav.net`). Private,
+  CGNAT and link-local ranges are excepted.
+- DNS to the Auto Mode CoreDNS address, NodeLocal DNSCache
+  (`169.254.20.10`), and `kube-system` on port 53.
+- Web, worker and the invite-admin job to the Pod Identity agent
+  `169.254.170.23:80`. IMDS stays closed. ClamAV, the mirror and
+  migrate/seed have no AWS role and no Pod Identity path.
+- Web, by DNS name, to RDS (5432), ElastiCache TLS (6379), S3, KMS, Secrets
+  Manager, STS, the SES v2 API, the SNS subscription confirm host and Entra
+  (443). No SMTP and no open internet.
+- Worker to those same private ports, plus public TCP 443 outside the VPC.
+  Tenant webhooks are HTTPS and are not a fixed host list, so this is the
+  only general egress, and only the worker has it. Private webhook targets
+  are denied.
+- Migrate, seed and release-check jobs to DNS and Postgres only. The
+  release-check gate validates env and opens no socket today.
+- Invite-admin job to DNS, Pod Identity, Postgres, and KMS, STS and the
+  SES v2 API by name.
+
+Check after apply:
+
+- A debug pod outside `blakpath` cannot connect to web:3000 or ClamAV:3310.
+- Web `/api/ready` behind the ALB is 200 when Postgres, Redis and S3 are up.
+- A worker job (scan or email) completes.
+- The mirror pod becomes Ready and a scanner `freshclam` run pulls from it.
+- A worker webhook to a public HTTPS host succeeds. The same URL from web
+  or ClamAV does not. A webhook aimed at a VPC address does not.
+
+Add the OTLP collector hostname to `blakpath-web-egress` before tracing is
+required. Export failure does not fail readiness.
+
+Image tags in `infra/k8s/kustomization.yaml` are local defaults. A release
+replaces them with digests. Do not `kubectl apply` `infra/k8s/jobs/migrate.yaml`
+by hand.
+
+## Rollback
+
+Migrations are forward-only. Roll back code by redeploying the previous image
+digest. Do not write a down migration. Point-in-time recovery is only for
+data corruption, and never into the live namespace.
+
+Release N-1 must still run on schema N. That is the expand/contract rule in
+`docs/database-migrations.md`: a release may add tables, nullable columns,
+concurrent indexes and `NOT VALID` foreign keys. It may not drop, rename or
+tighten columns the previous release still uses. The contract (drop the old
+shape) waits until N-1 is gone.
+
+1. If the migrate Job failed, stop. `scripts/eks-deploy.sh` has not changed
+   Deployments. Transactional DDL rolled back. Fix the migration forward and
+   release again. A lock wait aborts in under five seconds
+   (`lock_timeout` 4s) instead of stalling the rollout.
+2. If the new code is up and misbehaving but the data is intact, point the
+   web and worker Deployments back at the previous digests. Do not run a
+   migrate Job for that rollback. Schema stays at N. The previous digest
+   still works because N was expand-only. Confirm `/api/ready`, sign-in and
+   one staff flow.
+3. If a migration committed bad or destroyed data, stop writes, take a fresh
+   recovery point, and restore into a new isolated namespace using the
+   restore drill below. Promote that namespace only after sign-in, tenant
+   records, evidence authorisation and the audit chain verify. Do not restore
+   over the live database.
+
+Staging still needs one human rehearsal of steps 1 and 2 against the staging
+cluster. A disposable-Postgres rehearsal of the same steps is recorded in
+`docs/migration-drills/` when it has been run. The cluster rehearsal is not
+something this repository can apply by itself.
 
 ## Edge and origin
 
@@ -173,7 +293,25 @@ Record who rotated, when, and which keys. Do not record the values.
 
 ## Data services
 
-- RDS Postgres with point-in-time recovery. Proxy in front for failover.
+- RDS Postgres with point-in-time recovery. RDS Proxy in front for failover.
+  Two roles: `blakpath_migrator` (owner, migrate Job only) and
+  `blakpath_app` (runtime DML). See `infra/postgres/audit-roles.sql`.
+  Clients connect to the proxy hostname, not an IP and not a CNAME that is
+  absent from the certificate.
+- TLS is `sslmode=verify-full` for web, worker and the migrate Job. The app and
+  worker images bake
+  `certs/rds-global-bundle.pem` (the public Amazon RDS global bundle) and set
+  `ssl: { ca, rejectUnauthorized: true }`. The release gate rejects
+  `require`, `verify-ca`, and any missing mode. `require` is not verification:
+  postgres.js then skips certificate verification.
+- Session timeouts are startup parameters, not `SET` (a PostgreSQL `SET` pins
+  an RDS Proxy session). App connections use `statement_timeout=60s`,
+  `lock_timeout=10s`, `idle_in_transaction_session_timeout=30s`. The migrate Job
+  uses `lock_timeout=4s` and a 10 minute statement cap on its own single
+  connection (startup parameters, then `SET` by the runner).
+- Named prepared statements are off (`prepare: false`). RDS Proxy can multiplex
+  the extended query protocol, but SQL `PREPARE`/`EXECUTE` still pins, and
+  older proxies pinned named protocol statements. The client never issues those.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS,
   versioning on, AWS Backup coverage. The bucket default CMK is
@@ -273,6 +411,38 @@ the CoA key. Private key material never leaves KMS.
 4. Set `S3_BUCKET_AUDIT_ANCHORS` and `AUDIT_ANCHOR_OBJECT_LOCK=true` in the
    ConfigMap. Confirm the first day's objects exist before accepting
    production records.
+
+## Database connection budget
+
+Checked in `src/db/connection-budget.ts` and `tests/unit/connection-budget.test.ts`.
+The instance must provide at least 225 `max_connections`. That is the RDS
+default for 2 GiB (`LEAST({DBInstanceClassMemory/9531392}, 5000)`), so
+`db.t4g.small` or larger. Do not use a smaller class without lowering the
+pools and updating the budget test. Leave `max_connections` at the default on
+that size or larger.
+
+| Process                            | Replicas at HPA max | Pool | Connections          |
+| ---------------------------------- | ------------------- | ---- | -------------------- |
+| Web (`blakpath-app`)               | 4                   | 10   | 40                   |
+| Worker (`blakpath-worker`, no HPA) | 2                   | 33   | 66                   |
+| Migration job                      | 1                   | 1    | 1                    |
+| **Steady total**                   |                     |      | **107** (48% of 225) |
+
+Rollout surge is web `maxSurge: 1` (5 × 10) and worker `maxSurge: 1` (3 × 33)
+plus the migration connection: 150, which is 67% of 225. Both stay at or under
+70% (157). The worker pool is 11 queues × concurrency 3, so each in-flight job
+can hold a connection.
+
+`DATABASE_URL` in the runtime secret must include `sslmode=verify-full`.
+`DATABASE_POOL_MAX=10` is in the ConfigMap. The worker deployment sets
+`BLAKPATH_PROCESS=worker` and `DATABASE_WORKER_POOL_MAX=33`.
+
+After the proxy is in service, under load, confirm CloudWatch
+`DatabaseConnectionsCurrentlySessionPinned` stays near zero. This repository
+does not create the proxy or run that load. A non-zero metric means some
+session state is pinning (a `SET`, SQL `PREPARE`, a temporary table, or a
+session advisory lock). Transaction-scoped advisory locks
+(`pg_advisory_xact_lock`) do not pin.
 
 ## CoA signing key (KMS)
 

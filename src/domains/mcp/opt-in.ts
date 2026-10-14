@@ -122,23 +122,26 @@ export async function setTenantAiFeatures(
         target: [featureFlags.organisationId, featureFlags.key],
         set: { enabled: input.enabled, updatedAt: new Date() },
       });
-  });
 
-  await recordAudit({
-    action: 'admin.feature_flag_changed',
-    resourceType: 'feature_flag',
-    resourceId: AI_FEATURES_FLAG,
-    result: 'success',
-    reason: input.enabled ? 'ai_features.enabled' : 'ai_features.disabled',
-    after: {
-      data: {
-        key: AI_FEATURES_FLAG,
-        enabled: input.enabled,
-        governanceReference: input.governanceReference ?? null,
-        stepUpVerified: true,
+    await recordAudit(
+      {
+        action: 'admin.feature_flag_changed',
+        resourceType: 'feature_flag',
+        resourceId: AI_FEATURES_FLAG,
+        result: 'success',
+        reason: input.enabled ? 'ai_features.enabled' : 'ai_features.disabled',
+        after: {
+          data: {
+            key: AI_FEATURES_FLAG,
+            enabled: input.enabled,
+            governanceReference: input.governanceReference ?? null,
+            stepUpVerified: true,
+          },
+          allow: ['key', 'enabled', 'governanceReference', 'stepUpVerified'],
+        },
       },
-      allow: ['key', 'enabled', 'governanceReference', 'stepUpVerified'],
-    },
+      tx,
+    );
   });
 
   return readStatus();

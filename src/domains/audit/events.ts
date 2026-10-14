@@ -109,6 +109,9 @@ export type AuditAction =
   | 'form.invitation_opened'
   | 'form.invitation_revoked'
   | 'form.response_submitted'
+  | 'form.draft_saved'
+  | 'form.response_case_created'
+  | 'form.response_attached'
   // Search.
   | 'search.performed'
   | 'search.result_opened'
@@ -164,6 +167,13 @@ export type AuditAction =
   | 'message.viewed'
   | 'message.deleted'
   | 'notification.sent'
+  // Correspondence: human-sent letters and emails stored on a case.
+  | 'correspondence.template_created'
+  | 'correspondence.template_updated'
+  | 'correspondence.drafted'
+  | 'correspondence.sent'
+  | 'correspondence.viewed'
+  | 'correspondence.downloaded'
   | 'email.suppressed'
   | 'email.suppression_cleared'
   // Meeting lifecycle & agenda.
@@ -171,6 +181,9 @@ export type AuditAction =
   | 'meeting.updated'
   | 'meeting.cancelled'
   | 'meeting.agenda_changed'
+  | 'meeting.attendance_recorded'
+  | 'meeting.quorum_attested'
+  | 'meeting.minutes_recorded'
   // Calendar events (RangerOS parity).
   | 'calendar.created'
   | 'calendar.updated'
@@ -217,11 +230,17 @@ export type AuditAction =
   // Legacy data import.
   | 'import.completed'
   // Retention / lifecycle of data.
+  | 'retention.policy_drafted'
+  | 'retention.policy_activated'
   | 'retention.policy_applied'
+  | 'retention.policy_deleted'
+  | 'retention.authority_signed'
   | 'retention.record_purged'
   | 'retention.record_anonymised'
   | 'retention.hold_placed'
   | 'retention.hold_released'
+  | 'retention.purge_blocked'
+  | 'retention.register_exported'
   // Break-glass (emergency cross-tenant access).
   | 'break_glass.requested'
   | 'break_glass.approved'
@@ -239,10 +258,16 @@ export type AuditAction =
   | 'integration.credentials_rotated'
   | 'integration.call_succeeded'
   | 'integration.call_failed'
+  | 'integration.redelivery_requested'
   // Organisation lifecycle. Recorded on the platform chain by an operator.
   | 'organisation.status_changed'
   // Admin / configuration.
   | 'admin.organisation_updated'
+  | 'admin.organisation_provisioned'
+  | 'admin.organisation_invite_resent'
+  | 'admin.readiness_recorded'
+  | 'admin.agreement_recorded'
+  | 'admin.organisation_activated'
   | 'admin.settings_updated'
   | 'admin.feature_flag_changed'
   | 'admin.domain_added'
@@ -268,10 +293,13 @@ export type AuditAction =
   // Field encryption backfill. Counts and table names only.
   | 'encryption.backfill_batch'
   | 'encryption.backfill_completed'
-  // Audit self-events (integrity).
+  // Audit self-events (integrity and access to the trail itself).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'
-  | 'audit.divergence_detected';
+  | 'audit.divergence_detected'
+  | 'audit.viewed'
+  | 'audit.exported'
+  | 'audit.monthly_review_recorded';
 
 /**
  * The exhaustive set of resource types an audit event may reference. Stable
@@ -316,6 +344,8 @@ export type ResourceType =
   | 'client'
   | 'message'
   | 'notification'
+  | 'correspondence'
+  | 'correspondence_template'
   | 'email_suppression'
   | 'meeting_pack'
   | 'conflict'
@@ -325,11 +355,14 @@ export type ResourceType =
   | 'export'
   | 'import'
   | 'retention_policy'
+  | 'disposal_authority'
+  | 'destruction_register'
   | 'break_glass_request'
   | 'integration'
   | 'job'
   | 'search'
-  | 'audit_chain';
+  | 'audit_chain'
+  | 'audit_log';
 
 /** All audit results, useful for runtime validation and enumeration. */
 export const AUDIT_RESULTS: readonly AuditResult[] = [

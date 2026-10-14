@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { readinessReport } from '@/lib/health/checks';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * Readiness probe.
@@ -15,7 +16,7 @@ import { readinessReport } from '@/lib/health/checks';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+export const GET = tenantHandler(async function GET(): Promise<NextResponse> {
   const report = await readinessReport();
   return NextResponse.json(
     { status: report.ready ? 'ready' : 'not_ready', checks: report.checks },
@@ -24,4 +25,4 @@ export async function GET(): Promise<NextResponse> {
       headers: { 'Cache-Control': 'no-store' },
     },
   );
-}
+});

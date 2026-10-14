@@ -59,7 +59,17 @@ export async function selectDevelopmentOrganisation(page: Page): Promise<void> {
     selectedAdminCookies = await page.context().cookies();
     return;
   }
-  await page.getByRole('button', { name: /BlakPath Development Organisation/ }).click();
+  // Wait for the selection request with the click, so a lost click fails here
+  // with a clear cause rather than as a URL timeout.
+  const [selected] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === '/api/organisations/active',
+    ),
+    page.getByRole('button', { name: /BlakPath Development Organisation/ }).click(),
+  ]);
+  expect(selected.ok()).toBe(true);
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   selectedAdminCookies = await page.context().cookies();

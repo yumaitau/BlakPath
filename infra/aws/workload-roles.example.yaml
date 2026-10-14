@@ -171,6 +171,7 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:DeleteObject
+                  - s3:DeleteObjectVersion
                 Resource: !Sub '${QuarantineBucketArn}/*/applications/*/evidence/*'
               - Sid: EvidencePromoteAndExport
                 Effect: Allow
@@ -183,10 +184,20 @@ Resources:
                 Effect: Allow
                 Action: s3:GetObject
                 Resource: !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+              # Retention removes every version of a purged key. On a versioned
+              # bucket s3:DeleteObject alone only writes a delete marker.
               - Sid: EvidenceRetentionDelete
                 Effect: Allow
-                Action: s3:DeleteObject
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
                 Resource: !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
+              - Sid: RetentionVersionList
+                Effect: Allow
+                Action: s3:ListBucketVersions
+                Resource:
+                  - !Ref EvidenceBucketArn
+                  - !Ref QuarantineBucketArn
               - Sid: EvidenceKmsViaS3
                 Effect: Allow
                 Action:

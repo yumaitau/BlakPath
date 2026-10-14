@@ -103,6 +103,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'evidence:read-assigned',
       'evidence:upload-on-behalf',
       'evidence:request',
+      'correspondence:send',
       'client:create',
       'client:read-any',
       'client:assign-team',
@@ -127,6 +128,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'family-link:request',
       'review:create',
       'review:finalise',
+      'correspondence:send',
       'client:read-assigned',
       'calendar:create',
       'calendar:read-any',
@@ -197,6 +199,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'certificate:generate',
       'certificate:sign',
       'certificate:revoke',
+      'correspondence:send',
       'calendar:create',
       'calendar:read-any',
       'calendar:update-any',
@@ -214,6 +217,8 @@ export const SYSTEM_ROLES = Object.freeze({
       'evidence:classify',
       'evidence:download',
       'certificate:generate',
+      'correspondence:send',
+      'correspondence:manage-templates',
       'report:view',
       'report:export',
       'retention:manage',
@@ -230,6 +235,7 @@ export const SYSTEM_ROLES = Object.freeze({
     permissions: [
       'tenant:configure',
       'membership:manage',
+      'correspondence:manage-templates',
       // Transport scopes only. The admin still holds no application, evidence,
       // decision or certificate read, so a key needs a separate data permission
       // the issuer themselves holds before a tool can return records.
@@ -288,4 +294,21 @@ export function isApplicantOnlyRoleSet(roleSlugs: readonly string[]): boolean {
       (APPLICANT_PORTAL_ROLE_SLUGS as readonly string[]).includes(slug),
     )
   );
+}
+
+/**
+ * May this role be attached to a membership in `organisationId`?
+ *
+ * Platform operator is never assignable: it holds no tenant data permissions
+ * and must not be cloned into a tenant. A role owned by another organisation
+ * is not assignable. System templates (null organisation) remain assignable so
+ * tenants that have not cloned roles can still use the catalogue.
+ */
+export function isRoleAssignableToOrganisation(
+  role: { organisationId: string | null; isSystem: boolean; slug: string },
+  organisationId: string,
+): boolean {
+  if (role.slug === 'platform-operator') return false;
+  if (role.organisationId === organisationId) return true;
+  return role.organisationId === null && role.isSystem;
 }

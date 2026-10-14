@@ -53,6 +53,17 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
     scopes: ['mcp:read', 'mcp:read-pii'],
   },
   {
+    name: 'list_family_links',
+    description:
+      'List family connections recorded on an application. This is a human record, not a determination. The key also needs a family-link permission and a staff case read. Names and notes need mcp:read-pii. When relativeDeceased is true, show a warning before displaying the relative name.',
+    inputSchema: {
+      type: 'object',
+      properties: { applicationId: { type: 'string' } },
+      required: ['applicationId'],
+    },
+    scopes: ['mcp:read', 'mcp:read-pii'],
+  },
+  {
     name: 'list_decisions',
     description: 'List committee decisions recorded on an application.',
     inputSchema: {

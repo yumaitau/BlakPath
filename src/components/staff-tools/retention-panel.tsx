@@ -18,7 +18,8 @@ import {
 export interface RetentionPolicyItem {
   id: string;
   resourceType: string;
-  retentionDays: number;
+  /** Null means permanent retention. */
+  retentionDays: number | null;
   action: string;
   active: boolean;
 }
@@ -30,6 +31,20 @@ export interface LegalHoldItem {
   reason: string;
   releasedAt: string | null;
 }
+
+/** Jurisdiction keys the API accepts. The records manager chooses; the software does not. */
+const JURISDICTIONS = [
+  { value: 'organisation', label: 'Organisation schedule' },
+  { value: 'nsw', label: 'New South Wales' },
+  { value: 'vic', label: 'Victoria' },
+  { value: 'qld', label: 'Queensland' },
+  { value: 'wa', label: 'Western Australia' },
+  { value: 'sa', label: 'South Australia' },
+  { value: 'tas', label: 'Tasmania' },
+  { value: 'act', label: 'Australian Capital Territory' },
+  { value: 'nt', label: 'Northern Territory' },
+  { value: 'cth', label: 'Commonwealth' },
+] as const;
 
 const RESOURCE_TYPES = [
   { value: 'application', label: 'Applications' },
@@ -50,6 +65,9 @@ export function RetentionPanel({
     useState<(typeof RESOURCE_TYPES)[number]['value']>('application');
   const [retentionDays, setRetentionDays] = useState('365');
   const [action, setAction] = useState<'purge' | 'anonymise'>('anonymise');
+  const [jurisdiction, setJurisdiction] =
+    useState<(typeof JURISDICTIONS)[number]['value']>('organisation');
+  const [authorityReference, setAuthorityReference] = useState('');
   const [holdType, setHoldType] =
     useState<(typeof RESOURCE_TYPES)[number]['value']>('application');
   const [resourceId, setResourceId] = useState('');
@@ -94,9 +112,13 @@ export function RetentionPanel({
                 resourceType,
                 retentionDays: Number(retentionDays),
                 action,
+                jurisdiction,
+                ...(authorityReference.trim()
+                  ? { authorityReference: authorityReference.trim() }
+                  : {}),
               });
             },
-            'Retention policy saved. A later sweep applies it. A legal hold stops a record from being touched.',
+            'Retention policy drafted. A different person must activate it before a sweep applies it. A legal hold stops a record from being touched.',
           );
         }}
       >
@@ -124,14 +146,13 @@ export function RetentionPanel({
           id="retention-days"
           label="Keep for days"
           required
-          description="From 1 day to 10 years (3650 days)."
+          description="At least 30 days."
         >
           {(props) => (
             <Input
               {...props}
               type="number"
-              min={1}
-              max={3650}
+              min={30}
               value={retentionDays}
               onChange={(event) => setRetentionDays(event.target.value)}
             />
@@ -152,6 +173,38 @@ export function RetentionPanel({
             The audit trail is never removed by a retention policy.
           </p>
         </div>
+        <div className="grid gap-2">
+          <Label htmlFor="retention-jurisdiction">Records jurisdiction</Label>
+          <select
+            id="retention-jurisdiction"
+            className={nativeSelectClass}
+            value={jurisdiction}
+            onChange={(event) =>
+              setJurisdiction(
+                event.target.value as (typeof JURISDICTIONS)[number]['value'],
+              )
+            }
+          >
+            {JURISDICTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <Field
+          id="retention-authority"
+          label="Disposal authority reference"
+          description="Required for a purge. It must match the authority a records manager signed for this class."
+        >
+          {(props) => (
+            <Input
+              {...props}
+              value={authorityReference}
+              onChange={(event) => setAuthorityReference(event.target.value)}
+            />
+          )}
+        </Field>
         <Button type="submit" disabled={busy !== null}>
           {busy === 'policy' ? 'Saving…' : 'Save retention policy'}
         </Button>
@@ -171,10 +224,38 @@ export function RetentionPanel({
                 className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <span className="text-sm">
-                  {humanStatus(policy.resourceType)} · {policy.retentionDays} days ·{' '}
-                  {humanStatus(policy.action)}
-                  {policy.active ? '' : ' · inactive'}
+                  {humanStatus(policy.resourceType)} ·{' '}
+                  {policy.retentionDays === null
+                    ? 'permanent'
+                    : `${policy.retentionDays} days`}{' '}
+                  · {humanStatus(policy.action)}
+                  {policy.active ? '' : ' · awaiting activation'}
                 </span>
+                {policy.active ? null : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      void run(
+                        `activate-${policy.id}`,
+                        () =>
+                          staffJson(
+                            `/api/retention/policies/${policy.id}/activate`,
+                            'POST',
+                            undefined,
+                            () => stepUp.request(),
+                          ),
+                        'Retention policy activated.',
+                      );
+                    }}
+                  >
+                    {busy === `activate-${policy.id}`
+                      ? 'Activating…'
+                      : `Activate ${humanStatus(policy.resourceType)} policy`}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   size="sm"

@@ -14,14 +14,47 @@ import {
 } from '@/components/certificates/certificate-panel';
 import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import {
+  CorrespondencePanel,
+  type CorrespondenceCertificateOption,
+  type CorrespondenceDecisionOption,
+  type CorrespondenceEvidenceOption,
+  type CorrespondenceLetter,
+  type CorrespondenceTemplateOption,
+} from '@/components/correspondence/correspondence-panel';
+import {
+  CaseFormResponses,
+  type CaseFormResponseView,
+} from '@/components/forms/case-form-responses';
+import {
+  FamilyLinksPanel,
+  type FamilyLinksPanelProps,
+} from '@/components/applications/family-links-panel';
+import {
   availableActions,
   getApplicationCaseRecord,
   permissionsForAction,
   type ApplicationStatus,
 } from '@/domains/applications';
 import { listCertificates } from '@/domains/certificates';
-import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
+import {
+  CORRESPONDENCE_KINDS,
+  listCorrespondence,
+  listTemplates,
+  maySendKind,
+} from '@/domains/correspondence';
+import {
+  actorConflictedOnApplication,
+  getDecisionWithVotes,
+  listDecisions,
+} from '@/domains/decisions';
+import { listMeetingsForApplication } from '@/domains/meetings';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
+import {
+  canReadFamilyLinks,
+  listFamilyLinks,
+  loadDeceasedNameWarning,
+} from '@/domains/family-links';
+import { listResponsesForApplication } from '@/domains/forms';
 import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
 import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
@@ -31,9 +64,21 @@ import { AuthorizationError } from '@/lib/permissions/errors';
 interface LoadedData {
   reference: string;
   workspace: ApplicationCaseWorkspaceProps;
+  /** Null when the viewer holds no genealogy permission. */
+  familyLinks: FamilyLinksPanelProps | null;
   governance: CaseGovernanceWorkspaceProps;
   decisions: PanelDecision[];
   certificates: PanelCertificate[];
+  correspondence: {
+    allowedKinds: string[];
+    canManageTemplates: boolean;
+    letters: CorrespondenceLetter[];
+    templates: CorrespondenceTemplateOption[];
+    decisions: CorrespondenceDecisionOption[];
+    evidenceRequests: CorrespondenceEvidenceOption[];
+    certificates: CorrespondenceCertificateOption[];
+  };
+  formResponses: CaseFormResponseView[];
 }
 
 const actionLabels: Record<string, string> = {
@@ -62,20 +107,58 @@ export default async function ApplicationDetailPage({
     // A malformed id cannot exist: refuse it like any unreadable record.
     if (!isRecordId(id)) throw new AuthorizationError('POLICY_DENIED');
     data = await withRequestTenant(async (ctx) => {
-      const [record, evidence, evidenceRequests, reviews, decisions, certificates] =
-        await Promise.all([
-          getApplicationCaseRecord(id),
-          listForApplication(id),
-          listRequestsForApplication(id),
-          listReviewsForApplication(id),
-          listDecisions(id),
-          listCertificates(id),
-        ]);
       const subject = subjectFromContext(ctx);
-      const application = record.application;
-      const decisionDetails = await Promise.all(
-        decisions.map((decision) => getDecisionWithVotes(decision.id)),
+      // Genealogy is culturally sensitive: only family-link roles load it.
+      const readFamilyLinks = canReadFamilyLinks(subject);
+      const [
+        record,
+        evidence,
+        evidenceRequests,
+        reviews,
+        decisions,
+        certificates,
+        formResponses,
+        familyLinks,
+        deceasedWarning,
+      ] = await Promise.all([
+        getApplicationCaseRecord(id),
+        listForApplication(id),
+        listRequestsForApplication(id),
+        listReviewsForApplication(id),
+        listDecisions(id),
+        listCertificates(id),
+        listResponsesForApplication(id),
+        readFamilyLinks ? listFamilyLinks(id) : Promise.resolve(null),
+        readFamilyLinks ? loadDeceasedNameWarning() : Promise.resolve(''),
+      ]);
+      const allowedKinds = CORRESPONDENCE_KINDS.filter((kind) =>
+        maySendKind(kind, subject.permissions),
       );
+      const canManageTemplates = hasPermission(
+        subject,
+        'correspondence:manage-templates',
+      );
+      const [letters, templates] = await Promise.all([
+        hasAny(subject, [
+          'correspondence:send',
+          'application:read-any',
+          'application:read-assigned',
+        ])
+          ? listCorrespondence(id)
+          : Promise.resolve([]),
+        allowedKinds.length > 0 || canManageTemplates
+          ? listTemplates()
+          : Promise.resolve([]),
+      ]);
+      const application = record.application;
+      const [decisionDetails, actorConflicted, agendaMeetings] = await Promise.all([
+        Promise.all(decisions.map((decision) => getDecisionWithVotes(decision.id))),
+        actorConflictedOnApplication(id),
+        listMeetingsForApplication(id).catch((error: unknown) => {
+          if (error instanceof AuthorizationError) return [];
+          throw error;
+        }),
+      ]);
       const actions = availableActions(application.status as ApplicationStatus)
         .filter((action) => hasAny(subject, permissionsForAction(action)))
         .map((action) => ({ value: action, label: actionLabels[action] ?? action }));
@@ -143,6 +226,27 @@ export default async function ApplicationDetailPage({
               ),
           },
         },
+        familyLinks: familyLinks && {
+          applicationId: id,
+          currentUserId: ctx.userId,
+          deceasedWarning,
+          links: familyLinks.map((link) => ({
+            id: link.id,
+            relationship: link.relationship,
+            relativeName: link.relativeName,
+            community: link.community,
+            notes: link.notes,
+            relativeDeceased: link.relativeDeceased,
+            status: link.status,
+            requestedByUserId: link.requestedByUserId,
+            decisionNote: link.decisionNote,
+            createdAt: link.createdAt.toISOString(),
+          })),
+          permissions: {
+            request: hasPermission(subject, 'family-link:request'),
+            approve: hasPermission(subject, 'family-link:approve'),
+          },
+        },
         governance: {
           applicationId: id,
           applicationStatus: application.status,
@@ -165,6 +269,7 @@ export default async function ApplicationDetailPage({
             proposedOutcome: decision.proposedOutcome,
             finalOutcome: decision.finalOutcome,
             rationale: decision.rationale,
+            meetingId: decision.meetingId,
             currentUserVote:
               votes.find((vote) => vote.voterUserId === ctx.userId)?.choice ?? null,
             tally,
@@ -176,6 +281,11 @@ export default async function ApplicationDetailPage({
             vote: hasPermission(subject, 'decision:vote'),
             finaliseDecision: hasPermission(subject, 'decision:finalise'),
           },
+          actorConflicted,
+          agendaMeetings: agendaMeetings.map((meeting) => ({
+            id: meeting.id,
+            title: meeting.title,
+          })),
         },
         decisions: decisions.map((decision) => ({
           id: decision.id,
@@ -189,6 +299,55 @@ export default async function ApplicationDetailPage({
           status: certificate.status,
           decisionId: certificate.decisionId,
           revokedReason: certificate.revokedReason,
+        })),
+        correspondence: {
+          allowedKinds: [...allowedKinds],
+          canManageTemplates,
+          letters: letters.map((letter) => ({
+            id: letter.id,
+            kind: letter.kind,
+            channel: letter.channel,
+            status: letter.status,
+            subject: letter.renderedSubject ?? letter.subjectTemplate,
+            body: letter.renderedBody,
+            emailText: letter.emailText,
+            sentAt: letter.sentAt?.toISOString() ?? null,
+            createdAt: letter.createdAt.toISOString(),
+            recipientEmail: letter.recipientEmail,
+          })),
+          templates: templates
+            .filter((template) => template.active)
+            .map((template) => ({
+              id: template.id,
+              name: template.name,
+              kind: template.kind,
+            })),
+          decisions: decisions.map((decision) => ({
+            id: decision.id,
+            status: decision.status,
+            finalOutcome: decision.finalOutcome,
+          })),
+          evidenceRequests: evidenceRequests.map((request) => ({
+            id: request.id,
+            description: request.description,
+            status: request.status,
+            dueAt: request.dueAt?.toISOString() ?? null,
+          })),
+          certificates: certificates.map((certificate) => ({
+            id: certificate.id,
+            reference: certificate.reference,
+            status: certificate.status,
+          })),
+        },
+        formResponses: formResponses.map((response) => ({
+          id: response.id,
+          formId: response.formId,
+          formTitle: response.formTitle,
+          fields: response.fields,
+          respondentName: response.respondentName,
+          respondentEmail: response.respondentEmail,
+          submittedAt: response.submittedAt.toISOString(),
+          answers: response.answers,
         })),
       };
     });
@@ -227,10 +386,14 @@ export default async function ApplicationDetailPage({
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">{data.reference}</h1>
       </header>
 
+      <CaseFormResponses responses={data.formResponses} />
+
       <ApplicationCaseWorkspace
         key={`case:${data.workspace.status}`}
         {...data.workspace}
       />
+
+      {data.familyLinks ? <FamilyLinksPanel {...data.familyLinks} /> : null}
 
       <CaseGovernanceWorkspace
         key={`governance:${data.workspace.status}`}
@@ -242,6 +405,8 @@ export default async function ApplicationDetailPage({
         decisions={data.decisions}
         certificates={data.certificates}
       />
+
+      <CorrespondencePanel applicationId={id} {...data.correspondence} />
     </div>
   );
 }

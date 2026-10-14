@@ -26,6 +26,21 @@ incident ticket.
 5. Record the remediation and confirm the queue’s failed count returns to its
    expected baseline.
 
+### Webhook deliveries
+
+- Webhook jobs retry on their own schedule (30s, 2m, 10m, 30m, 1h, 2h, 4h, 8h;
+  nine attempts over ~16h), so a receiver outage of an hour or more does not
+  lose events. Only after the last attempt is the delivery marked `failed`.
+- A per-tenant `sweep` job on the `webhook` queue (every
+  `WEBHOOK_SWEEP_INTERVAL_MS`, default 15 min) re-queues `pending` deliveries
+  untouched for over 1h that have no live job, e.g. when Redis was unavailable
+  at emit time. It shares the webhook worker, so it adds no DB pool slots.
+- Once the receiver is healthy, a tenant admin (`tenant:configure`) may resend a
+  `delivered` or `failed` delivery with
+  `POST /api/webhooks/{endpointId}/deliveries/{deliveryId}/redeliver`. The
+  request is audited as `integration.redelivery_requested`; a still-`pending`
+  delivery is refused because it is already being retried.
+
 ## `audit_integrity_failure`
 
 1. Treat this as a security incident. Preserve database snapshots and relevant

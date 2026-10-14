@@ -1,6 +1,7 @@
 # Rollouts go through scripts/eks-deploy.sh. That script applies
-# infra/k8s/release-check and applies this kustomization only after the Job
-# exits 0. Applying this directory alone skips the gate.
+# infra/k8s/release-check, then the release-pinned migrate Job, and applies
+# this kustomization only after both Jobs exit 0. Applying this directory
+# alone skips the gate and the migration.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: blakpath
@@ -16,6 +17,7 @@ resources:
   - clamav.yaml
   - clamav-mirror.yaml
   - service-ingress.yaml
+  - network-policy.yaml
   - autoscaling.yaml
 images:
   - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app

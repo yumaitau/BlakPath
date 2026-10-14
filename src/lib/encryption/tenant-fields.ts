@@ -168,12 +168,23 @@ export async function sealFamilyFields(
   };
 }
 
+/** The decider's note can name the relative, so it sits under the tenant key. */
+export async function sealFamilyDecisionNote(
+  organisationId: string,
+  rowId: string,
+  note: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('family_links', 'decision_note', rowId), note);
+}
+
 export async function openFamilyRows<
   T extends {
     id: string;
     relativeName: string;
     community: string | null;
     notes: string | null;
+    decisionNote: string | null;
   },
 >(organisationId: string, rows: readonly T[]): Promise<T[]> {
   return mapRows(organisationId, rows, async (scope, row) => ({
@@ -190,6 +201,11 @@ export async function openFamilyRows<
       row.community,
     ),
     notes: await openText(scope, bind('family_links', 'notes', row.id), row.notes),
+    decisionNote: await openText(
+      scope,
+      bind('family_links', 'decision_note', row.id),
+      row.decisionNote,
+    ),
   }));
 }
 
@@ -231,6 +247,32 @@ export async function openFormResponses<
       row.respondentEmail,
     ),
   }));
+}
+
+/** JSONB `draft_answers`: a recipient's partial answers, bound to the invitation row. */
+export async function sealFormDraft(
+  organisationId: string,
+  invitationId: string,
+  answers: unknown,
+): Promise<EncryptedFieldV2> {
+  const scope = await scopeFor(organisationId);
+  const sealed = await sealJson(
+    scope,
+    bind('form_invitations', 'draft_answers', invitationId),
+    answers,
+  );
+  if (!sealed) throw new Error('Form draft cannot be empty');
+  return sealed;
+}
+
+export async function openFormDraft(
+  organisationId: string,
+  invitationId: string,
+  stored: unknown,
+): Promise<unknown> {
+  if (stored === null || stored === undefined) return null;
+  const scope = await scopeFor(organisationId);
+  return openJson(scope, bind('form_invitations', 'draft_answers', invitationId), stored);
 }
 
 export async function sealClientContacts(
@@ -304,6 +346,74 @@ export async function openDecisionRows<
       scope,
       bind('decisions', 'rationale', row.id),
       row.rationale,
+    ),
+  }));
+}
+
+/** Committee minutes and the quorum note, written by a person. */
+export async function sealMeetingText(
+  organisationId: string,
+  rowId: string,
+  column: 'minutes' | 'quorum_note',
+  value: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('meetings', column, rowId), value);
+}
+
+export async function openMeetingRows<
+  T extends { id: string; minutes: string | null; quorumNote: string | null },
+>(organisationId: string, rows: readonly T[]): Promise<T[]> {
+  return mapRows(organisationId, rows, async (scope, row) => ({
+    ...row,
+    minutes: await openText(scope, bind('meetings', 'minutes', row.id), row.minutes),
+    quorumNote: await openText(
+      scope,
+      bind('meetings', 'quorum_note', row.id),
+      row.quorumNote,
+    ),
+  }));
+}
+
+export async function sealAttendanceNote(
+  organisationId: string,
+  rowId: string,
+  note: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('meeting_attendance', 'note', rowId), note);
+}
+
+export async function openAttendanceRows<T extends { id: string; note: string | null }>(
+  organisationId: string,
+  rows: readonly T[],
+): Promise<T[]> {
+  return mapRows(organisationId, rows, async (scope, row) => ({
+    ...row,
+    note: await openText(scope, bind('meeting_attendance', 'note', row.id), row.note),
+  }));
+}
+
+/** A member's stated reason for a conflict of interest. */
+export async function sealConflictReason(
+  organisationId: string,
+  rowId: string,
+  reason: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('conflict_declarations', 'reason', rowId), reason);
+}
+
+export async function openConflictRows<T extends { id: string; reason: string | null }>(
+  organisationId: string,
+  rows: readonly T[],
+): Promise<T[]> {
+  return mapRows(organisationId, rows, async (scope, row) => ({
+    ...row,
+    reason: await openText(
+      scope,
+      bind('conflict_declarations', 'reason', row.id),
+      row.reason,
     ),
   }));
 }
@@ -403,6 +513,161 @@ export async function openConsentRows<
       row.wordingSnapshot,
     ),
   }));
+}
+
+/**
+ * Seal or open a fixed set of text columns on one row. `columns` maps the
+ * Drizzle property to its SQL column name, which is the envelope binding.
+ */
+async function sealColumns<K extends string>(
+  scope: EncryptionScope,
+  table: string,
+  columns: Readonly<Record<K, string>>,
+  rowId: string,
+  values: Partial<Record<K, string | null>>,
+): Promise<Partial<Record<K, string | null>>> {
+  const sealed: Partial<Record<K, string | null>> = {};
+  for (const key of Object.keys(values) as K[]) {
+    const value = values[key];
+    if (value === undefined) continue;
+    sealed[key] = await sealText(scope, bind(table, columns[key], rowId), value);
+  }
+  return sealed;
+}
+
+async function openColumns<
+  K extends string,
+  T extends { id: string } & Record<K, unknown>,
+>(
+  scope: EncryptionScope,
+  table: string,
+  columns: Readonly<Record<K, string>>,
+  row: T,
+): Promise<T> {
+  const opened: T = { ...row };
+  for (const key of Object.keys(columns) as K[]) {
+    const stored = row[key];
+    if (typeof stored !== 'string') continue;
+    (opened as Record<K, unknown>)[key] = await openText(
+      scope,
+      bind(table, columns[key], row.id),
+      stored,
+    );
+  }
+  return opened;
+}
+
+const TEMPLATE_COLUMNS = {
+  subjectTemplate: 'subject_template',
+  bodyTemplate: 'body_template',
+} as const;
+
+type TemplateTextKey = keyof typeof TEMPLATE_COLUMNS;
+
+/** Template text for `correspondence_templates`. The name stays a plaintext label. */
+export async function sealTemplateText(
+  organisationId: string,
+  rowId: string,
+  values: Partial<Record<TemplateTextKey, string>>,
+): Promise<Partial<Record<TemplateTextKey, string>>> {
+  const scope = await scopeFor(organisationId);
+  const sealed = await sealColumns(
+    scope,
+    'correspondence_templates',
+    TEMPLATE_COLUMNS,
+    rowId,
+    values,
+  );
+  return sealed as Partial<Record<TemplateTextKey, string>>;
+}
+
+export async function openTemplateRows<
+  T extends { id: string; subjectTemplate: string; bodyTemplate: string },
+>(organisationId: string, rows: readonly T[]): Promise<T[]> {
+  return mapRows(organisationId, rows, (scope, row) =>
+    openColumns(scope, 'correspondence_templates', TEMPLATE_COLUMNS, row),
+  );
+}
+
+const ITEM_COLUMNS = {
+  subjectTemplate: 'subject_template',
+  bodyTemplate: 'body_template',
+  renderedSubject: 'rendered_subject',
+  renderedBody: 'rendered_body',
+  recipientName: 'recipient_name',
+  recipientEmail: 'recipient_email',
+} as const;
+
+type ItemTextKey = keyof typeof ITEM_COLUMNS;
+
+export interface CorrespondenceItemText {
+  subjectTemplate?: string;
+  bodyTemplate?: string;
+  renderedSubject?: string | null;
+  renderedBody?: string | null;
+  recipientName?: string | null;
+  recipientEmail?: string | null;
+}
+
+/** Letter text and recipient for `correspondence_items`. */
+export async function sealCorrespondenceItemText(
+  organisationId: string,
+  rowId: string,
+  values: CorrespondenceItemText,
+): Promise<CorrespondenceItemText> {
+  const scope = await scopeFor(organisationId);
+  const sealed = await sealColumns<ItemTextKey>(
+    scope,
+    'correspondence_items',
+    ITEM_COLUMNS,
+    rowId,
+    values,
+  );
+  return sealed as CorrespondenceItemText;
+}
+
+export async function openCorrespondenceItemRows<
+  T extends {
+    id: string;
+    subjectTemplate: string;
+    bodyTemplate: string;
+    renderedSubject: string | null;
+    renderedBody: string | null;
+    recipientName: string | null;
+    recipientEmail: string | null;
+  },
+>(organisationId: string, rows: readonly T[]): Promise<T[]> {
+  return mapRows(organisationId, rows, (scope, row) =>
+    openColumns(scope, 'correspondence_items', ITEM_COLUMNS, row),
+  );
+}
+
+/**
+ * Replacement text for an existing `correspondence_messages` row (retention
+ * anonymise). Recipient, subject and text body are required columns, so the
+ * caller passes a placeholder; the HTML body is cleared.
+ */
+export async function sealCorrespondenceMessageText(
+  organisationId: string,
+  rowId: string,
+  value: string,
+): Promise<{ recipient: string; subject: string; textBody: string; htmlBody: null }> {
+  const scope = await scopeFor(organisationId);
+  const seal = async (column: string) => {
+    const sealed = await sealText(
+      scope,
+      bind('correspondence_messages', column, rowId),
+      value,
+    );
+    if (!sealed) throw new Error('Correspondence fields cannot be empty');
+    return sealed;
+  };
+  return {
+    recipient: await seal('recipient'),
+    subject: await seal('subject'),
+    textBody: await seal('text_body'),
+    htmlBody: null,
+  };
 }
 
 export async function insertSealedCorrespondence(input: {

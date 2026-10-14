@@ -1,9 +1,11 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
+import { WORKER_QUEUE_CONCURRENCY } from '@/db/connection-budget';
 import { getOrganisationKey } from '@/domains/organisation-keys/service';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
 import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
 import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
+import { webhookBackoffStrategy } from '@/domains/webhooks/retry';
 import { closeMalwareScanDlq, deadLetterExhaustedScan } from '@/lib/queues/dlq';
 import { malwareScanBackoffStrategy } from '@/lib/queues/scan-policy';
 import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
@@ -103,14 +105,17 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
     {
       connection,
       prefix: 'bp:queue',
-      // Conservative default; per-queue tuning lands with real processors.
-      concurrency: 4,
+      // Matches DATABASE_WORKER_POOL_MAX: one pooled connection per in-flight job.
+      concurrency: WORKER_QUEUE_CONCURRENCY,
       // Do not autorun until all workers are constructed and listeners wired.
       autorun: false,
       // BullMQ reads the custom backoff from the worker that owns the job.
+      // Webhook deliveries retry over hours (see domains/webhooks/retry.ts).
       ...(queueName === QueueName.MalwareScan
         ? { settings: { backoffStrategy: malwareScanBackoffStrategy } }
-        : {}),
+        : queueName === QueueName.Webhook
+          ? { settings: { backoffStrategy: webhookBackoffStrategy } }
+          : {}),
     },
   );
 

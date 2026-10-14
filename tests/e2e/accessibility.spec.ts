@@ -147,7 +147,10 @@ test('keyboard users can navigate menus, board work and public forms', async ({
 
   await page.goto('/board');
   const title = `Keyboard task ${Date.now()}`;
-  await page.getByRole('button', { name: 'Add task' }).focus();
+  // Action buttons stay disabled (unfocusable) until the page has hydrated.
+  const addTask = page.getByRole('button', { name: 'Add task' });
+  await expect(addTask).toBeEnabled();
+  await addTask.focus();
   await page.keyboard.press('Enter');
   const titleInput = page.getByLabel('What needs to be done?');
   await expect(titleInput).toBeFocused();
@@ -198,7 +201,9 @@ test('keyboard users can navigate menus, board work and public forms', async ({
 
   await page.goto(publicUrl);
   const response = page.getByLabel('Your response');
-  await page.getByRole('button', { name: 'Submit' }).focus();
+  const submit = page.getByRole('button', { name: 'Submit' });
+  await expect(submit).toBeEnabled();
+  await submit.focus();
   await page.keyboard.press('Enter');
   await expect(
     page.getByRole('alert').filter({ hasText: 'Some answers need another look' }),

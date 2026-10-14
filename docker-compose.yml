@@ -126,7 +126,7 @@ services:
 
   # --- Malware scanning -----------------------------------------------------
   clamav:
-    image: clamav/clamav:latest
+    image: clamav/clamav:1.5.4
     # The upstream image currently publishes amd64 only. Docker Desktop can
     # emulate it on Apple Silicon for this local-development stack.
     platform: linux/amd64
@@ -152,7 +152,7 @@ services:
 
   # --- Email (dev mailbox) --------------------------------------------------
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.31.5
     restart: unless-stopped
     ports:
       - '${BLAKPATH_SMTP_PORT:-1025}:1025' # SMTP
@@ -276,7 +276,7 @@ services:
   # --- Observability (optional) --------------------------------------------
   # Enable with: docker compose --profile observability up -d
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.162.0
     profiles: ['observability']
     restart: unless-stopped
     command: ['--config=/etc/otel/config.yaml']

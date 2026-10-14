@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { z } from 'zod';
+import { WEB_POOL_MAX, WORKER_POOL_MAX } from '@/db/connection-budget';
 import { validateProductionReadiness } from '@/lib/production-readiness';
 
 /**
@@ -39,9 +40,14 @@ const serverSchema = z
     // Database. Runtime uses DATABASE_URL (application role). Migrations in
     // production use DATABASE_MIGRATION_URL (owning role) and refuse to share
     // the application role. Local development may omit the migration URL.
+    // Workers set BLAKPATH_PROCESS=worker and use the worker pool, sized
+    // separately so queue concurrency is not squeezed into the web pool.
+    // See src/db/connection-budget.ts.
     DATABASE_URL: z.string().url(),
     DATABASE_MIGRATION_URL: z.string().url().optional(),
-    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
+    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(WEB_POOL_MAX),
+    DATABASE_WORKER_POOL_MAX: z.coerce.number().int().positive().default(WORKER_POOL_MAX),
+    BLAKPATH_PROCESS: z.enum(['web', 'worker']).default('web'),
     AUDIT_DB_APP_ROLE: z
       .string()
       .regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/)
@@ -159,6 +165,7 @@ const serverSchema = z
     AUDIT_VERIFY_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     REMINDER_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
+    WEBHOOK_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
     // Evidence scan recovery. The scan job itself retries through a 10 minute
     // ClamAV gap; the sweep re-queues anything still quarantined after that

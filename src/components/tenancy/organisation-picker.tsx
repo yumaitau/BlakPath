@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Alert } from '@/components/ui/alert';
 import { POST_SIGN_IN_PATH } from '@/lib/auth/landing';
 import { safeReturnTo } from '@/lib/auth/return-to';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import { cn } from '@/lib/utils';
 
 /**
@@ -66,7 +67,9 @@ export function OrganisationPicker({
     }
   }
 
-  const busy = pendingId !== null;
+  const hydrated = useHydrated();
+  // Disabled until hydrated so an early click is never lost.
+  const busy = pendingId !== null || !hydrated;
 
   return (
     <div className="flex flex-col gap-4">

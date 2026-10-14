@@ -124,13 +124,19 @@ and is not residue.
 Inventoried columns:
 
 - `applications.applicant_name` and `applications.intake`
-- `family_links.relative_name`, `community`, `notes`
+- `family_links.relative_name`, `community`, `notes`, `decision_note`
 - `form_responses.answers` and `respondent_email`
 - `clients.contact_email`, `contact_phone`, `notes` (`display_name` stays readable)
 - `application_notes.body`
 - `decisions.rationale`
 - `webhook_endpoints.secret`
 - `correspondence_messages.recipient`, `subject`, `text_body`, `html_body`
+- `correspondence_templates.subject_template`, `body_template` (`name` stays a
+  readable label for the per-organisation unique index)
+- `correspondence_items.subject_template`, `body_template`, `rendered_subject`,
+  `rendered_body`, `recipient_name`, `recipient_email`. The applicant link is
+  stored only as a SHA-256 hash; the delivered email (with the live link) is a
+  `correspondence_messages` row referenced by `message_id`
 - `consent_records.wording_snapshot` (the wording copied at grant time)
 - `membership_invitations.token_seal` and `form_invitations.token_seal` (the
   bearer token held until the invitation email is sent; JSONB envelope)
@@ -138,9 +144,11 @@ Inventoried columns:
 `applications.reference` stays readable so staff can see the matter number.
 Lookup does not use a plaintext index on that column.
 
-This is not a full correspondence product and not a full append-only consent
-ledger. Those remain separate work. The wording snapshot and the outbound
-email holding table exist so those bodies sit under the tenant key.
+This is not a full append-only consent ledger. That remains separate work. The
+wording snapshot and the outbound email holding table exist so those bodies sit
+under the tenant key. Case correspondence (`src/domains/correspondence`) stores
+its letters in `correspondence_items` and sends email through the same holding
+table.
 
 ### Blind index
 
@@ -239,19 +247,52 @@ and both lookups and name checks are rate-limited.
 
 ## Retention & deletion vs official records
 
-- **Tenant-set defaults.** Retention periods are organisation-configured
-  (`organisation_settings.retentionDefaults`).
+- **Disposal authority, not a software sentence.** Every resource type maps to a
+  disposal class. A records manager signs the authority reference for a class in
+  the organisation's jurisdiction. The software does not choose the statute, the
+  class number, or the keep period (`docs/records-disposal.md`).
+- **Two people to activate.** A retention policy is drafted inactive. A different
+  `retention:manage` holder has to activate it. The drafter cannot activate their
+  own policy.
+- **No purge without an authority.** A purge runs only when the policy cites a
+  current sign-off. Permanent retention (`retain`, no end date) is never due.
+  Each committed purge is written to the destruction register, which can be
+  exported.
+- **Tenant-set defaults.** Organisation settings still carry
+  `organisation_settings.retentionDefaults` for guidance. They do not by
+  themselves authorise destruction.
 - **Soft delete first.** The `softDelete` helper (`deletedAt`) supports
   reversible removal and grace periods before any hard deletion.
 - **Worker-driven lifecycle.** Retention/deletion runs as background jobs
   (`docs/architecture.md`), tenant-scoped and audited.
-- **Official records are protected.** A recorded determination or issued
-  certificate is an official record; it is not casually deleted. Where deletion of
-  ancillary data is lawful and requested, it happens without destroying the
-  official record or the audit trail.
+- **Official records are protected.** A recorded determination (`decided`
+  application or finalised decision) or an issued certificate is an official
+  record (`official_outcome`). The retention sweep will not anonymise or purge
+  it, or its evidence and form responses, unless the policy's disposal
+  authority is verified: a second person activated the policy and its
+  authority reference matches a current records-manager sign-off that is not
+  marked permanent. A bare reference string does not unlock disposal. The
+  audit trail is never a target.
+- **Retention floor and grace.** A policy cannot be shorter than 30 days. Purge
+  tombstones the database row, removes every S3 object version immediately, and
+  hard-deletes the row only after a further 30-day grace. The hard delete runs
+  only under a purge policy that still passes the signed-authority gate.
+  Anonymised rows are marked and are not rewritten on later sweeps.
+- **Letters follow the case.** Anonymising an application rewrites its
+  `correspondence_items` text and their `correspondence_messages` delivery
+  copies to a sealed placeholder, clears the recipient, deletes the printed PDF
+  and removes the applicant link hash, all in the disposal transaction. A purge
+  removes the link at the tombstone; the hard delete cascades the letters and
+  deletes their delivery copies.
+- **Legal holds cascade.** A hold on an application also shields its evidence,
+  form responses, notes and family links. A hold on evidence or a form response
+  keeps that record, and its parent application, out of the sweep. Holds can
+  only be placed on a record that exists.
 - **The audit trail is not deletable per-row.** Deleting individual audit rows
   would defeat tamper-evidence; audit retention is handled by whole, verified,
-  archived periods, never by editing rows (`docs/audit-log-design.md`).
+  archived periods, never by editing rows (`docs/audit-log-design.md`). The
+  destruction register is the same kind of control record and is not a sweep
+  target.
 
 ## No automated determination — the guarantee
 

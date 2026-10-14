@@ -67,7 +67,7 @@ test('protected routes reject anonymous access and sign-in errors stay generic',
   await isolateSignInClient(page);
   const apiResponse = await page.request.get('/api/applications');
   expect(apiResponse.status()).toBe(401);
-  await expect(apiResponse.json()).resolves.toEqual({ error: 'Unauthorized' });
+  await expect(apiResponse.json()).resolves.toMatchObject({ error: 'Unauthorized' });
 
   await page.goto('/dashboard');
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
@@ -119,7 +119,9 @@ test('staff can select a tenant, validate input, and start and find an applicati
     data: { applicantName: '', priority: 'urgent' },
   });
   expect(invalidResponse.status()).toBe(400);
-  await expect(invalidResponse.json()).resolves.toEqual({ error: 'Invalid request' });
+  await expect(invalidResponse.json()).resolves.toMatchObject({
+    error: 'Invalid request',
+  });
 
   await page.getByRole('link', { name: 'Applications' }).first().click();
   await expect(
@@ -256,7 +258,7 @@ test('a linked applicant uploads evidence into quarantine without download acces
     `/api/evidence/${payload.evidence.id}/download`,
   );
   expect(deniedDownload.status()).toBe(403);
-  await expect(deniedDownload.json()).resolves.toEqual({ error: 'Forbidden' });
+  await expect(deniedDownload.json()).resolves.toMatchObject({ error: 'Forbidden' });
   await expectNoSeriousAccessibilityViolations(applicantPage);
   await applicantContext.close();
 });
@@ -300,7 +302,18 @@ test('staff can progress a case through review and a human committee decision', 
   await page.getByLabel('Request further evidence').fill(requestText);
   await page.getByRole('button', { name: 'Record request' }).click();
   await expect(page.getByRole('status')).toContainText('Evidence request recorded.');
-  await expect(page.getByText(requestText, { exact: true })).toBeVisible();
+  // The request is listed under Evidence, and again under Correspondence where
+  // staff send its notice (a separate, explicit step).
+  await expect(
+    page
+      .getByRole('region', { name: 'Evidence', exact: true })
+      .getByText(requestText, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole('region', { name: 'Correspondence', exact: true })
+      .getByText(requestText, { exact: true }),
+  ).toBeVisible();
 
   const noteText = `Applicant prefers contact after 3 pm ${stamp}`;
   await page.getByLabel('Add a note').fill(noteText);
@@ -360,7 +373,7 @@ test('staff can progress a case through review and a human committee decision', 
     { data: { operation: 'assign_self' } },
   );
   expect(denied.status()).toBe(403);
-  await expect(denied.json()).resolves.toEqual({ error: 'Forbidden' });
+  await expect(denied.json()).resolves.toMatchObject({ error: 'Forbidden' });
 
   await expectNoSeriousAccessibilityViolations(page);
 });

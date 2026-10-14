@@ -179,6 +179,7 @@ The app runs at <http://localhost:3000>.
 | `pnpm db:migrate`    | Apply migrations                              |
 | `pnpm db:studio`     | Open Drizzle Studio                           |
 | `pnpm db:seed`       | Seed baseline data                            |
+| `pnpm org:provision` | Provision an organisation (operator command)  |
 
 Accessibility acceptance coverage and the required assisted-review record are
 documented in [`docs/accessibility-acceptance.md`](docs/accessibility-acceptance.md).
@@ -222,7 +223,8 @@ BlakPath/
 | [`docs/authentication.md`](docs/authentication.md)                           | Better Auth, MFA/passkeys/TOTP, sessions, step-up, SSO, per-org SCIM                           |
 | [`docs/rate-limits.md`](docs/rate-limits.md)                                 | Shared request limits for auth, public pages, and bearer endpoints                             |
 | [`docs/authorization-matrix.md`](docs/authorization-matrix.md)               | Roles × permission keys, separation of duties, contextual policies                             |
-| [`docs/audit-log-design.md`](docs/audit-log-design.md)                       | Event schema, SHA-256 hash chaining, checkpoints, redaction                                    |
+| [`docs/audit-log-design.md`](docs/audit-log-design.md)                       | Event schema, SHA-256 hash chaining, checkpoints, redaction, viewer                            |
+| [`docs/audit-monthly-review.md`](docs/audit-monthly-review.md)               | Monthly tenant audit-log review checklist                                                      |
 | [`docs/threat-model.md`](docs/threat-model.md)                               | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |
 | [`docs/privacy-architecture.md`](docs/privacy-architecture.md)               | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
 | [`docs/customer-held-keys.md`](docs/customer-held-keys.md)                   | Client trust pack (draft): key custody modes, revocation, crypto-shredding, auditor checks     |

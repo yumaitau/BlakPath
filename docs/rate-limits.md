@@ -7,7 +7,7 @@ else (`infra/k8s/service-ingress.yaml`, `inbound-cidrs`). Do not widen those
 ranges, and do not key limits on `x-forwarded-for`.
 
 Auth windows are enforced by Better Auth with the same Redis counter. Other
-routes enforce the table below. `/form/:token` and `/verify/:code` are limited
+routes enforce the table below. `/form/:token`, `/verify/:code` and `/c/:token` are limited
 in `src/proxy.ts` so the response is HTTP 429 before the page renders. The
 pages do not count a second time.
 
@@ -17,21 +17,23 @@ with no credential still spends the IP bucket.
 
 Windows are 60 seconds.
 
-| Route                                             | IP  | Second bucket           |
-| ------------------------------------------------- | --- | ----------------------- |
-| Sign-in, sign-up                                  | 5   | —                       |
-| Forgot / request password reset                   | 3   | —                       |
-| Reset password, TOTP, backup code                 | 5   | —                       |
-| Other auth routes                                 | 100 | —                       |
-| `POST /api/membership-invitations/create-account` | 5   | invitation token, 5     |
-| `POST /api/public/forms/[token]`                  | 20  | form token, 10          |
-| `GET /form/[token]`                               | 60  | form token, 30          |
-| `GET /verify/[code]`                              | 30  | verification code, 15   |
-| `POST /api/membership-invitations/accept`         | 10  | invitation token, 5     |
-| `/api/v1/*`                                       | 60  | API key id, 120         |
-| `POST /api/mcp`                                   | 30  | API key id, 60          |
-| `/api/scim/v2/*`                                  | 20  | bearer hash, 60         |
-| `POST /api/email/events`                          | 30  | webhook secret hash, 60 |
+| Route                                                | IP  | Second bucket           |
+| ---------------------------------------------------- | --- | ----------------------- |
+| Sign-in, sign-up                                     | 5   | —                       |
+| Forgot / request password reset                      | 3   | —                       |
+| Reset password, TOTP, backup code                    | 5   | —                       |
+| Other auth routes                                    | 100 | —                       |
+| `POST /api/membership-invitations/create-account`    | 5   | invitation token, 5     |
+| `POST /api/public/forms/[token]`                     | 20  | form token, 10          |
+| `GET /form/[token]`                                  | 60  | form token, 30          |
+| `GET /verify/[code]`                                 | 30  | verification code, 15   |
+| `GET /c/[token]`                                     | 30  | letter token, 15        |
+| `GET /api/public/correspondence/[token]/certificate` | 30  | letter token, 15        |
+| `POST /api/membership-invitations/accept`            | 10  | invitation token, 5     |
+| `/api/v1/*`                                          | 60  | API key id, 120         |
+| `POST /api/mcp`                                      | 30  | API key id, 60          |
+| `/api/scim/v2/*`                                     | 20  | bearer hash, 60         |
+| `POST /api/email/events`                             | 30  | webhook secret hash, 60 |
 
 A 429 body is `{ "error": "Too many requests" }` with `Retry-After` and
 `X-Retry-After`.

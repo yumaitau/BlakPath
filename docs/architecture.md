@@ -29,18 +29,18 @@ tenancy, authorisation and audit gates.
 Phase 1 lands the platform spine. Later phases add case-management domains on top
 of the same tenancy/authorisation/audit foundation.
 
-| Domain                | Responsibility                                                                                                       | Status      |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------- |
-| **Tenancy**           | Organisations, settings, domains, feature flags; the tenant boundary itself (`src/db/schema/tenancy.ts`)             | Phase 1     |
-| **Identity & Auth**   | Better Auth tables and flows: accounts, sessions, passkeys, TOTP (`src/db/schema/auth.ts`)                           | Phase 1     |
-| **Membership & RBAC** | Memberships, roles, permission catalogue, role grants, representative authorisations (`src/db/schema/membership.ts`) | Phase 1     |
-| **Audit & Integrity** | Append-only hash-chained audit trail, integrity checkpoints, break-glass requests (`src/db/schema/audit.ts`)         | Phase 1     |
-| **Applications**      | CoA application intake, status lifecycle, correspondence                                                             | Later phase |
-| **Evidence**          | Secure document upload, quarantine → scan → serve lifecycle (`docs/evidence-scanning-design.md`)                     | Phase 3     |
-| **Genealogy**         | Family/ancestry records supporting an application                                                                    | Later phase |
-| **Decisions**         | Human-recorded determinations and certificate issuance                                                               | Later phase |
-| **Consent**           | Consent ledger; ties representative access to recorded consent                                                       | Later phase |
-| **Notifications**     | Email and in-app messaging (via the worker)                                                                          | Later phase |
+| Domain                | Responsibility                                                                                                                                                                                                                                                                                    | Status      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **Tenancy**           | Organisations, settings, domains, feature flags; the tenant boundary itself (`src/db/schema/tenancy.ts`)                                                                                                                                                                                          | Phase 1     |
+| **Identity & Auth**   | Better Auth tables and flows: accounts, sessions, passkeys, TOTP (`src/db/schema/auth.ts`)                                                                                                                                                                                                        | Phase 1     |
+| **Membership & RBAC** | Memberships, roles, permission catalogue, role grants, representative authorisations (`src/db/schema/membership.ts`)                                                                                                                                                                              | Phase 1     |
+| **Audit & Integrity** | Append-only hash-chained audit trail, integrity checkpoints, break-glass requests (`src/db/schema/audit.ts`)                                                                                                                                                                                      | Phase 1     |
+| **Applications**      | CoA application intake and status lifecycle. Outbound correspondence is a human Send (`src/domains/correspondence`): templates per organisation, case log, email or printed letter. Outcome letters cannot be sent before the decision is finalised, and finalising a decision does not send one. | In progress |
+| **Evidence**          | Secure document upload, quarantine → scan → serve lifecycle (`docs/evidence-scanning-design.md`)                                                                                                                                                                                                  | Phase 3     |
+| **Genealogy**         | Family/ancestry records supporting an application                                                                                                                                                                                                                                                 | Later phase |
+| **Decisions**         | Human-recorded determinations and certificate issuance                                                                                                                                                                                                                                            | Later phase |
+| **Consent**           | Consent ledger; ties representative access to recorded consent                                                                                                                                                                                                                                    | Later phase |
+| **Notifications**     | Email and in-app messaging (via the worker)                                                                                                                                                                                                                                                       | Later phase |
 
 Every future tenant-owned table uses the shared helpers (`organisationId()`,
 `primaryId()`, `timestamps`) and is reached through the tenant-scoped data access
@@ -178,8 +178,9 @@ path:
 - **Audit integrity verification** — page each active tenant chain and the
   platform chain from the latest checkpoint, compare the chain to the signed
   external anchors, then checkpoint or alarm (`docs/audit-log-design.md`).
-- **Retention & lifecycle** — apply retention/deletion policies where lawful,
-  respecting official-record obligations (`docs/privacy-architecture.md`).
+- **Retention & lifecycle** — apply retention/deletion policies where a signed
+  disposal authority and a second approver allow it (`docs/records-disposal.md`,
+  `docs/privacy-architecture.md`).
 
 Jobs run under the **same guarantees as web requests**: a job that touches
 tenant data establishes a tenant context, uses the tenant-scoped data layer, and

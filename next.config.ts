@@ -28,6 +28,14 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
+  // Standalone tracing does not follow the cwd read of the RDS CA bundle.
+  // The Docker runner also copies the file; this covers `next start` output.
+  // Noto Sans files are read from disk when a certificate is rendered.
+  outputFileTracingIncludes: {
+    '*': ['./certs/rds-global-bundle.pem'],
+    '/api/certificates': ['./src/domains/certificates/fonts/**/*'],
+    '/api/certificates/route': ['./src/domains/certificates/fonts/**/*'],
+  },
   serverExternalPackages: [
     '@node-rs/argon2',
     'postgres',
@@ -36,11 +44,6 @@ const nextConfig: NextConfig = {
     '@pdf-lib/fontkit',
     'qrcode',
   ],
-  // Noto Sans files are read from disk when a certificate is rendered.
-  outputFileTracingIncludes: {
-    '/api/certificates': ['./src/domains/certificates/fonts/**/*'],
-    '/api/certificates/route': ['./src/domains/certificates/fonts/**/*'],
-  },
   experimental: {
     // Server Actions are used sparingly; keep body limits tight.
     serverActions: {

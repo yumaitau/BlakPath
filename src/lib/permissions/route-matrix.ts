@@ -90,6 +90,11 @@ const APPLICATION_READ = [
   'application:read-own',
 ] as const satisfies readonly Permission[];
 
+const FAMILY_LINK = [
+  'family-link:request',
+  'family-link:approve',
+] as const satisfies readonly Permission[];
+
 const CONSENT_WRITE = [
   'application:create',
   'application:update-intake',
@@ -143,9 +148,32 @@ const MEETING_READ = [
   'meeting:agenda-manage',
 ] as const satisfies readonly Permission[];
 
+const MEETING_RUN = [
+  'meeting:agenda-manage',
+  'meeting:create',
+] as const satisfies readonly Permission[];
+
+const MEETING_ATTENDANCE = [
+  ...MEETING_RUN,
+  'decision:vote',
+  'meeting:pack-access',
+  'conflict:declare',
+] as const satisfies readonly Permission[];
+
 const DASHBOARD_READ = [
   'report:view',
   'application:read-any',
+] as const satisfies readonly Permission[];
+
+const CORRESPONDENCE_CASE_READ = [
+  'correspondence:send',
+  'application:read-any',
+  'application:read-assigned',
+] as const satisfies readonly Permission[];
+
+const CORRESPONDENCE_TEMPLATE_READ = [
+  'correspondence:manage-templates',
+  'correspondence:send',
 ] as const satisfies readonly Permission[];
 
 const CERTIFICATE_READ = [
@@ -242,10 +270,47 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('PATCH', '/api/applications/[id]', anyOf(APPLICATION_PATCH), {
     body: { operation: 'assign_self' },
   }),
+  route('GET', '/api/applications/[id]/correspondence', anyOf(CORRESPONDENCE_CASE_READ)),
+  route('POST', '/api/applications/[id]/correspondence', anyOf(['correspondence:send'])),
+  // Step-up first (a fresh fixture session passes), then the send permission.
+  route(
+    'POST',
+    '/api/applications/[id]/correspondence/[correspondenceId]/send',
+    anyOf(['correspondence:send']),
+  ),
   route('POST', '/api/applications/[id]/decisions', anyOf(['decision:propose'])),
   route('POST', '/api/applications/[id]/evidence', anyOf(EVIDENCE_UPLOAD)),
   route('POST', '/api/applications/[id]/evidence-requests', anyOf(['evidence:request'])),
+  route(
+    'POST',
+    '/api/applications/[id]/evidence-requests/[requestId]/notify',
+    anyOf(['correspondence:send']),
+  ),
+  // Genealogy reads also need a staff case read, so an applicant holding
+  // `family-link:request` is still refused the list.
+  route('GET', '/api/applications/[id]/family-links', anyOf(FAMILY_LINK), {
+    denyActor: { type: 'role', slug: 'applicant' },
+  }),
+  route('POST', '/api/applications/[id]/family-links', anyOf(['family-link:request']), {
+    body: { relationship: 'grandmother', relativeName: 'Matrix Relative' },
+  }),
+  route('PATCH', '/api/applications/[id]/family-links/[linkId]', anyOf(FAMILY_LINK), {
+    body: { operation: 'approve' },
+  }),
   route('POST', '/api/applications/[id]/reviews', anyOf(['review:create'])),
+  // Gated in the audit domain (`src/domains/audit/log.ts`); a refusal is
+  // itself recorded on the tenant chain.
+  route('GET', '/api/audit/events', anyOf(['audit:view']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('GET', '/api/audit/events/export', anyOf(['audit:view']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('POST', '/api/audit/reviews', anyOf(['audit:view']), {
+    body: { period: '2026-10', outcome: 'no_findings' },
+  }),
   route('GET', '/api/auth/[...all]', { kind: 'auth' }, { skipProbe: true }),
   route(
     'POST',
@@ -296,6 +361,26 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('GET', '/api/certificates/[id]/download', anyOf(CERTIFICATE_READ)),
   route('POST', '/api/certificates/[id]/revoke', anyOf(['certificate:revoke'])),
   route('POST', '/api/certificates/[id]/sign', anyOf(['certificate:sign'])),
+  route('GET', '/api/correspondence/[id]/letter', anyOf(CORRESPONDENCE_CASE_READ)),
+  route('GET', '/api/correspondence/templates', anyOf(CORRESPONDENCE_TEMPLATE_READ), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route(
+    'POST',
+    '/api/correspondence/templates',
+    anyOf(['correspondence:manage-templates']),
+  ),
+  route(
+    'PATCH',
+    '/api/correspondence/templates/[id]',
+    anyOf(['correspondence:manage-templates']),
+  ),
+  route(
+    'POST',
+    '/api/correspondence/templates/seed',
+    anyOf(['correspondence:manage-templates']),
+  ),
   route('GET', '/api/clients', anyOf(CLIENT_READ), {
     allowRole: 'organisation-admin',
     allowProbe: true,
@@ -328,6 +413,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     body: { subjectUserId: '{{user}}', purpose: 'matrix-consent' },
   }),
   route('DELETE', '/api/consents/[id]', anyOf(CONSENT_WRITE)),
+  route('POST', '/api/conflicts/[id]/clear', anyOf(['meeting:agenda-manage'])),
   route(
     'GET',
     '/api/dashboard/layout',
@@ -373,6 +459,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('PATCH', '/api/forms/[id]', anyOf(FORM_MANAGE)),
   route('GET', '/api/forms/[id]/invitations', anyOf(FORM_MANAGE)),
   route('POST', '/api/forms/[id]/invitations', anyOf(FORM_MANAGE)),
+  // Create-a-case also needs `application:create`; attach also needs read of
+  // the target case. Both are checked in the service after this gate.
+  route('POST', '/api/forms/[id]/responses/[responseId]/case', anyOf(FORM_MANAGE), {
+    body: {},
+  }),
   route('POST', '/api/forms/[id]/status', anyOf(FORM_MANAGE), {
     body: { status: 'published' },
   }),
@@ -415,6 +506,24 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       denyStatuses: [401, 404],
     },
   ),
+  route('GET', '/api/meetings', anyOf(MEETING_READ), {
+    allowRole: 'committee-chair',
+    allowProbe: true,
+  }),
+  route('POST', '/api/meetings', anyOf(['meeting:create'])),
+  route('GET', '/api/meetings/[id]', anyOf(MEETING_READ)),
+  route('GET', '/api/meetings/[id]/agenda', anyOf(MEETING_READ)),
+  route('POST', '/api/meetings/[id]/agenda', anyOf(['meeting:agenda-manage'])),
+  route('DELETE', '/api/meetings/[id]/agenda/[itemId]', anyOf(['meeting:agenda-manage'])),
+  route('GET', '/api/meetings/[id]/attendance', anyOf(MEETING_READ)),
+  // Agenda managers record anyone; a member may attest only their own attendance.
+  route('POST', '/api/meetings/[id]/attendance', anyOf(MEETING_ATTENDANCE)),
+  route('GET', '/api/meetings/[id]/conflicts', anyOf(MEETING_READ)),
+  route('POST', '/api/meetings/[id]/conflicts', anyOf(['conflict:declare'])),
+  route('POST', '/api/meetings/[id]/minutes', anyOf(MEETING_RUN)),
+  // Step-up first (a fresh fixture session passes), then pack access.
+  route('GET', '/api/meetings/[id]/pack', anyOf(['meeting:pack-access'])),
+  route('POST', '/api/meetings/[id]/quorum', anyOf(MEETING_RUN)),
   route('GET', '/api/membership-invitations', anyOf(['membership:manage']), {
     allowRole: 'organisation-admin',
     allowProbe: true,
@@ -474,6 +583,10 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     },
   ),
   route('POST', '/api/organisation/activation', anyOf(['tenant:configure'])),
+  route('GET', '/api/organisation/readiness', anyOf(['tenant:configure'])),
+  route('PATCH', '/api/organisation/readiness', anyOf(['tenant:configure']), {
+    body: { item: 'consent_wording', complete: true },
+  }),
   route('POST', '/api/organisation-key/health-check', anyOf(['tenant:configure'])),
   route('GET', '/api/organisation-keys', anyOf(['tenant:configure']), {
     allowRole: 'organisation-admin',
@@ -515,6 +628,12 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     body: { slug: 'matrix-org', applicantName: 'Matrix Applicant' },
   }),
   route(
+    'GET',
+    '/api/public/correspondence/[token]/certificate',
+    { kind: 'bearer-token' },
+    { denyStatuses: [404] },
+  ),
+  route(
     'POST',
     '/api/public/forms/[token]',
     { kind: 'bearer-token' },
@@ -522,6 +641,35 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       body: { answers: {} },
       denyStatuses: [404],
     },
+  ),
+  route(
+    'POST',
+    '/api/public/forms/[token]/draft',
+    { kind: 'bearer-token' },
+    {
+      body: { answers: {} },
+      denyStatuses: [404],
+    },
+  ),
+  route(
+    'POST',
+    '/api/public/forms/[token]/files',
+    { kind: 'bearer-token' },
+    {
+      body: {
+        fieldKey: 'matrix_file',
+        fileName: 'matrix.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 10,
+      },
+      denyStatuses: [404],
+    },
+  ),
+  route(
+    'POST',
+    '/api/public/forms/[token]/files/[evidenceId]/complete',
+    { kind: 'bearer-token' },
+    { denyStatuses: [404] },
   ),
   route(
     'POST',
@@ -548,6 +696,28 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowRole: 'records-officer',
     allowProbe: true,
   }),
+  route('GET', '/api/retention/destruction-register', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
+  route('GET', '/api/retention/disposal-authorities', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
+  route('POST', '/api/retention/disposal-authorities', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+    body: {
+      jurisdiction: 'organisation',
+      disposalClass: 'operational_record',
+      authorityReference: 'Matrix schedule 1',
+      permanent: false,
+    },
+  }),
+  route('GET', '/api/retention/disposal-classes', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
   route('POST', '/api/retention/holds', anyOf(['retention:manage'])),
   route('DELETE', '/api/retention/holds/[id]', anyOf(['retention:manage'])),
   route('GET', '/api/retention/policies', anyOf(['retention:manage']), {
@@ -557,9 +727,19 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/retention/policies', anyOf(['retention:manage']), {
     allowRole: 'records-officer',
     allowProbe: true,
-    body: { resourceType: 'application', retentionDays: 30, action: 'anonymise' },
+    body: {
+      resourceType: 'application',
+      retentionDays: 30,
+      action: 'anonymise',
+      jurisdiction: 'organisation',
+    },
   }),
   route('DELETE', '/api/retention/policies/[id]', anyOf(['retention:manage'])),
+  route('POST', '/api/retention/policies/[id]/activate', anyOf(['retention:manage'])),
+  route('GET', '/api/retention/preview', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
   route('PATCH', '/api/reviews/[id]', anyOf(['review:finalise']), {
     body: { operation: 'finalise' },
   }),
@@ -629,6 +809,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/webhooks', anyOf(['tenant:configure'])),
   route('DELETE', '/api/webhooks/[id]', anyOf(['tenant:configure'])),
   route('GET', '/api/webhooks/[id]/deliveries', anyOf(['tenant:configure'])),
+  route(
+    'POST',
+    '/api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
+    anyOf(['tenant:configure']),
+  ),
   route('POST', '/api/webhooks/[id]/rotate', anyOf(['tenant:configure'])),
 ];
 
@@ -639,11 +824,6 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
 export const UNROUTED_PERMISSIONS = {
   'evidence:read-assigned':
     'Included in the break-glass read bundle. Download checks evidence:download.',
-  'family-link:request': 'requestFamilyLink has no route.',
-  'family-link:approve': 'approveFamilyLink has no route.',
-  'conflict:declare': 'declareConflict has no route.',
-  'audit:view':
-    'Granted to organisation-admin and the break-glass read bundle. No route checks it. audit:read and audit:verify are not catalogue keys.',
   'break-glass:request':
     'The platform-operator template grants it. Request and activate check users.isPlatformOperator, not this key.',
   'group:manage':
