@@ -136,6 +136,11 @@ function classify(error: unknown): MappedError {
       headers: { 'Retry-After': seconds, 'X-Retry-After': seconds },
     };
   }
+  // Lost optimistic-concurrency race (src/lib/concurrency/error.ts). Its
+  // message is a fixed phrase chosen at the throw site, so it is returned.
+  if (error instanceof Error && error.name === 'ConcurrencyConflictError') {
+    return { status: 409, code: 'CONCURRENCY_CONFLICT', error: error.message };
+  }
   // Per-tenant MCP budget (src/domains/mcp/rate-limit.ts).
   if (error instanceof Error && error.name === 'McpRateLimitError') {
     const seconds = (error as { retryAfterSeconds?: unknown }).retryAfterSeconds;

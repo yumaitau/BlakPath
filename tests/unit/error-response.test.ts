@@ -17,6 +17,10 @@ import {
 } from '@/lib/http/error-response';
 import { NoActiveOrganisationError } from '@/lib/http/tenant-route';
 import { RateLimitedError } from '@/lib/http/request-limits';
+import {
+  CONCURRENCY_CONFLICT_MESSAGE,
+  ConcurrencyConflictError,
+} from '@/lib/concurrency/error';
 import { TenantKeyUnavailableError } from '@/lib/encryption/errors';
 import { CertificateConflictError } from '@/domains/certificates/errors';
 import { DecisionWorkflowError } from '@/domains/decisions/errors';
@@ -157,6 +161,12 @@ describe('errorResponse', () => {
         'A live certificate already exists for this decision',
       ],
       [new OrganisationUnavailableError(), 403, 'Forbidden'],
+      [new ConcurrencyConflictError(), 409, CONCURRENCY_CONFLICT_MESSAGE],
+      [
+        new ConcurrencyConflictError('This form was already submitted.'),
+        409,
+        'This form was already submitted.',
+      ],
     ];
     for (const [error, status, text] of cases) {
       const mapped = await bodyOf(error);
