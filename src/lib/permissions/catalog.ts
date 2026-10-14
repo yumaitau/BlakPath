@@ -31,6 +31,7 @@ export const PERMISSION_CATEGORIES = [
   'audit',
   'retention',
   'administration',
+  'mcp',
   'break-glass',
 ] as const;
 
@@ -288,6 +289,18 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'calendar:delete-any',
     category: 'calendar',
     description: 'Delete a calendar event.',
+  },
+  'mcp:read': {
+    key: 'mcp:read',
+    category: 'mcp',
+    description:
+      'Call read-only external tool access for this organisation. Responses omit applicant names and other direct identifiers.',
+  },
+  'mcp:read-pii': {
+    key: 'mcp:read-pii',
+    category: 'mcp',
+    description:
+      'Include applicant names and recorded decision outcomes in external tool responses. Grant only for an approved, declared destination.',
   },
 } as const satisfies Record<string, PermissionDefinition>);
 

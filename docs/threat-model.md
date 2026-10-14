@@ -153,8 +153,9 @@ When something goes wrong, BlakPath **denies rather than exposes**:
   `WEBHOOK_DENY_CIDRS`. Network policy for the worker is reviewed before
   production (`infra/k8s/network-policy.example.yaml`).
 - **AI off by default.** `AI_FEATURES_ENABLED` defaults to `false`, and even when
-  on, AI can never decide, score or infer identity
-  (`docs/privacy-architecture.md`).
+  on, AI can never decide, score or infer identity. External tool access also
+  needs a tenant opt-in (step-up, recorded governance approval) and an `mcp:`
+  scope (`docs/privacy-architecture.md`).
 
 ## Residual risks & assumptions
 
