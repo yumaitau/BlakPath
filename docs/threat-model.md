@@ -302,8 +302,8 @@ When something goes wrong, BlakPath **denies rather than exposes**:
   again when the worker opens the socket. Redirects are not followed. Signing
   secrets are envelope-encrypted, returned once on create or rotation, and
   omitted from list responses. Cluster-specific ranges can be added with
-  `WEBHOOK_DENY_CIDRS`. Network policy for the worker is reviewed before
-  production (`infra/k8s/network-policy.example.yaml`).
+  `WEBHOOK_DENY_CIDRS`. The worker is the only pod with public egress, and
+  only on TCP 443 outside private ranges (`infra/k8s/network-policy.yaml`).
 - **AI off by default.** `AI_FEATURES_ENABLED` defaults to `false`, and even when
   on, AI can never decide, score or infer identity. External tool access also
   needs a tenant opt-in (step-up, recorded governance approval) and an `mcp:`
@@ -319,8 +319,11 @@ When something goes wrong, BlakPath **denies rather than exposes**:
 
 - Cultural governance and the correctness of human determinations sit with the
   organisation; BlakPath assures process integrity, not the merits of a decision.
-- Infrastructure hardening (network policy, node placement, backups, patching)
-  is enforced in the `ap-southeast-2` deployment. Secret sync and the API
+- Namespace network policy is defined in `infra/k8s/network-policy.yaml`
+  (default deny). It takes effect only after the EKS Auto Mode controller is
+  enabled and the manifests are applied (`docs/eks-runbook.md`). Node
+  placement, backups and patching are enforced in the `ap-southeast-2`
+  deployment. Secret sync and the API
   endpoint contract are in `docs/eks-runbook.md`. The dedicated cluster is
   `docs/adr/0001-dedicated-cluster.md`.
 - A compromised Tier 1 pod reads plaintext in memory for every tenant whose

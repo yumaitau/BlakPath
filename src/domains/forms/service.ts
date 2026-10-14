@@ -107,29 +107,34 @@ export async function createForm(rawInput: CreateFormInput): Promise<FormRow> {
 
   const input = createFormSchema.parse(rawInput);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(forms)
-    .values(
-      scope.insertValues({
-        title: input.title,
-        description: input.description ?? null,
-        applicationId: input.applicationId ?? null,
-        createdByUserId: ctx.userId,
-        fields: [],
-        status: 'draft',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(forms)
+      .values(
+        scope.insertValues({
+          title: input.title,
+          description: input.description ?? null,
+          applicationId: input.applicationId ?? null,
+          createdByUserId: ctx.userId,
+          fields: [],
+          status: 'draft',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'form');
 
-  await recordAudit({
-    action: 'form.created',
-    resourceType: 'form',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { title: row.title }, allow: ['title'] },
+    await recordAudit(
+      {
+        action: 'form.created',
+        resourceType: 'form',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { title: row.title }, allow: ['title'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function updateForm(
@@ -149,20 +154,25 @@ export async function updateForm(
   if (input.fields !== undefined) patch.fields = input.fields;
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(forms)
-    .set(patch)
-    .where(scope.where(forms.organisationId, eq(forms.id, formId)))
-    .returning();
-  const row = must(updated[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(forms)
+      .set(patch)
+      .where(scope.where(forms.organisationId, eq(forms.id, formId)))
+      .returning();
+    const row = must(updated[0], 'form');
 
-  await recordAudit({
-    action: 'form.updated',
-    resourceType: 'form',
-    resourceId: formId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'form.updated',
+        resourceType: 'form',
+        resourceId: formId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Publish or close a form (status transition). */
@@ -180,32 +190,37 @@ async function setFormStatus(
 
   const scope = currentScope();
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(forms)
-    .set({ status, version: nextRowVersion() })
-    .where(
-      scope.where(
-        forms.organisationId,
-        eq(forms.id, formId),
-        eq(forms.status, existing.status),
-        versionMatches(forms.version, loaded.versionText),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError(
-      'This form changed while you were working. Refresh and try again.',
-    );
-  }
-  const row = must(updated[0], 'form');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(forms)
+      .set({ status, version: nextRowVersion() })
+      .where(
+        scope.where(
+          forms.organisationId,
+          eq(forms.id, formId),
+          eq(forms.status, existing.status),
+          versionMatches(forms.version, loaded.versionText),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This form changed while you were working. Refresh and try again.',
+      );
+    }
+    const row = must(updated[0], 'form');
 
-  await recordAudit({
-    action,
-    resourceType: 'form',
-    resourceId: formId,
-    result: 'success',
+    await recordAudit(
+      {
+        action,
+        resourceType: 'form',
+        resourceId: formId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export function publishForm(formId: string): Promise<FormRow> {
@@ -258,30 +273,36 @@ export async function createInvitation(
   const tokenSeal = input.recipientEmail
     ? await sealInvitationToken(scope.organisationId, 'form_invitations', id, token)
     : null;
-  const inserted = await scope.db
-    .insert(formInvitations)
-    .values(
-      scope.insertValues({
-        id,
-        formId,
-        tokenHash: hashToken(token),
-        tokenSeal,
-        recipientName: input.recipientName ?? null,
-        recipientEmail: input.recipientEmail ?? null,
-        sentByUserId: ctx.userId,
-        status: 'pending',
-        expiresAt,
-      }),
-    )
-    .returning();
-  const invitation = must(inserted[0], 'invitation');
+  const invitation = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(formInvitations)
+      .values(
+        scope.insertValues({
+          id,
+          formId,
+          tokenHash: hashToken(token),
+          tokenSeal,
+          recipientName: input.recipientName ?? null,
+          recipientEmail: input.recipientEmail ?? null,
+          sentByUserId: ctx.userId,
+          status: 'pending',
+          expiresAt,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'invitation');
 
-  await recordAudit({
-    action: 'form.invitation_sent',
-    resourceType: 'form_invitation',
-    resourceId: invitation.id,
-    result: 'success',
-    after: { data: { formId }, allow: ['formId'] },
+    await recordAudit(
+      {
+        action: 'form.invitation_sent',
+        resourceType: 'form_invitation',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { formId }, allow: ['formId'] },
+      },
+      tx,
+    );
+    return created;
   });
 
   // Queue the invitation id. The worker loads the row, opens the seal and
@@ -330,27 +351,33 @@ export async function revokeInvitation(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(formInvitations)
-    .set({ status: 'revoked' })
-    .where(
-      scope.where(
-        formInvitations.organisationId,
-        eq(formInvitations.id, invitationId),
-        inArray(formInvitations.status, ['pending', 'opened']),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError('This invitation can no longer be revoked.');
-  }
-  const row = must(updated[0], 'invitation');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(formInvitations)
+      .set({ status: 'revoked' })
+      .where(
+        scope.where(
+          formInvitations.organisationId,
+          eq(formInvitations.id, invitationId),
+          inArray(formInvitations.status, ['pending', 'opened']),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError('This invitation can no longer be revoked.');
+    }
+    const revoked = must(updated[0], 'invitation');
 
-  await recordAudit({
-    action: 'form.invitation_revoked',
-    resourceType: 'form_invitation',
-    resourceId: invitationId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'form.invitation_revoked',
+        resourceType: 'form_invitation',
+        resourceId: invitationId,
+        result: 'success',
+      },
+      tx,
+    );
+    return revoked;
   });
   return presentInvitation(row);
 }
@@ -458,26 +485,34 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
   const { invitation, form } = await resolveUsableInvitation(token);
 
   if (invitation.status === 'pending') {
-    // Status predicate stops a late "opened" write from clobbering `completed`.
-    const opened = await db
-      .update(formInvitations)
-      .set({ status: 'opened', openedAt: new Date() })
-      .where(
-        and(eq(formInvitations.id, invitation.id), eq(formInvitations.status, 'pending')),
-      )
-      .returning({ id: formInvitations.id });
-    if (opened.length > 0) {
-      await recordAudit({
-        action: 'form.invitation_opened',
-        resourceType: 'form_invitation',
-        resourceId: invitation.id,
-        result: 'success',
-        organisationId: invitation.organisationId,
-        actorUserId: null,
-        actingRole: 'public',
-        sessionId: null,
-      });
-    }
+    await db.transaction(async (tx) => {
+      // Status predicate stops a late "opened" write from clobbering `completed`.
+      const opened = await tx
+        .update(formInvitations)
+        .set({ status: 'opened', openedAt: new Date() })
+        .where(
+          and(
+            eq(formInvitations.id, invitation.id),
+            eq(formInvitations.status, 'pending'),
+          ),
+        )
+        .returning({ id: formInvitations.id });
+      if (opened.length > 0) {
+        await recordAudit(
+          {
+            action: 'form.invitation_opened',
+            resourceType: 'form_invitation',
+            resourceId: invitation.id,
+            result: 'success',
+            organisationId: invitation.organisationId,
+            actorUserId: null,
+            actingRole: 'public',
+            sessionId: null,
+          },
+          tx,
+        );
+      }
+    });
   }
 
   return {
@@ -542,18 +577,21 @@ export async function submitPublicResponse(
         ipAddress: ipAddress ?? null,
       }),
     );
-  });
 
-  await recordAudit({
-    action: 'form.response_submitted',
-    resourceType: 'form_response',
-    resourceId: invitation.id,
-    result: 'success',
-    organisationId: invitation.organisationId,
-    actorUserId: null,
-    actingRole: 'public',
-    sessionId: null,
-    ...(ipAddress ? { ipAddress } : {}),
+    await recordAudit(
+      {
+        action: 'form.response_submitted',
+        resourceType: 'form_response',
+        resourceId: invitation.id,
+        result: 'success',
+        organisationId: invitation.organisationId,
+        actorUserId: null,
+        actingRole: 'public',
+        sessionId: null,
+        ...(ipAddress ? { ipAddress } : {}),
+      },
+      tx,
+    );
   });
 
   return { ok: true };

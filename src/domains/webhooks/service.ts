@@ -64,31 +64,37 @@ export async function createEndpoint(
   // The id is fixed before sealing so the ciphertext is bound to this row.
   const id = uuidv7();
   const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
-  const inserted = await scope.db
-    .insert(webhookEndpoints)
-    .values(
-      scope.insertValues({
-        id,
-        url: input.url,
-        secretCiphertext,
-        events: input.events,
-        active: true,
-        createdByUserId: ctx.userId,
-      }),
-    )
-    .returning({
-      id: webhookEndpoints.id,
-      url: webhookEndpoints.url,
-      events: webhookEndpoints.events,
-    });
-  const row = must(inserted[0], 'webhook endpoint');
+  const row = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(webhookEndpoints)
+      .values(
+        scope.insertValues({
+          id,
+          url: input.url,
+          secretCiphertext,
+          events: input.events,
+          active: true,
+          createdByUserId: ctx.userId,
+        }),
+      )
+      .returning({
+        id: webhookEndpoints.id,
+        url: webhookEndpoints.url,
+        events: webhookEndpoints.events,
+      });
+    const created = must(inserted[0], 'webhook endpoint');
 
-  await recordAudit({
-    action: 'integration.connected',
-    resourceType: 'integration',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { url: input.url }, allow: ['url'] },
+    await recordAudit(
+      {
+        action: 'integration.connected',
+        resourceType: 'integration',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { url: input.url }, allow: ['url'] },
+      },
+      tx,
+    );
+    return created;
   });
   return { id: row.id, url: row.url, events: row.events, secret };
 }
@@ -129,25 +135,31 @@ export async function rotateEndpointSecret(
   const secret = secretGen();
   const scope = currentScope();
   const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
-  const updated = await scope.db
-    .update(webhookEndpoints)
-    .set({ secretCiphertext, updatedAt: new Date() })
-    .where(
-      scope.where(
-        webhookEndpoints.organisationId,
-        eq(webhookEndpoints.id, id),
-        isNull(webhookEndpoints.deletedAt),
-      ),
-    )
-    .returning({ id: webhookEndpoints.id });
-  const row = updated[0];
-  if (!row) throw new AuthorizationError('PERMISSION_DENIED');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(webhookEndpoints)
+      .set({ secretCiphertext, updatedAt: new Date() })
+      .where(
+        scope.where(
+          webhookEndpoints.organisationId,
+          eq(webhookEndpoints.id, id),
+          isNull(webhookEndpoints.deletedAt),
+        ),
+      )
+      .returning({ id: webhookEndpoints.id });
+    const rotated = updated[0];
+    if (!rotated) throw new AuthorizationError('PERMISSION_DENIED');
 
-  await recordAudit({
-    action: 'integration.credentials_rotated',
-    resourceType: 'integration',
-    resourceId: row.id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'integration.credentials_rotated',
+        resourceType: 'integration',
+        resourceId: rotated.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return rotated;
   });
   return { id: row.id, secret };
 }
@@ -156,16 +168,21 @@ export async function deleteEndpoint(id: string): Promise<void> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const scope = currentScope();
-  await scope.db
-    .update(webhookEndpoints)
-    .set({ active: false, deletedAt: new Date() })
-    .where(scope.where(webhookEndpoints.organisationId, eq(webhookEndpoints.id, id)));
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .update(webhookEndpoints)
+      .set({ active: false, deletedAt: new Date() })
+      .where(scope.where(webhookEndpoints.organisationId, eq(webhookEndpoints.id, id)));
 
-  await recordAudit({
-    action: 'integration.disconnected',
-    resourceType: 'integration',
-    resourceId: id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'integration.disconnected',
+        resourceType: 'integration',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }
 
@@ -281,42 +298,50 @@ export async function redeliverDelivery(
   if (!endpoint) throw new AuthorizationError('POLICY_DENIED');
 
   // Conditional update: only a settled delivery flips back to pending, which
-  // also makes concurrent redeliver requests race-safe.
-  const updated = await scope.db
-    .update(webhookDeliveries)
-    .set({
-      status: 'pending',
-      attempts: 0,
-      lastError: null,
-      lastResponseCode: null,
-      deliveredAt: null,
-    })
-    .where(
-      scope.where(
-        webhookDeliveries.organisationId,
-        eq(webhookDeliveries.id, deliveryId),
-        eq(webhookDeliveries.endpointId, endpointId),
-        ne(webhookDeliveries.status, 'pending'),
-      ),
-    )
-    .returning();
-  const row = updated[0];
-  if (!row) {
-    throw new AuthorizationError(
-      'POLICY_DENIED',
-      'This delivery cannot be redelivered right now.',
-    );
-  }
+  // also makes concurrent redeliver requests race-safe. The audit commits with
+  // the state change; the job is enqueued only after both are durable (a
+  // failed enqueue leaves the row pending for the sweeper).
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(webhookDeliveries)
+      .set({
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        lastResponseCode: null,
+        deliveredAt: null,
+      })
+      .where(
+        scope.where(
+          webhookDeliveries.organisationId,
+          eq(webhookDeliveries.id, deliveryId),
+          eq(webhookDeliveries.endpointId, endpointId),
+          ne(webhookDeliveries.status, 'pending'),
+        ),
+      )
+      .returning();
+    const reset = updated[0];
+    if (!reset) {
+      throw new AuthorizationError(
+        'POLICY_DENIED',
+        'This delivery cannot be redelivered right now.',
+      );
+    }
 
-  await recordAudit({
-    action: 'integration.redelivery_requested',
-    resourceType: 'integration',
-    resourceId: endpointId,
-    result: 'success',
-    after: {
-      data: { deliveryId, event: row.event },
-      allow: ['deliveryId', 'event'],
-    },
+    await recordAudit(
+      {
+        action: 'integration.redelivery_requested',
+        resourceType: 'integration',
+        resourceId: endpointId,
+        result: 'success',
+        after: {
+          data: { deliveryId, event: reset.event },
+          allow: ['deliveryId', 'event'],
+        },
+      },
+      tx,
+    );
+    return reset;
   });
 
   await requeueDelivery({

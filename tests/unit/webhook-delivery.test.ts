@@ -44,7 +44,10 @@ vi.mock('@/db/tenant-db', async () => {
     };
     return chain;
   }
-  return { scopeFor: () => ({ db: { select, update } }) };
+  const db: Record<string, unknown> = { select, update };
+  // Settling a delivery runs the row update and its audit in one transaction.
+  db.transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
+  return { scopeFor: () => ({ db }) };
 });
 
 vi.mock('@/domains/audit/service', () => ({

@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { auditReason } from '@/domains/audit/hash';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import { openWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { isDestinationRejection } from './destination';
@@ -40,15 +40,19 @@ function systemAudit(
   organisationId: string,
   correlationId: string,
   fields: Parameters<typeof recordAudit>[0],
+  tx?: AuditTransaction,
 ) {
-  return recordAudit({
-    ...fields,
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-  });
+  return recordAudit(
+    {
+      ...fields,
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+    },
+    tx,
+  );
 }
 
 export async function processWebhookDelivery(input: DeliverInput): Promise<void> {
@@ -81,16 +85,23 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
   const endpoint = endpointRows[0];
 
   const attempts = delivery.attempts + 1;
-  const settle = (patch: Partial<typeof webhookDeliveries.$inferInsert>) =>
-    scope.db
-      .update(webhookDeliveries)
-      .set(patch)
-      .where(
-        and(
-          eq(webhookDeliveries.organisationId, organisationId),
-          eq(webhookDeliveries.id, deliveryId),
-        ),
-      );
+  // The delivery row change and its audit commit or roll back together.
+  const settle = (
+    patch: Partial<typeof webhookDeliveries.$inferInsert>,
+    audit?: Parameters<typeof recordAudit>[0],
+  ) =>
+    scope.db.transaction(async (tx) => {
+      await tx
+        .update(webhookDeliveries)
+        .set(patch)
+        .where(
+          and(
+            eq(webhookDeliveries.organisationId, organisationId),
+            eq(webhookDeliveries.id, deliveryId),
+          ),
+        );
+      if (audit) await systemAudit(organisationId, correlationId, audit, tx);
+    });
 
   if (!endpoint || !endpoint.active || endpoint.deletedAt) {
     await settle({ status: 'failed', attempts, lastError: 'endpoint unavailable' });
@@ -115,18 +126,20 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
         endpoint.secretCiphertext,
       );
     } catch {
-      await settle({
-        status: 'failed',
-        attempts,
-        lastError: 'endpoint secret unavailable',
-      });
-      await systemAudit(organisationId, correlationId, {
-        action: 'integration.call_failed',
-        resourceType: 'integration',
-        resourceId: endpoint.id,
-        result: 'failure',
-        reason: 'webhook.secret_unavailable',
-      });
+      await settle(
+        {
+          status: 'failed',
+          attempts,
+          lastError: 'endpoint secret unavailable',
+        },
+        {
+          action: 'integration.call_failed',
+          resourceType: 'integration',
+          resourceId: endpoint.id,
+          result: 'failure',
+          reason: 'webhook.secret_unavailable',
+        },
+      );
       return;
     }
 
@@ -145,18 +158,20 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
 
     const disposition = deliveryDisposition(res.status);
     if (disposition === 'delivered') {
-      await settle({
-        status: 'delivered',
-        attempts,
-        lastResponseCode: res.status,
-        deliveredAt: new Date(),
-      });
-      await systemAudit(organisationId, correlationId, {
-        action: 'integration.call_succeeded',
-        resourceType: 'integration',
-        resourceId: endpoint.id,
-        result: 'success',
-      });
+      await settle(
+        {
+          status: 'delivered',
+          attempts,
+          lastResponseCode: res.status,
+          deliveredAt: new Date(),
+        },
+        {
+          action: 'integration.call_succeeded',
+          resourceType: 'integration',
+          resourceId: endpoint.id,
+          result: 'success',
+        },
+      );
       return;
     }
 
@@ -165,51 +180,57 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
     const terminal = disposition === 'redirect' || attempts >= MAX_ATTEMPTS;
     const reason =
       disposition === 'redirect' ? 'redirect not followed' : `HTTP ${res.status}`;
-    await settle({
-      status: terminal ? 'failed' : 'pending',
-      attempts,
-      lastResponseCode: res.status,
-      lastError: reason,
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'integration.call_failed',
-      resourceType: 'integration',
-      resourceId: endpoint.id,
-      result: 'failure',
-      reason:
-        disposition === 'redirect'
-          ? 'webhook.redirect_not_followed'
-          : auditReason('webhook.http_status', String(res.status)),
-    });
+    await settle(
+      {
+        status: terminal ? 'failed' : 'pending',
+        attempts,
+        lastResponseCode: res.status,
+        lastError: reason,
+      },
+      {
+        action: 'integration.call_failed',
+        resourceType: 'integration',
+        resourceId: endpoint.id,
+        result: 'failure',
+        reason:
+          disposition === 'redirect'
+            ? 'webhook.redirect_not_followed'
+            : auditReason('webhook.http_status', String(res.status)),
+      },
+    );
     if (!terminal) throw new Error(`webhook delivery failed: HTTP ${res.status}`);
   } catch (err) {
     if (err instanceof Error && err.message.startsWith('webhook delivery failed')) {
       throw err; // already recorded above; rethrow so BullMQ retries.
     }
     if (isDestinationRejection(err)) {
-      await settle({ status: 'failed', attempts, lastError: 'destination not allowed' });
-      await systemAudit(organisationId, correlationId, {
+      await settle(
+        { status: 'failed', attempts, lastError: 'destination not allowed' },
+        {
+          action: 'integration.call_failed',
+          resourceType: 'integration',
+          resourceId: endpoint.id,
+          result: 'failure',
+          reason: 'webhook.destination_not_allowed',
+        },
+      );
+      return;
+    }
+    const giveUp = attempts >= MAX_ATTEMPTS;
+    await settle(
+      {
+        status: giveUp ? 'failed' : 'pending',
+        attempts,
+        lastError: 'network error',
+      },
+      {
         action: 'integration.call_failed',
         resourceType: 'integration',
         resourceId: endpoint.id,
         result: 'failure',
-        reason: 'webhook.destination_not_allowed',
-      });
-      return;
-    }
-    const giveUp = attempts >= MAX_ATTEMPTS;
-    await settle({
-      status: giveUp ? 'failed' : 'pending',
-      attempts,
-      lastError: 'network error',
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'integration.call_failed',
-      resourceType: 'integration',
-      resourceId: endpoint.id,
-      result: 'failure',
-      reason: 'webhook.network_error',
-    });
+        reason: 'webhook.network_error',
+      },
+    );
     logger.warn({ organisationId, deliveryId, attempts }, 'webhook delivery error');
     if (!giveUp) throw err instanceof Error ? err : new Error('webhook delivery error');
   } finally {

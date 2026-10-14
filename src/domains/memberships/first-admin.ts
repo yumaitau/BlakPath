@@ -76,7 +76,8 @@ export async function inviteFirstAdministrator(
   const organisationId = uuidv7();
   const invitationId = uuidv7();
 
-  const created = await db.transaction(async (tx) => {
+  // The invitation and its audit commit together, before the email goes out.
+  await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${FIRST_ADMIN_LOCK})`);
     const existing = await tx
       .select({ id: organisations.id })
@@ -124,7 +125,20 @@ export async function inviteFirstAdministrator(
       expiresAt,
       lastSentAt: now,
     });
-    return { roleName: role.name };
+    await recordAudit(
+      {
+        action: 'membership.invited',
+        resourceType: 'membership',
+        resourceId: invitationId,
+        result: 'success',
+        reason: 'membership.first_admin_invitation',
+        organisationId,
+        actorUserId: null,
+        actingRole: 'operator',
+        after: { data: { role: role.name }, allow: ['role'] },
+      },
+      tx,
+    );
   });
 
   const message = firstAdminInvitationMessage({
@@ -148,28 +162,6 @@ export async function inviteFirstAdministrator(
     }
     throw new FirstAdminInviteError(
       'The invitation email could not be sent. No organisation was saved.',
-    );
-  }
-
-  try {
-    await recordAudit({
-      action: 'membership.invited',
-      resourceType: 'membership',
-      resourceId: invitationId,
-      result: 'success',
-      reason: 'membership.first_admin_invitation',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'operator',
-      after: { data: { role: created.roleName }, allow: ['role'] },
-    });
-  } catch (error) {
-    logger.error(
-      { err: error, organisationId, invitationId },
-      'first-admin invitation audit failed',
-    );
-    throw new FirstAdminInviteError(
-      'The invitation was emailed, but the audit record failed. Do not retry.',
     );
   }
 

@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   audits: [] as Array<Record<string, unknown>>,
   emitted: [] as Array<Record<string, unknown>>,
   requeued: [] as Array<Record<string, unknown>>,
+  auditTx: [] as unknown[],
+  tx: null as unknown,
 }));
 
 vi.mock('@/db/tenant-db', () => {
@@ -27,7 +29,14 @@ vi.mock('@/db/tenant-db', () => {
     ) => Promise.resolve(state.results.shift() ?? []).then(resolve, reject);
     return builder;
   }
-  const db = { select: () => chain(), update: () => chain(), insert: () => chain() };
+  const db: Record<string, unknown> = {
+    select: () => chain(),
+    update: () => chain(),
+    insert: () => chain(),
+  };
+  // A transaction runs its callback against a handle the audit mock can see.
+  db.transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(state.tx);
+  state.tx = db;
   return {
     currentScope: () => ({ db, where: vi.fn(), assertOwned: <T>(row: T) => row }),
     scopeFor: () => ({ db }),
@@ -46,8 +55,9 @@ vi.mock('@/lib/tenancy/context', () => ({
 }));
 
 vi.mock('@/domains/audit/service', () => ({
-  recordAudit: vi.fn(async (input: Record<string, unknown>) => {
+  recordAudit: vi.fn(async (input: Record<string, unknown>, tx?: unknown) => {
     state.audits.push(input);
+    state.auditTx.push(tx);
   }),
 }));
 
@@ -79,6 +89,7 @@ beforeEach(() => {
   state.audits = [];
   state.emitted = [];
   state.requeued = [];
+  state.auditTx = [];
 });
 
 /** A signed certificate as the versioned claim read returns it. */
@@ -206,6 +217,9 @@ describe('redeliverDelivery', () => {
         result: 'success',
       }),
     ]);
+    // The audit joins the reset's transaction.
+    expect(state.auditTx).toEqual([state.tx]);
+    expect(state.tx).not.toBeNull();
     expect(state.requeued).toEqual([
       { organisationId: 'org-a', deliveryId: 'delivery-1', correlationId: 'corr-1' },
     ]);
