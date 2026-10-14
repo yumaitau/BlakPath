@@ -432,107 +432,114 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       );
   };
 
-  // Read the bytes; a storage error here should retry, so let it throw.
-  const buffer = await getObjectBytes({ bucket: QUARANTINE_BUCKET, key });
-
-  // Verify the REAL content type from magic bytes before scanning.
-  const detected = (await fileTypeFromBuffer(buffer))?.mime;
-  if (!contentTypeAcceptable(row.declaredContentType, detected)) {
-    await deleteObject({ bucket: QUARANTINE_BUCKET, key });
-    await settle({
-      status: 'rejected',
-      detectedContentType: detected ?? null,
-      scanResult: 'rejected:content-type',
-      scannedAt: new Date(),
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.rejected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: `declared ${row.declaredContentType}, detected ${detected ?? 'unknown'}`,
-    });
-    return;
-  }
-
-  // Scan. Any scanner unavailability MUST fail (retry) — never promote.
-  let verdict: ScanVerdict;
+  // S3 decrypts into this buffer only. Zero it before the function returns.
+  const buffer = await getObjectBytes({
+    bucket: QUARANTINE_BUCKET,
+    key,
+    organisationId,
+  });
   try {
-    verdict = await scanBuffer(buffer);
-  } catch (err) {
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.scan_failed',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: 'scanner unavailable',
-    });
-    // Stays quarantined. Rethrow so BullMQ retries with backoff.
-    throw err;
-  }
+    // Verify the REAL content type from magic bytes before scanning.
+    const detected = (await fileTypeFromBuffer(buffer))?.mime;
+    if (!contentTypeAcceptable(row.declaredContentType, detected)) {
+      await deleteObject({ bucket: QUARANTINE_BUCKET, key });
+      await settle({
+        status: 'rejected',
+        detectedContentType: detected ?? null,
+        scanResult: 'rejected:content-type',
+        scannedAt: new Date(),
+      });
+      await systemAudit(organisationId, correlationId, {
+        action: 'evidence.rejected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason: `declared ${row.declaredContentType}, detected ${detected ?? 'unknown'}`,
+      });
+      return;
+    }
 
-  if (!verdict.clean) {
-    await deleteObject({ bucket: QUARANTINE_BUCKET, key });
+    // Scan. Any scanner unavailability MUST fail (retry) — never promote.
+    let verdict: ScanVerdict;
+    try {
+      verdict = await scanBuffer(buffer);
+    } catch (err) {
+      await systemAudit(organisationId, correlationId, {
+        action: 'evidence.scan_failed',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason: 'scanner unavailable',
+      });
+      // Stays quarantined. Rethrow so BullMQ retries with backoff.
+      throw err;
+    }
+
+    if (!verdict.clean) {
+      await deleteObject({ bucket: QUARANTINE_BUCKET, key });
+      await settle({
+        status: 'infected',
+        detectedContentType: detected ?? null,
+        scanSignature: verdict.signature ?? 'unknown',
+        scanResult: 'infected',
+        scannedAt: new Date(),
+      });
+      await systemAudit(organisationId, correlationId, {
+        action: 'evidence.scan_infected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason: verdict.signature ?? 'malware detected',
+      });
+
+      // Let the uploader know, calmly and without file details. Best-effort: a
+      // notification failure must never change the fail-secure scan outcome.
+      if (row.uploadedByUserId) {
+        try {
+          await queueNotification(
+            {
+              organisationId,
+              userId: row.uploadedByUserId,
+              type: 'evidence.infected',
+              title: 'An upload could not be accepted',
+              body: 'One of your uploads did not pass our safety checks and was not stored. Please try uploading a different copy of the file.',
+              resourceType: 'evidence',
+              resourceId: evidenceId,
+            },
+            correlationId,
+          );
+        } catch (err) {
+          logger.error(
+            { organisationId, evidenceId, err },
+            'failed to queue infected-evidence notification',
+          );
+        }
+      }
+      return;
+    }
+
+    // Clean: hash, promote to the evidence bucket, mark servable.
+    const sha256 = createHash('sha256').update(buffer).digest('hex');
+    await moveQuarantineToEvidence({ organisationId, key });
     await settle({
-      status: 'infected',
+      status: 'clean',
+      evidenceKey: key,
       detectedContentType: detected ?? null,
-      scanSignature: verdict.signature ?? 'unknown',
-      scanResult: 'infected',
+      sha256,
+      scanResult: 'clean',
       scannedAt: new Date(),
     });
     await systemAudit(organisationId, correlationId, {
-      action: 'evidence.scan_infected',
+      action: 'evidence.scan_clean',
       resourceType: 'evidence',
       resourceId: evidenceId,
-      result: 'failure',
-      reason: verdict.signature ?? 'malware detected',
+      result: 'success',
     });
-
-    // Let the uploader know, calmly and without file details. Best-effort: a
-    // notification failure must never change the fail-secure scan outcome.
-    if (row.uploadedByUserId) {
-      try {
-        await queueNotification(
-          {
-            organisationId,
-            userId: row.uploadedByUserId,
-            type: 'evidence.infected',
-            title: 'An upload could not be accepted',
-            body: 'One of your uploads did not pass our safety checks and was not stored. Please try uploading a different copy of the file.',
-            resourceType: 'evidence',
-            resourceId: evidenceId,
-          },
-          correlationId,
-        );
-      } catch (err) {
-        logger.error(
-          { organisationId, evidenceId, err },
-          'failed to queue infected-evidence notification',
-        );
-      }
-    }
-    return;
+    logger.debug(
+      { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },
+      'evidence promoted',
+    );
+  } finally {
+    buffer.fill(0);
   }
-
-  // Clean: hash, promote to the evidence bucket, mark servable.
-  const sha256 = createHash('sha256').update(buffer).digest('hex');
-  await moveQuarantineToEvidence({ organisationId, key });
-  await settle({
-    status: 'clean',
-    evidenceKey: key,
-    detectedContentType: detected ?? null,
-    sha256,
-    scanResult: 'clean',
-    scannedAt: new Date(),
-  });
-  await systemAudit(organisationId, correlationId, {
-    action: 'evidence.scan_clean',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-  });
-  logger.debug(
-    { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },
-    'evidence promoted',
-  );
 }

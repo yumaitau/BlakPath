@@ -111,7 +111,7 @@ export function CaseGovernanceWorkspace({
     ['in_review', 'ready_for_committee'].includes(applicationStatus);
   const canProposeDecision =
     permissions.proposeDecision &&
-    applicationStatus === 'in_committee' &&
+    ['ready_for_committee', 'in_committee'].includes(applicationStatus) &&
     !decisions.some((decision) => decision.status === 'proposed');
 
   return (

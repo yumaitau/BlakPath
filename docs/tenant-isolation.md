@@ -119,9 +119,10 @@ tenant can never address another tenant's objects
 ### 9. Queue payload validation
 
 BullMQ job payloads are **untrusted input**. Every payload is validated with Zod
-and carries the `organisation_id`; the worker re-verifies it and builds a fresh,
-DB-verified tenant context before touching data. A forged or malformed message
-cannot widen access.
+(`tenantJobSchema`) at enqueue and parsed again when the worker consumes it.
+The worker then loads the organisation and drops the job unless that row is
+`active`, auditing the drop, before a processor opens a tenant scope. A forged,
+malformed, or stale message cannot widen access.
 
 ### 10. Cache & rate-limit key prefixing
 
