@@ -258,6 +258,8 @@ export type AuditAction =
   | 'key.deletion_scheduled'
   | 'key.destruction_certified'
   | 'key.replacement_started'
+  | 'key.escrow_opted_in'
+  | 'key.escrow_withdrawn'
   // Field encryption backfill. Counts and table names only.
   | 'encryption.backfill_batch'
   | 'encryption.backfill_completed'

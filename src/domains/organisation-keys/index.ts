@@ -5,6 +5,7 @@ export type {
   OrganisationKeyRow,
   OrganisationKeyStatus,
   PublicOrganisationKey,
+  RecordEscrowOptInInput,
   RegisterOrganisationKeyInput,
 } from './service';
 export {
@@ -12,10 +13,12 @@ export {
   getOrganisationKey,
   OrganisationKeyInputError,
   markOrganisationKeyUnavailable,
+  recordEscrowOptIn,
   registerOrganisationKey,
   rotateOrganisationKey,
   setOrganisationKeyStatus,
   toPublicOrganisationKey,
+  withdrawEscrow,
 } from './service';
 export { OrganisationActivationError, activateCurrentOrganisation } from './activation';
 export {
