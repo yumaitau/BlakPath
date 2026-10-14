@@ -4,32 +4,25 @@ import {
   recordAttendance,
   type RecordAttendanceInput,
 } from '@/domains/meetings';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 
 /** Human attendance attestations. Not a quorum calculation. */
-export async function GET(
+export const GET = tenantHandler(async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const attendance = await withRequestTenant(() => listAttendance(id));
-    return NextResponse.json({ attendance });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const attendance = await withRequestTenant(() => listAttendance(id));
+  return NextResponse.json({ attendance });
+});
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const input = (await request.json()) as RecordAttendanceInput;
-    const attendance = await withRequestTenant(() => recordAttendance(id, input));
-    return NextResponse.json({ attendance });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const input = (await request.json()) as RecordAttendanceInput;
+  const attendance = await withRequestTenant(() => recordAttendance(id, input));
+  return NextResponse.json({ attendance });
+});

@@ -10,6 +10,7 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 interface PackDocument {
   id: string;
@@ -87,6 +88,7 @@ export function MeetingWorkspace({
   permissions,
 }: MeetingWorkspaceProps) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -190,6 +192,7 @@ export function MeetingWorkspace({
                 id="agenda-case"
                 value={applicationId}
                 onChange={(event) => setApplicationId(event.target.value)}
+                disabled={!hydrated}
                 className="border-input bg-surface mt-2 h-10 rounded-md border px-3 text-sm"
               >
                 {availableCases.map((item) => (
@@ -199,7 +202,7 @@ export function MeetingWorkspace({
                 ))}
               </select>
             </div>
-            <Button type="submit" disabled={busy !== null || !applicationId}>
+            <Button type="submit" disabled={!hydrated || busy !== null || !applicationId}>
               {busy === 'add-agenda' ? 'Adding…' : 'Add to agenda'}
             </Button>
           </form>
@@ -274,7 +277,7 @@ export function MeetingWorkspace({
                                 type="button"
                                 size="sm"
                                 variant="outline"
-                                disabled={busy !== null}
+                                disabled={!hydrated || busy !== null}
                                 onClick={() =>
                                   void send(
                                     `clear:${conflict.id}`,
@@ -323,7 +326,11 @@ export function MeetingWorkspace({
                             className="border-input bg-surface mt-2 h-10 w-full rounded-md border px-3 text-sm"
                           />
                         </div>
-                        <Button type="submit" variant="outline" disabled={busy !== null}>
+                        <Button
+                          type="submit"
+                          variant="outline"
+                          disabled={!hydrated || busy !== null}
+                        >
                           Declare conflict
                         </Button>
                       </form>
@@ -354,7 +361,7 @@ export function MeetingWorkspace({
                       type="button"
                       variant="ghost"
                       className="mt-2"
-                      disabled={busy !== null}
+                      disabled={!hydrated || busy !== null}
                       onClick={() =>
                         void send(
                           `remove:${item.id}`,
@@ -405,7 +412,7 @@ export function MeetingWorkspace({
                       type="button"
                       size="sm"
                       variant="outline"
-                      disabled={busy !== null}
+                      disabled={!hydrated || busy !== null}
                       onClick={() =>
                         void send(
                           `attend:${member.userId}:yes`,
@@ -422,7 +429,7 @@ export function MeetingWorkspace({
                       type="button"
                       size="sm"
                       variant="outline"
-                      disabled={busy !== null}
+                      disabled={!hydrated || busy !== null}
                       onClick={() =>
                         void send(
                           `attend:${member.userId}:no`,
@@ -513,7 +520,7 @@ export function MeetingWorkspace({
             </div>
             <Button
               type="submit"
-              disabled={busy !== null || quorum === ''}
+              disabled={!hydrated || busy !== null || quorum === ''}
               className="w-fit"
             >
               {busy === 'quorum' ? 'Recording…' : 'Record quorum attestation'}
@@ -551,7 +558,7 @@ export function MeetingWorkspace({
             />
             <Button
               type="submit"
-              disabled={busy !== null || minutes.trim().length === 0}
+              disabled={!hydrated || busy !== null || minutes.trim().length === 0}
               className="w-fit"
             >
               {busy === 'minutes' ? 'Saving…' : 'Save minutes'}

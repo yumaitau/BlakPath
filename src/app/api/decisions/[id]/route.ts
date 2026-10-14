@@ -34,10 +34,10 @@ export const PATCH = tenantHandler(async function PATCH(
       return null;
     }
     return finaliseDecision(id, {
-        outcome: input.outcome,
-        note: input.note,
-        meetingId: input.meetingId,
-      });
+      outcome: input.outcome,
+      note: input.note,
+      meetingId: input.meetingId,
+    });
   });
   return NextResponse.json({ result });
 });

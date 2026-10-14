@@ -25,6 +25,16 @@ import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { logger } from '@/lib/observability/logger';
 import { buildIcs, parseIcs, type IcsEvent } from '@/lib/calendar/ics';
+import { nextRowVersion } from '@/lib/concurrency/claim';
+import {
+  openAttendanceRows,
+  openConflictRows,
+  openMeetingRows,
+  sealAttendanceNote,
+  sealConflictReason,
+  sealMeetingText,
+} from '@/lib/encryption/tenant-fields';
+import { uuidv7 } from 'uuidv7';
 import {
   addAgendaItemSchema,
   attestQuorumSchema,
@@ -95,6 +105,12 @@ function must<T>(row: T | undefined, what: string): T {
   return row;
 }
 
+/** Minutes and the quorum note are sealed under the tenant key at rest. */
+async function openMeeting(organisationId: string, row: MeetingRow): Promise<MeetingRow> {
+  const [opened] = await openMeetingRows(organisationId, [row]);
+  return must(opened, 'meeting');
+}
+
 async function loadMeeting(id: string): Promise<MeetingRow | null> {
   const scope = currentScope();
   const rows = await scope.db
@@ -108,7 +124,8 @@ async function loadMeeting(id: string): Promise<MeetingRow | null> {
       ),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  return owned ? openMeeting(scope.organisationId, owned) : null;
 }
 
 async function loadAgendaEntries(meetingId: string): Promise<AgendaEntry[]> {
@@ -185,7 +202,7 @@ export async function cancelMeeting(meetingId: string): Promise<MeetingRow> {
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const cancelled = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(meetings)
       .set({ status: 'cancelled' })
@@ -205,6 +222,7 @@ export async function cancelMeeting(meetingId: string): Promise<MeetingRow> {
 
     return row;
   });
+  return openMeeting(scope.organisationId, cancelled);
 }
 
 /** One meeting the actor may read. Missing and out-of-tenant look the same. */
@@ -222,11 +240,12 @@ export async function listMeetings(): Promise<MeetingRow[]> {
   requireAny(subjectFromContext(ctx), MEETING_READ);
 
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(meetings)
     .where(scope.where(meetings.organisationId, isNull(meetings.deletedAt)))
     .orderBy(asc(meetings.scheduledStart));
+  return openMeetingRows(scope.organisationId, rows);
 }
 
 /** Add an application to a meeting's agenda. */
@@ -272,7 +291,6 @@ export async function addAgendaItem(
       .limit(1);
     position = last[0] ? last[0].position + 1 : 0;
   }
-
 
   const row = await scope.db.transaction(async (tx) => {
     const inserted = await tx
@@ -399,6 +417,7 @@ export async function getMeetingPack(
 
   const byApplication = new Map<string, PackDocument[]>();
   for (const document of documents) {
+    if (!document.applicationId) continue;
     const list = byApplication.get(document.applicationId) ?? [];
     list.push({
       id: document.id,
@@ -434,15 +453,18 @@ export async function declareConflict(
 
   const input = declareConflictSchema.parse(rawInput);
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const id = uuidv7();
+  const reason = await sealConflictReason(scope.organisationId, id, input.reason ?? null);
+  const declared = await scope.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(conflictDeclarations)
       .values(
         scope.insertValues({
+          id,
           applicationId: input.applicationId,
           meetingId: input.meetingId ?? null,
           declaredByUserId: ctx.userId,
-          reason: input.reason ?? null,
+          reason,
           status: 'declared',
         }),
       )
@@ -462,6 +484,8 @@ export async function declareConflict(
 
     return row;
   });
+  const [opened] = await openConflictRows(scope.organisationId, [declared]);
+  return must(opened, 'conflict declaration');
 }
 
 /** Clear a previously declared conflict (agenda managers). */
@@ -470,7 +494,7 @@ export async function clearConflict(conflictId: string): Promise<ConflictRow> {
   requirePermission(subjectFromContext(ctx), 'meeting:agenda-manage');
 
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const cleared = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(conflictDeclarations)
       .set({ status: 'cleared', clearedByUserId: ctx.userId, clearedAt: new Date() })
@@ -496,6 +520,8 @@ export async function clearConflict(conflictId: string): Promise<ConflictRow> {
 
     return row;
   });
+  const [opened] = await openConflictRows(scope.organisationId, [cleared]);
+  return must(opened, 'conflict declaration');
 }
 
 /* ---------------------------------------------------------------------------
@@ -626,7 +652,7 @@ export async function listMeetingConflicts(meetingId: string): Promise<ConflictR
   const agenda = await loadAgendaEntries(meetingId);
   const applicationIds = agenda.map((item) => item.applicationId);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(conflictDeclarations)
     .where(
@@ -638,6 +664,7 @@ export async function listMeetingConflicts(meetingId: string): Promise<ConflictR
       ),
     )
     .orderBy(desc(conflictDeclarations.createdAt));
+  return openConflictRows(scope.organisationId, rows);
 }
 
 /** Active members, so a person can record who was in the room. */
@@ -667,7 +694,7 @@ export async function listAttendance(meetingId: string): Promise<AttendanceRow[]
   const meeting = await loadMeeting(meetingId);
   if (!meeting) throw new AuthorizationError('POLICY_DENIED');
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(meetingAttendance)
     .where(
@@ -677,12 +704,13 @@ export async function listAttendance(meetingId: string): Promise<AttendanceRow[]
       ),
     )
     .orderBy(asc(meetingAttendance.createdAt));
+  return openAttendanceRows(scope.organisationId, rows);
 }
 
 /**
  * Record that a member was present or absent. Agenda managers may record
  * anyone; a member may attest only themselves. Nothing here is counted into
- * quorum.
+ * quorum. The note is sealed under the tenant key.
  */
 export async function recordAttendance(
   meetingId: string,
@@ -690,6 +718,7 @@ export async function recordAttendance(
 ): Promise<AttendanceRow> {
   const ctx = requireTenantContext();
   const subject = subjectFromContext(ctx);
+  requireAny(subject, [...MEETING_RUN, ...SELF_ATTENDANCE]);
   const input = recordAttendanceSchema.parse(rawInput);
   const managing = hasAny(subject, MEETING_RUN);
   const self = input.userId === ctx.userId && hasAny(subject, SELF_ATTENDANCE);
@@ -714,41 +743,78 @@ export async function recordAttendance(
     .limit(1);
   if (!member[0]) throw new AuthorizationError('POLICY_DENIED');
 
-  const saved = await scope.db
-    .insert(meetingAttendance)
-    .values(
-      scope.insertValues({
-        meetingId,
-        userId: input.userId,
-        present: input.present,
-        note: input.note ?? null,
-        attestedByUserId: ctx.userId,
-      }),
-    )
-    .onConflictDoUpdate({
-      target: [meetingAttendance.meetingId, meetingAttendance.userId],
-      set: {
-        present: input.present,
-        note: input.note ?? null,
-        attestedByUserId: ctx.userId,
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
-  const row = must(saved[0], 'attendance');
+  const note = input.note ?? null;
+  const candidateId = uuidv7();
+  const candidateNote = await sealAttendanceNote(scope.organisationId, candidateId, note);
+  const saved = await scope.db.transaction(async (tx) => {
+    // The note is bound to its row id, so an existing row is updated in place
+    // and re-sealed under its own id rather than overwritten by an upsert.
+    const inserted = await tx
+      .insert(meetingAttendance)
+      .values(
+        scope.insertValues({
+          id: candidateId,
+          meetingId,
+          userId: input.userId,
+          present: input.present,
+          note: candidateNote,
+          attestedByUserId: ctx.userId,
+        }),
+      )
+      .onConflictDoNothing({
+        target: [meetingAttendance.meetingId, meetingAttendance.userId],
+      })
+      .returning();
+    let row = inserted[0];
+    if (!row) {
+      const existing = await tx
+        .select({ id: meetingAttendance.id })
+        .from(meetingAttendance)
+        .where(
+          scope.where(
+            meetingAttendance.organisationId,
+            eq(meetingAttendance.meetingId, meetingId),
+            eq(meetingAttendance.userId, input.userId),
+          ),
+        )
+        .limit(1);
+      const existingId = must(existing[0], 'attendance').id;
+      const updated = await tx
+        .update(meetingAttendance)
+        .set({
+          present: input.present,
+          note: await sealAttendanceNote(scope.organisationId, existingId, note),
+          attestedByUserId: ctx.userId,
+          updatedAt: new Date(),
+        })
+        .where(
+          scope.where(
+            meetingAttendance.organisationId,
+            eq(meetingAttendance.id, existingId),
+          ),
+        )
+        .returning();
+      row = must(updated[0], 'attendance');
+    }
 
-  await recordAudit({
-    action: 'meeting.attendance_recorded',
-    resourceType: 'meeting',
-    resourceId: meetingId,
-    result: 'success',
-    after: {
-      data: { userId: input.userId, present: input.present },
-      allow: ['userId', 'present'],
-    },
+    await recordAudit(
+      {
+        action: 'meeting.attendance_recorded',
+        resourceType: 'meeting',
+        resourceId: meetingId,
+        result: 'success',
+        after: {
+          data: { userId: input.userId, present: input.present },
+          allow: ['userId', 'present'],
+        },
+      },
+      tx,
+    );
+    return row;
   });
 
-  return row;
+  const [opened] = await openAttendanceRows(scope.organisationId, [saved]);
+  return must(opened, 'attendance');
 }
 
 /** A person attests whether quorum was present. Not computed from attendance. */
@@ -763,30 +829,49 @@ export async function attestQuorum(
   if (!meeting) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(meetings)
-    .set({
-      quorumPresent: input.present,
-      quorumNote: input.note ?? null,
-      quorumAttestedByUserId: ctx.userId,
-      quorumAttestedAt: new Date(),
-    })
-    .where(scope.where(meetings.organisationId, eq(meetings.id, meetingId)))
-    .returning();
-  const row = must(updated[0], 'meeting');
+  const quorumNote = await sealMeetingText(
+    scope.organisationId,
+    meetingId,
+    'quorum_note',
+    input.note ?? null,
+  );
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(meetings)
+      .set({
+        quorumPresent: input.present,
+        quorumNote,
+        quorumAttestedByUserId: ctx.userId,
+        quorumAttestedAt: new Date(),
+        version: nextRowVersion(),
+      })
+      .where(
+        scope.where(
+          meetings.organisationId,
+          eq(meetings.id, meetingId),
+          isNull(meetings.deletedAt),
+        ),
+      )
+      .returning();
+    const saved = must(updated[0], 'meeting');
 
-  await recordAudit({
-    action: 'meeting.quorum_attested',
-    resourceType: 'meeting',
-    resourceId: meetingId,
-    result: 'success',
-    after: { data: { present: input.present }, allow: ['present'] },
+    await recordAudit(
+      {
+        action: 'meeting.quorum_attested',
+        resourceType: 'meeting',
+        resourceId: meetingId,
+        result: 'success',
+        after: { data: { present: input.present }, allow: ['present'] },
+      },
+      tx,
+    );
+    return saved;
   });
 
-  return row;
+  return openMeeting(scope.organisationId, row);
 }
 
-/** Store minutes written by a person. Does not close the meeting. */
+/** Store minutes written by a person, sealed at rest. Does not close the meeting. */
 export async function recordMinutes(
   meetingId: string,
   rawInput: RecordMinutesInput,
@@ -798,23 +883,42 @@ export async function recordMinutes(
   if (!meeting) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(meetings)
-    .set({
-      minutes: input.minutes,
-      minutesRecordedByUserId: ctx.userId,
-      minutesRecordedAt: new Date(),
-    })
-    .where(scope.where(meetings.organisationId, eq(meetings.id, meetingId)))
-    .returning();
-  const row = must(updated[0], 'meeting');
+  const minutes = await sealMeetingText(
+    scope.organisationId,
+    meetingId,
+    'minutes',
+    input.minutes,
+  );
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(meetings)
+      .set({
+        minutes,
+        minutesRecordedByUserId: ctx.userId,
+        minutesRecordedAt: new Date(),
+        version: nextRowVersion(),
+      })
+      .where(
+        scope.where(
+          meetings.organisationId,
+          eq(meetings.id, meetingId),
+          isNull(meetings.deletedAt),
+        ),
+      )
+      .returning();
+    const saved = must(updated[0], 'meeting');
 
-  await recordAudit({
-    action: 'meeting.minutes_recorded',
-    resourceType: 'meeting',
-    resourceId: meetingId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'meeting.minutes_recorded',
+        resourceType: 'meeting',
+        resourceId: meetingId,
+        result: 'success',
+      },
+      tx,
+    );
+    return saved;
   });
 
-  return row;
+  return openMeeting(scope.organisationId, row);
 }

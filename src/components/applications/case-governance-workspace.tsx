@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 interface GovernanceComment {
   id: string;
@@ -69,12 +70,14 @@ function MeetingChoice({
   agendaMeetings,
   meetingId,
   onChange,
+  disabled = false,
 }: {
   idPrefix: string;
   lockedMeetingId?: string | undefined;
   agendaMeetings: AgendaMeetingOption[];
   meetingId: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   if (lockedMeetingId) {
     return (
@@ -92,6 +95,7 @@ function MeetingChoice({
         value={meetingId}
         onChange={(event) => onChange(event.target.value)}
         className="border-input bg-surface mt-2 h-10 w-full rounded-md border px-3 text-sm"
+        disabled={disabled}
         required
       >
         <option value="">Choose the meeting</option>
@@ -134,6 +138,7 @@ export function CaseGovernanceWorkspace({
   hideReviews = false,
 }: CaseGovernanceWorkspaceProps) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -232,7 +237,8 @@ export function CaseGovernanceWorkspace({
             </h3>
             {permissions.createReview ? (
               <p className="text-muted-foreground mt-2 text-sm">
-                Comments can be added to a draft review. They stay part of the human record.
+                Comments can be added to a draft review. They stay part of the human
+                record.
               </p>
             ) : null}
             {reviews.length === 0 ? (
@@ -543,10 +549,15 @@ export function CaseGovernanceWorkspace({
                           agendaMeetings={agendaMeetings}
                           meetingId={meetingId}
                           onChange={setMeetingId}
+                          disabled={!hydrated}
                         />
                         <Button
                           type="submit"
-                          disabled={busy !== null || (meetingRequired && !meetingPayload)}
+                          disabled={
+                            !hydrated ||
+                            busy !== null ||
+                            (meetingRequired && !meetingPayload)
+                          }
                         >
                           {busy === `finalise:${decision.id}`
                             ? 'Recording…'
@@ -613,10 +624,13 @@ export function CaseGovernanceWorkspace({
                   agendaMeetings={agendaMeetings}
                   meetingId={meetingId}
                   onChange={setMeetingId}
+                  disabled={!hydrated}
                 />
                 <Button
                   type="submit"
-                  disabled={busy !== null || (meetingRequired && !meetingPayload)}
+                  disabled={
+                    !hydrated || busy !== null || (meetingRequired && !meetingPayload)
+                  }
                 >
                   {busy === 'propose-decision'
                     ? 'Recording…'

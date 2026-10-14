@@ -6,9 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /** Schedule a committee meeting. Does not create a general calendar event. */
 export function ScheduleMeetingForm() {
+  const hydrated = useHydrated();
   const router = useRouter();
   const [title, setTitle] = useState('');
   const [scheduledStart, setScheduledStart] = useState('');
@@ -126,7 +128,7 @@ export function ScheduleMeetingForm() {
           {error}
         </p>
       ) : null}
-      <Button type="submit" disabled={busy} className="w-fit">
+      <Button type="submit" disabled={!hydrated || busy} className="w-fit">
         {busy ? 'Scheduling…' : 'Schedule meeting'}
       </Button>
     </form>

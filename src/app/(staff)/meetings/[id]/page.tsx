@@ -19,6 +19,7 @@ import {
   type AgendaEntry,
   type PackAgendaEntry,
 } from '@/domains/meetings';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
@@ -142,7 +143,10 @@ export default async function MeetingDetailPage({
         },
       };
     });
-  } catch {
+  } catch (error) {
+    // Expired session and missing organisation redirect; anything that is not
+    // an access refusal surfaces as the 500 page.
+    await handlePageError(error);
     workspace = null;
   }
 
