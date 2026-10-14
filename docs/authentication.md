@@ -154,9 +154,13 @@ Enterprise sign-on is not in Phase 1, but the design leaves room for it:
   (`providerId`, tokens), so an OIDC/SAML provider slots in as another account
   type. Organisation-to-provider mapping will hang off the tenancy domain (e.g.
   via `organisation_domains` for email-domain routing).
-- **SCIM provisioning:** membership lifecycle already lives in `memberships` /
-  `membership_roles` with clear statuses, so SCIM create/update/deactivate maps
-  onto membership status transitions rather than a parallel identity store.
+- **SCIM provisioning:** each organisation issues its own bearer credential
+  (`POST /api/scim/credentials`). Only the SHA-256 hash is stored. The
+  organisation is taken from that credential; a path that names another
+  organisation is rejected. Group names replace the managed role set.
+  `organisation-admin` is not assignable unless the credential opts in.
+  A revoked membership stays revoked. Suspend and directory delete also end
+  the user's sessions.
 
 Neither changes the invariant: **authentication never bypasses tenant isolation
 or permission checks**, and every sign-in and factor change is audited

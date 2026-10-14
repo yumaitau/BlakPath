@@ -211,7 +211,7 @@ BlakPath/
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | [`docs/architecture.md`](docs/architecture.md)                         | Modular monolith, domains, system-context & container diagrams, request lifecycle, worker role |
 | [`docs/tenant-isolation.md`](docs/tenant-isolation.md)                 | The isolation model end-to-end and the isolation tests that must pass                          |
-| [`docs/authentication.md`](docs/authentication.md)                     | Better Auth, MFA/passkeys/TOTP, sessions, step-up, SSO/SCIM future                             |
+| [`docs/authentication.md`](docs/authentication.md)                     | Better Auth, MFA/passkeys/TOTP, sessions, step-up, SSO, per-org SCIM                           |
 | [`docs/authorization-matrix.md`](docs/authorization-matrix.md)         | Roles × permission keys, separation of duties, contextual policies                             |
 | [`docs/audit-log-design.md`](docs/audit-log-design.md)                 | Event schema, SHA-256 hash chaining, checkpoints, redaction                                    |
 | [`docs/threat-model.md`](docs/threat-model.md)                         | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |

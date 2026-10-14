@@ -28,6 +28,7 @@ export * from './retention';
 export * from './notifications';
 export * from './email';
 export * from './sso';
+export * from './scim';
 export * from './consent';
 export * from './preferences';
 export * from './audit';
