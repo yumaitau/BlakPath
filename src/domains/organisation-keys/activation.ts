@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db, type Database } from '@/db/client';
 import { organisations } from '@/db/schema';
 import { recordAudit } from '@/domains/audit';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { requireTenantContext } from '@/lib/tenancy/context';
+import { OPERATIONAL_ORGANISATION_STATUSES } from '@/lib/tenancy/organisation-status';
 import { getOrganisationKey, type OrganisationKeyRow } from './service';
 
 /**
@@ -37,7 +38,15 @@ export async function activateOrganisation(
   const updated = await database
     .update(organisations)
     .set({ status: 'active' })
-    .where(eq(organisations.id, organisationId))
+    // A suspended or closed organisation is never re-activated here. Tenant
+    // resolution already refuses it; only a platform operator may lift that
+    // status (`setOrganisationStatus`), and that path checks the key too.
+    .where(
+      and(
+        eq(organisations.id, organisationId),
+        inArray(organisations.status, [...OPERATIONAL_ORGANISATION_STATUSES]),
+      ),
+    )
     .returning({ id: organisations.id, status: organisations.status });
   const row = updated[0];
   if (!row || row.status !== 'active') throw new OrganisationActivationError();

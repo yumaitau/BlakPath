@@ -212,6 +212,12 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     },
   ),
   route(
+    'POST',
+    '/api/admin/organisations/[id]/status',
+    { kind: 'platform-operator' },
+    { body: { status: 'suspended' } },
+  ),
+  route(
     'GET',
     '/api/applications',
     { kind: 'member' },

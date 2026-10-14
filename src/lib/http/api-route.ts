@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { runWithTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { ApiKeyError, parseBearer, resolveApiKeyContext } from '@/domains/api-keys';
+import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
 import {
   REQUEST_LIMITS,
@@ -55,7 +56,10 @@ export function apiErrorResponse(error: unknown): NextResponse {
   if (error instanceof ApiKeyError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  if (error instanceof AuthorizationError) {
+  if (
+    error instanceof AuthorizationError ||
+    error instanceof OrganisationUnavailableError
+  ) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   return NextResponse.json({ error: 'Internal error' }, { status: 500 });

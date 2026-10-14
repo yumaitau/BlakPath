@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { StaffShell } from '@/components/staff/staff-shell';
+import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { visibleStaffTools } from '@/lib/navigation/staff-tools';
 import { loadStaffShell } from '@/lib/tenancy/staff-shell';
@@ -10,7 +11,9 @@ import { loadStaffShell } from '@/lib/tenancy/staff-shell';
  * records, so it must stay reachable while the key is unavailable.
  */
 export default async function KeyCustodyLayout({ children }: { children: ReactNode }) {
-  const { organisations, activeOrganisationId } = await loadStaffShell();
+  const shell = await loadStaffShell();
+  if (shell.unavailable) return <OrganisationUnavailable canSwitch={shell.canSwitch} />;
+  const { organisations, activeOrganisationId } = shell;
   let tools: { href: string; label: string }[] = [];
   try {
     tools = await withRequestTenant((ctx) =>

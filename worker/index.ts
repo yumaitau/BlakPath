@@ -4,6 +4,7 @@ import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
 import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
 import { closeQueues, type TenantJob } from '@/lib/queues';
+import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
 import { startKeyHealthLoop } from './key-health-loop';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { queueFailureSignal } from './operational-signals';
@@ -51,6 +52,15 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const worker = new Worker<TenantJob>(
     queueName,
     async (job, token) => {
+      // Drop work for a suspended or closed organisation instead of retrying
+      // it. A lookup failure still throws, so an outage is retried.
+      if (!(await isOrganisationAcceptingWork(job.data.organisationId))) {
+        childLogger.info(
+          { jobId: job.id, organisationId: job.data.organisationId },
+          'skipping job for unavailable organisation',
+        );
+        return;
+      }
       const row = await getOrganisationKey(job.data.organisationId);
       const outcome = await applyTenantJobGate({
         status: row?.status ?? null,

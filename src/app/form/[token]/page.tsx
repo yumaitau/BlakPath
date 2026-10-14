@@ -2,6 +2,7 @@ import { getPublicForm } from '@/domains/forms';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PublicFormRenderer } from '@/components/forms/public-form-renderer';
 import { publicKeyDegradation } from '@/lib/encryption/public-degradation';
+import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 
 /**
  * Public, tokenised form completion page (RSC).
@@ -30,12 +31,30 @@ export default async function PublicFormPage({
   // message — expired, revoked and unknown are not distinguished. A tenant
   // key failure is different: the link may be fine, the key is not.
   let form: Awaited<ReturnType<typeof getPublicForm>> | null = null;
+  let unavailable = false;
   let keyMessage: string | null = null;
   try {
     form = await getPublicForm(token);
   } catch (error) {
+    // A suspended or closed organisation is refused before the key is used.
+    unavailable = error instanceof OrganisationUnavailableError;
     keyMessage = publicKeyDegradation(error);
     form = null;
+  }
+
+  if (unavailable) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Organisation unavailable</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground text-sm">
+            This organisation is unavailable. You cannot use this form right now.
+          </p>
+        </CardContent>
+      </Card>
+    );
   }
 
   if (keyMessage) {

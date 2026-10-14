@@ -202,6 +202,11 @@ jobs:
       CLAMAV_HOST: localhost
       SMTP_HOST: localhost
       RUN_EVIDENCE_E2E: 'true'
+      # Federated sign-in journey against the in-test mock IdP (no real tenant).
+      SSO_ENTRA_CLIENT_ID: e2e-mock-client
+      SSO_ENTRA_CLIENT_SECRET: e2e-mock-client-secret
+      SSO_STATE_SECRET: ci-e2e-sso-state-secret-at-least-32-characters
+      SSO_E2E_IDP_PORT: '4455'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
