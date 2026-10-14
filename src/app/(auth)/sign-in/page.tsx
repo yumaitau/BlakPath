@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { authClient, signIn } from '@/lib/auth/client';
+import { POST_SIGN_IN_PATH } from '@/lib/auth/landing';
 import { parseSignInReason, safeReturnTo, type SignInReason } from '@/lib/auth/return-to';
 import { useHydrated } from '@/lib/hooks/use-hydrated';
 
@@ -16,8 +17,9 @@ import { useHydrated } from '@/lib/hooks/use-hydrated';
  * Email + password sign-in.
  *
  * On success we return to `returnTo` (the page an expired session was on, or an
- * invitation link) when it is a safe in-app path, else `/dashboard`. If the
- * account has two-factor enabled, the better-auth client's
+ * invitation link) when it is a safe in-app path, else `/home`, which sends
+ * applicant-only accounts to the portal and everyone else to the staff
+ * dashboard. If the account has two-factor enabled, the better-auth client's
  * `onTwoFactorRedirect` hook takes over and routes to `/sign-in/two-factor`
  * (carrying `returnTo`), so we do not navigate ourselves in that
  * case — we simply keep the button in its pending state until the redirect
@@ -50,8 +52,11 @@ const SSO_ERROR =
   'Single sign-on isn’t available for this account right now. Sign in with your password instead.';
 
 /** Return to the requested in-app page without accepting arbitrary redirect URLs. */
-function safeReturnPath(): string {
-  return safeReturnTo(new URLSearchParams(window.location.search).get('returnTo'));
+function returnPathFromLocation(): string {
+  return safeReturnTo(
+    new URLSearchParams(window.location.search).get('returnTo'),
+    POST_SIGN_IN_PATH,
+  );
 }
 
 const noSubscription = () => () => {};
@@ -94,7 +99,7 @@ export default function SignInPage() {
     setError(null);
     setPending(true);
 
-    const returnPath = safeReturnPath();
+    const returnPath = returnPathFromLocation();
     const { error: signInError } = await signIn.email({
       email,
       password,
@@ -127,7 +132,7 @@ export default function SignInPage() {
       return;
     }
 
-    window.location.href = safeReturnPath();
+    window.location.href = returnPathFromLocation();
   }
 
   async function handleSso() {

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { twoFactor } from '@/lib/auth/client';
+import { POST_SIGN_IN_PATH } from '@/lib/auth/landing';
 import { safeReturnTo } from '@/lib/auth/return-to';
 
 /**
@@ -57,6 +58,7 @@ export default function TwoFactorPage() {
 
     window.location.href = safeReturnTo(
       new URLSearchParams(window.location.search).get('returnTo'),
+      POST_SIGN_IN_PATH,
     );
   }
 

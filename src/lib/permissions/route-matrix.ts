@@ -260,8 +260,10 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       allowProbe: true,
     },
   ),
+  // Applicant-only members may create only once the organisation has opened
+  // public applications (off in the matrix tenant), so staff intake probes 2xx.
   route('POST', '/api/applications', anyOf(['application:create']), {
-    allowRole: 'applicant',
+    allowRole: 'intake-officer',
     allowProbe: true,
     body: { applicantName: 'Matrix Applicant' },
   }),
@@ -618,6 +620,12 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   }),
   route('PATCH', '/api/organisations/session-policy', anyOf(['tenant:configure']), {
     body: { idleTimeoutMinutes: 45 },
+  }),
+  // Unknown or closed organisations answer 403 before the session is read.
+  // For an open organisation the caller needs an active membership there, and
+  // `startPublicApplication` → `createApplication` enforces `application:create`.
+  route('POST', '/api/organisations/applications', anyOf(['application:create']), {
+    body: { slug: 'matrix-org', applicantName: 'Matrix Applicant' },
   }),
   route(
     'GET',
