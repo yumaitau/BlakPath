@@ -1,6 +1,7 @@
 {
   "ignores": [
     "@tailwindcss/postcss",
+    "@vitest/coverage-v8",
     "@worker/*",
     "pino-pretty",
     "prettier-plugin-tailwindcss",

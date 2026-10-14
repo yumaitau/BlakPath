@@ -53,6 +53,7 @@ These references are real, but the tools cannot see them. They are ignored so th
 | `tailwindcss`                 | `@import` in `src/styles/globals.css`.                                                                                        |
 | `prettier-plugin-tailwindcss` | Plugin name in `.prettierrc.json`.                                                                                            |
 | `@worker/*`                   | TypeScript path alias (`@worker/scheduler`), not an npm package. depcheck only.                                               |
+| `@vitest/coverage-v8`         | Loaded by Vitest from `coverage.provider: 'v8'` in `vitest.config.ts`; never imported. depcheck only.                         |
 
 Knip also ignores the `openssl` binary. `tests/unit/email-events.test.ts` shells out to the system `openssl`; it is not an npm package.
 
