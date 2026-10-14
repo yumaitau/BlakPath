@@ -2,6 +2,7 @@ import { and, eq, type SQL } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { memberships, organisationDomains, organisationSsoProviders } from '@/db/schema';
 import { recordAudit } from '@/domains/audit/service';
+import { auditReason } from '@/domains/audit/hash';
 
 /**
  * Tenant-bound federated sign-in decisions.
@@ -165,6 +166,8 @@ export async function hasActiveMembership(
   return rows.length > 0;
 }
 
+const PROVIDER_REF = /^[A-Za-z0-9_-]{1,128}$/;
+
 /** Audit a federated sign-in outcome on the organisation's chain. */
 export async function recordSsoSignIn(input: {
   organisationId: string;
@@ -181,9 +184,13 @@ export async function recordSsoSignIn(input: {
     resourceType: 'session',
     resourceId: input.sessionId ?? null,
     result: input.result,
-    reason: input.reason
-      ? `sso:${input.providerKey}:${input.reason}`
-      : `sso:${input.providerKey}`,
+    // Coded as sso.<outcome>:<providerKey>. A provider key that is not
+    // id-shaped is left out of the reason; it is still in `after`.
+    reason: auditReason(
+      input.reason ? `sso.${input.reason.toLowerCase()}` : 'sso.sign_in',
+      PROVIDER_REF.test(input.providerKey) ? input.providerKey : null,
+    ),
+    after: { data: { providerKey: input.providerKey }, allow: ['providerKey'] },
     organisationId: input.organisationId,
     actorUserId: input.userId ?? null,
     sessionId: input.sessionId ?? null,

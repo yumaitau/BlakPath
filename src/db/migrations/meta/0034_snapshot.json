@@ -1,5 +1,5 @@
 {
-  "id": "c0efe3f0-2d7f-496e-a343-4578223dc852",
+  "id": "f87803f0-1989-46ee-8deb-3fd23780b14b",
   "prevId": "c0f67938-8d33-4380-b740-259b41c24d38",
   "version": "7",
   "dialect": "postgresql",
@@ -1045,6 +1045,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'draft'"
+        },
+        "status_reason": {
+          "name": "status_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "region": {
           "name": "region",
