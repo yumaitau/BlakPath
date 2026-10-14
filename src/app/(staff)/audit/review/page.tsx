@@ -100,7 +100,7 @@ export default async function AuditReviewPage({
       ) : null}
       {error === 'invalid' ? (
         <p className="text-destructive mt-4 text-sm" role="alert">
-          Enter a month as YYYY-MM. Notes must be 500 characters or fewer.
+          Enter a month as YYYY-MM, an outcome, and a findings count that matches it.
         </p>
       ) : null}
 
@@ -158,7 +158,6 @@ export default async function AuditReviewPage({
                 {' '}
                 · {review.actorName ?? 'Unknown person'} · {review.timestamp}
               </span>
-              {review.reason ? <p className="mt-1">{review.reason}</p> : null}
             </li>
           ))}
         </ul>

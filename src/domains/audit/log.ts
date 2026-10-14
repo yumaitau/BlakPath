@@ -100,7 +100,7 @@ export const AUDIT_MONTHLY_REVIEW_CHECKS = [
   {
     id: 'record',
     title: 'Record the review',
-    body: 'Record who completed this month’s checklist and what they will follow up. That acknowledgement is itself an audit event.',
+    body: 'Record who completed this month’s checklist, whether it raised findings, and how many. Follow-up detail stays outside the audit log, which holds no free text. That acknowledgement is itself an audit event.',
   },
   {
     id: 'operators',
@@ -268,13 +268,36 @@ export const auditLogQuerySchema = z
     };
   });
 
-export const recordMonthlyReviewSchema = z.object({
-  period: z.string().regex(PERIOD),
-  notes: z.preprocess((value) => {
-    const raw = blankToUndefined(value);
-    return raw;
-  }, z.string().trim().max(500).optional()),
-});
+export const AUDIT_REVIEW_OUTCOMES = ['no_findings', 'findings_raised'] as const;
+export type AuditReviewOutcome = (typeof AUDIT_REVIEW_OUTCOMES)[number];
+
+/**
+ * Structured fields only. The audit chain is immutable, so the review takes no
+ * free text (#80): unknown keys such as `notes` are rejected, not dropped.
+ */
+export const recordMonthlyReviewSchema = z
+  .object({
+    period: z.string().regex(PERIOD),
+    outcome: z.enum(AUDIT_REVIEW_OUTCOMES),
+    findingsCount: z.coerce.number().int().min(0).max(1000).default(0),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.outcome === 'no_findings' && value.findingsCount !== 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['findingsCount'],
+        message: 'No findings means a count of 0',
+      });
+    }
+    if (value.outcome === 'findings_raised' && value.findingsCount < 1) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['findingsCount'],
+        message: 'Findings raised needs a count of at least 1',
+      });
+    }
+  });
 
 function metaCell(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -381,7 +404,7 @@ async function gate(deniedAction: AuditAction): Promise<void> {
     action: deniedAction,
     resourceType: 'audit_log',
     result: 'denied',
-    reason: 'missing audit:view',
+    reason: 'audit.permission_denied',
   });
   throw new AuthorizationError('PERMISSION_DENIED');
 }
@@ -469,7 +492,7 @@ async function recordInvalid(action: AuditAction): Promise<void> {
     action,
     resourceType: 'audit_log',
     result: 'failure',
-    reason: 'invalid filters',
+    reason: 'audit.invalid_filters',
   });
 }
 
@@ -543,7 +566,11 @@ export async function viewAuditChecklist(): Promise<{
   return { reviews: rows.map(toEntry) };
 }
 
-/** Append a human acknowledgement that this month's checklist was done. */
+/**
+ * Append a human acknowledgement that this month's checklist was done. The
+ * reviewer is the context actor; only period, outcome and count are stored.
+ * Reasons are coded values, never free text (#80).
+ */
 export async function recordMonthlyAuditReview(
   raw: unknown,
 ): Promise<{ period: string }> {
@@ -554,7 +581,7 @@ export async function recordMonthlyAuditReview(
       action: 'audit.monthly_review_recorded',
       resourceType: 'audit_log',
       result: 'failure',
-      reason: 'invalid review',
+      reason: 'audit.invalid_review',
     });
     throw parsed.error;
   }
@@ -563,13 +590,14 @@ export async function recordMonthlyAuditReview(
     resourceType: 'audit_log',
     resourceId: parsed.data.period,
     result: 'success',
-    reason: parsed.data.notes ?? null,
+    reason: 'audit.monthly_review',
     after: {
       data: {
         period: parsed.data.period,
-        ...(parsed.data.notes ? { notes: parsed.data.notes } : {}),
+        outcome: parsed.data.outcome,
+        findingsCount: parsed.data.findingsCount,
       },
-      allow: ['period', 'notes'],
+      allow: ['period', 'outcome', 'findingsCount'],
     },
   });
   return { period: parsed.data.period };

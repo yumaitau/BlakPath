@@ -30,7 +30,7 @@ integration('audit log viewer', () => {
   });
 
   it('scopes reads to the tenant, audits the view, and exports formula-safe csv', async () => {
-    const [{ db, sqlClient }, schema, audit, tenancy, permissions, { uuidv7 }] =
+    const [{ db, sqlClient }, schema, audit, tenancy, permissions, { uuidv7 }, drizzle] =
       await Promise.all([
         import('@/db/client'),
         import('@/db/schema'),
@@ -38,6 +38,7 @@ integration('audit log viewer', () => {
         import('@/lib/tenancy/context'),
         import('@/lib/permissions/errors'),
         import('uuidv7'),
+        import('drizzle-orm'),
       ]);
     closeDatabase = () => sqlClient.end({ timeout: 5 });
 
@@ -67,13 +68,13 @@ integration('audit log viewer', () => {
     await audit.recordAudit({
       organisationId: orgA,
       actorUserId: actorId,
-      actingRole: 'case-officer',
+      // Formula probe: actingRole is free-form, reasons are coded only.
+      actingRole: '=1+1',
       sessionId: null,
       action: 'application.viewed',
       resourceType: 'application',
       resourceId: caseId,
       result: 'success',
-      reason: '=1+1',
     });
     await audit.recordAudit({
       organisationId: orgA,
@@ -84,7 +85,7 @@ integration('audit log viewer', () => {
       resourceType: 'application',
       resourceId: otherCaseId,
       result: 'denied',
-      reason: 'not assigned',
+      reason: 'application.not_assigned',
     });
     await audit.recordAudit({
       organisationId: orgA,
@@ -116,7 +117,7 @@ integration('audit log viewer', () => {
       resourceType: 'application',
       resourceId: uuidv7(),
       result: 'success',
-      reason: '=OTHER_TENANT',
+      reason: 'test.other_tenant',
     });
     await audit.recordPlatformAudit({
       actorUserId: null,
@@ -126,7 +127,7 @@ integration('audit log viewer', () => {
       resourceType: 'organisation_key',
       resourceId: orgA,
       result: 'success',
-      reason: 'PLATFORM_CHAIN',
+      reason: 'test.platform_chain',
     });
 
     const viewer = context(orgA, viewerId, ['audit:view']);
@@ -140,8 +141,8 @@ integration('audit log viewer', () => {
     expect(denied).toBeInstanceOf(permissions.AuthorizationError);
 
     const all = await tenancy.runWithTenantContext(viewer, () => audit.listAuditLog({}));
-    expect(JSON.stringify(all)).not.toContain('OTHER_TENANT');
-    expect(JSON.stringify(all)).not.toContain('PLATFORM_CHAIN');
+    expect(JSON.stringify(all)).not.toContain('test.other_tenant');
+    expect(JSON.stringify(all)).not.toContain('test.platform_chain');
     expect(all.total).toBe(5);
     expect(all.items.some((item) => item.action === 'audit.viewed')).toBe(true);
 
@@ -162,7 +163,7 @@ integration('audit log viewer', () => {
       audit.listAuditLog({ user: actorId }),
     );
     expect(byUser.total).toBe(1);
-    expect(byUser.items[0]?.reason).toBe('=1+1');
+    expect(byUser.items[0]?.actingRole).toBe('=1+1');
 
     const denials = await tenancy.runWithTenantContext(viewer, () =>
       audit.listAuditLog({ denials: '1' }),
@@ -180,9 +181,67 @@ integration('audit log viewer', () => {
       audit.exportAuditLog({ case: caseId }),
     );
     expect(exported.csv).toContain("'=1+1");
-    expect(exported.csv).not.toContain('OTHER_TENANT');
-    expect(exported.csv).not.toContain('PLATFORM_CHAIN');
+    expect(exported.csv).not.toContain('test.other_tenant');
+    expect(exported.csv).not.toContain('test.platform_chain');
     expect(exported.csv).not.toMatch(/(^|,)=1\+1/);
     expect(exported.truncated).toBe(false);
+
+    // The monthly review stores structured fields and a coded reason only.
+    const rejected = await tenancy
+      .runWithTenantContext(viewer, () =>
+        audit.recordMonthlyAuditReview({
+          period: '2026-10',
+          outcome: 'no_findings',
+          notes: 'FREE_TEXT_NOTE',
+        }),
+      )
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(rejected).not.toBeNull();
+    await tenancy.runWithTenantContext(viewer, () =>
+      audit.recordMonthlyAuditReview({
+        period: '2026-10',
+        outcome: 'findings_raised',
+        findingsCount: 2,
+      }),
+    );
+    const [review] = await db
+      .select({
+        reason: schema.auditEvents.reason,
+        afterMeta: schema.auditEvents.afterMeta,
+        actorUserId: schema.auditEvents.actorUserId,
+      })
+      .from(schema.auditEvents)
+      .where(
+        drizzle.and(
+          drizzle.eq(schema.auditEvents.organisationId, orgA),
+          drizzle.eq(schema.auditEvents.action, 'audit.monthly_review_recorded'),
+          drizzle.eq(schema.auditEvents.result, 'success'),
+        ),
+      );
+    expect(review?.reason).toBe('audit.monthly_review');
+    expect(review?.actorUserId).toBe(viewerId);
+    expect(review?.afterMeta).toEqual({
+      findingsCount: 2,
+      outcome: 'findings_raised',
+      period: '2026-10',
+    });
+
+    // Every reason this flow wrote to the tenant chain is a coded value.
+    const chain = await db
+      .select({
+        reason: schema.auditEvents.reason,
+        afterMeta: schema.auditEvents.afterMeta,
+      })
+      .from(schema.auditEvents)
+      .where(drizzle.eq(schema.auditEvents.organisationId, orgA));
+    expect(JSON.stringify(chain)).not.toContain('FREE_TEXT_NOTE');
+    for (const row of chain) {
+      if (row.reason !== null) {
+        expect(row.reason).toMatch(/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*$/);
+      }
+    }
   });
 });

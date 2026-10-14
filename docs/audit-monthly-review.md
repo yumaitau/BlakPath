@@ -42,8 +42,9 @@ divergence is an incident. Do not edit audit rows.
 
 ### Record the review
 
-Record who completed this month’s checklist and what they will follow up. That
-acknowledgement is itself an audit event.
+Record who completed this month’s checklist, whether it raised findings, and
+how many. Follow-up detail stays outside the audit log, which holds no free
+text. That acknowledgement is itself an audit event.
 
 ### Operator access is separate
 
@@ -53,10 +54,15 @@ not replace it.
 
 ## How to record it
 
-On `/audit/review`, choose the month and optional follow-up notes, then record
-the review. That appends `audit.monthly_review_recorded` to the tenant chain
-(`resourceId` is the `YYYY-MM` period). Do not edit older audit rows. Notes are
-capped at 500 characters and must not contain evidence contents or secrets.
+On `/audit/review`, choose the month, the outcome (`no_findings` or
+`findings_raised`) and the number of findings, then record the review. That
+appends `audit.monthly_review_recorded` to the tenant chain (`resourceId` is
+the `YYYY-MM` period; the reviewer is the signed-in actor; the reason is the
+code `audit.monthly_review`). The event stores
+only `period`, `outcome` and `findingsCount`. There is no notes field: the
+chain is immutable, so free text that might carry personal data never enters it
+(#80). Track follow-up detail in the case or task it concerns. Do not edit
+older audit rows.
 
 ## What this checklist is not
 

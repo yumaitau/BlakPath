@@ -38,13 +38,20 @@ export type {
 } from './verify';
 export { AuditChainDivergenceError, createCheckpoint, verifyChain } from './verify';
 
-export type { AuditLogEntry, AuditLogExport, AuditLogFilters, AuditLogPage } from './log';
+export type {
+  AuditLogEntry,
+  AuditLogExport,
+  AuditLogFilters,
+  AuditLogPage,
+  AuditReviewOutcome,
+} from './log';
 export {
   AUDIT_CSV_HEADERS,
   BREAK_GLASS_ACTION_LIKE,
   AUDIT_EXPORT_MAX_ROWS,
   AUDIT_LOG_PAGE_DEFAULT,
   AUDIT_MONTHLY_REVIEW_CHECKS,
+  AUDIT_REVIEW_OUTCOMES,
   auditEventsToCsv,
   auditLogQuerySchema,
   exportAuditLog,

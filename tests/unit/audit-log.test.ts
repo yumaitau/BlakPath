@@ -78,8 +78,41 @@ describe('audit log filters', () => {
       false,
     );
     expect(
-      recordMonthlyReviewSchema.safeParse({ period: '2026-10', notes: 'ok' }).success,
+      recordMonthlyReviewSchema.safeParse({ period: '2026-10', outcome: 'no_findings' })
+        .success,
     ).toBe(true);
+    expect(
+      recordMonthlyReviewSchema.safeParse({
+        period: '2026-10',
+        outcome: 'findings_raised',
+        findingsCount: '2',
+      }).success,
+    ).toBe(true);
+    // No free text reaches the immutable chain.
+    expect(
+      recordMonthlyReviewSchema.safeParse({
+        period: '2026-10',
+        outcome: 'no_findings',
+        notes: 'Spoke to Jane Citizen',
+      }).success,
+    ).toBe(false);
+    expect(
+      recordMonthlyReviewSchema.safeParse({ period: '2026-10', outcome: 'other' })
+        .success,
+    ).toBe(false);
+    expect(
+      recordMonthlyReviewSchema.safeParse({
+        period: '2026-10',
+        outcome: 'no_findings',
+        findingsCount: 3,
+      }).success,
+    ).toBe(false);
+    expect(
+      recordMonthlyReviewSchema.safeParse({
+        period: '2026-10',
+        outcome: 'findings_raised',
+      }).success,
+    ).toBe(false);
   });
 });
 

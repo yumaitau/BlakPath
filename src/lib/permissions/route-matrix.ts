@@ -244,7 +244,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
   }),
   route('POST', '/api/audit/reviews', anyOf(['audit:view']), {
-    body: { period: '2026-10' },
+    body: { period: '2026-10', outcome: 'no_findings' },
   }),
   route('GET', '/api/auth/[...all]', { kind: 'auth' }, { skipProbe: true }),
   route(
