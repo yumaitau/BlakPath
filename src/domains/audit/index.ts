@@ -6,6 +6,7 @@
  *   - `hash`    — canonical serialisation, SHA-256 chaining and redaction.
  *   - `service` — `recordAudit` / `recordPlatformAudit` write path.
  *   - `verify`  — `verifyChain` / `createCheckpoint` integrity tooling.
+ *   - `anchor` — signed chain-head anchors stored outside the database.
  *   - `log`     — tenant-scoped viewer, formula-safe CSV export, monthly review.
  */
 export type { AuditAction, AuditResult, ResourceType } from './events';
@@ -48,10 +49,32 @@ export {
   auditLogQuerySchema,
   exportAuditLog,
   listAuditLog,
-  neutraliseSpreadsheetFormula,
   recordMonthlyAuditReview,
   recordMonthlyReviewSchema,
   tenantAuditWhere,
   toAuditQueryString,
   viewAuditChecklist,
 } from './log';
+
+export type {
+  AnchorBody,
+  AnchorMismatchReason,
+  AnchorSignature,
+  AnchorSigner,
+  AnchoredChainView,
+  AuditAnchorStore,
+  SettleAuditChainResult,
+  SettleAuditChainStatus,
+  SignedAuditAnchor,
+} from './anchor';
+export {
+  PLATFORM_CHAIN_ID,
+  anchorDay,
+  anchorObjectKey,
+  assessAnchoredChain,
+  auditChainId,
+  canonicalAnchorBody,
+  hashAnchorBody,
+  parseSignedAnchor,
+  settleAuditChain,
+} from './anchor';

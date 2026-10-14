@@ -1,8 +1,5 @@
 import type { Metadata } from 'next';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
+import { MonthlyReviewForm } from '@/components/audit/monthly-review-form';
 import {
   AUDIT_MONTHLY_REVIEW_CHECKS,
   viewAuditChecklist,
@@ -145,32 +142,7 @@ export default async function AuditReviewPage({
         </a>
       </div>
 
-      <form method="post" action="/api/audit/reviews" className="mt-8 space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="review-period" required>
-            Month reviewed
-          </Label>
-          <Input
-            id="review-period"
-            name="period"
-            type="month"
-            required
-            defaultValue={period}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="review-notes">What you followed up</Label>
-          <Textarea
-            id="review-notes"
-            name="notes"
-            maxLength={500}
-            placeholder="Optional. No evidence contents or secrets."
-          />
-        </div>
-        <Button type="submit" size="sm">
-          Record this review
-        </Button>
-      </form>
+      <MonthlyReviewForm defaultPeriod={period} />
 
       <h2 className="mt-10 text-lg font-semibold">Recorded reviews</h2>
       {reviews.length === 0 ? (

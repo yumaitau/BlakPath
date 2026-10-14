@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
+import { AUDIT_APPEND_ONLY_TRIGGERS } from '@/db/audit-guard';
 
 const integration = process.env.RUN_INTEGRATION === 'true' ? describe : describe.skip;
 
@@ -14,9 +15,30 @@ integration('audit chain concurrency', () => {
       import('drizzle-orm'),
     ]);
     if (organisationId) {
-      await db
-        .delete(schema.auditEvents)
-        .where(drizzle.eq(schema.auditEvents.organisationId, organisationId));
+      for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
+        await db
+          .execute(
+            drizzle.sql.raw(
+              `ALTER TABLE ${trigger.table} DISABLE TRIGGER ${trigger.name}`,
+            ),
+          )
+          .catch(() => undefined);
+      }
+      try {
+        await db
+          .delete(schema.auditEvents)
+          .where(drizzle.eq(schema.auditEvents.organisationId, organisationId));
+      } finally {
+        for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
+          await db
+            .execute(
+              drizzle.sql.raw(
+                `ALTER TABLE ${trigger.table} ENABLE ALWAYS TRIGGER ${trigger.name}`,
+              ),
+            )
+            .catch(() => undefined);
+        }
+      }
       await db
         .delete(schema.organisations)
         .where(drizzle.eq(schema.organisations.id, organisationId));

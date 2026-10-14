@@ -9,20 +9,53 @@ region.
 
 - [ ] Run `pnpm release:check` in the exact production web and worker runtime
       environments; attach the successful key-only output to the release record.
+      The check fails when `PILOT_BOOTSTRAP_TOKEN` is set. Leave that variable
+      unset. The web and worker processes also refuse to boot if it is set.
+      The gate requires `PLATFORM_KMS_KEY_ARN` and rejects `ENCRYPTION_LOCAL_KEY`
+      and `KMS_ENDPOINT`. `ENCRYPTION_MASTER_KEY` is not required.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.
-- [ ] Terminate TLS at the edge, forward only trusted proxy headers and keep
-      the security headers in `next.config.ts` enabled.
+- [ ] Apply `infra/aws/eks-boundary.example.yaml` and the workload trust policy
+      so `/blakpath/production/*` syncs only in the `blakpath` namespace.
+      Confirm a sync of that key from any other namespace is AccessDenied,
+      then rotate the runtime secret (`docs/eks-runbook.md`).
+- [ ] Retire IAM user `blakpath-ses-smtp`: no access keys and no
+      `AmazonSESFullAccess`. Production mail uses the workload role.
+- [ ] Keep the EKS API endpoint private, or limit public CIDRs to admin and CI
+      networks. `0.0.0.0/0` and `::/0` fail the release. See
+      `docs/adr/0001-dedicated-cluster.md`.
+- [ ] Terminate TLS at the origin listener (HTTP redirects to HTTPS), set the
+      Cloudflare zone to Full (strict), verify the zone-level Authenticated
+      Origin Pull certificate, attach the regional WAF web ACL, and set
+      `ORIGIN_VERIFY_SECRET` in both the runtime secret and the Cloudflare
+      request-header transform. Keep the security headers in `next.config.ts`
+      enabled. Client addresses come from `clientIp` (`src/lib/http/client-ip.ts`).
 - [ ] Configure database point-in-time recovery and versioned, encrypted object
       storage backups. Redis is not a durable source of record.
 - [ ] Run a documented restore drill into an isolated environment. Confirm a
       tenant can sign in, their records are present, objects can be read only after
       the normal authorisation checks, and `audit-verify` reports a clean chain.
+      Re-establish each client key grant in the restored environment before
+      expecting tenant plaintext. A backup copy stays ciphertext under that
+      CMK ([`key-lifecycle.md`](key-lifecycle.md)).
 - [ ] Set an owner and escalation path for failed readiness checks, scanner
       availability, exhausted jobs, audit-chain divergence and backup failures.
+- [ ] Record counsel and pilot-council review of the client trust pack
+      ([`customer-held-keys.md`](customer-held-keys.md)) and one auditor
+      walkthrough of its verification steps against a staging tenant. Include the
+      encryption-keys page, its health-check endpoint and the escrow vault in the
+      penetration-test scope.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] Deploy the SES sender (`infra/aws/ses-sending.example.yaml`, ADR 0090).
+      An invitation and a password reset must reach an external mailbox with
+      `dkim=pass spf=pass dmarc=pass`, and simulator bounce/complaint events
+      must create suppressions in staging (`docs/eks-runbook.md#email`).
+- [ ] Review `infra/k8s/network-policy.example.yaml` against the live VPC,
+      database, Redis and object-storage endpoints, then apply a policy that
+      keeps webhook delivery off in-cluster and link-local addresses. Rotate
+      any webhook endpoint whose stored secret is not envelope ciphertext.
 
 ## Signals and response
 

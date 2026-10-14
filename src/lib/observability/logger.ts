@@ -1,5 +1,7 @@
 import pino, { type Logger } from 'pino';
+import { inventoryRedactPaths } from '@/lib/encryption/inventory';
 import { env, isProduction } from '@/lib/env';
+import { serializeLoggedError } from '@/lib/observability/error-log';
 
 /**
  * OPERATIONAL logging only.
@@ -17,64 +19,81 @@ import { env, isProduction } from '@/lib/env';
  */
 
 /**
- * Paths censored from every log record. Covers auth material, secrets, and
- * personal / sensitive applicant data. Wildcards match at any nesting depth.
+ * Keys censored from every log record. Covers auth material, secrets, driver
+ * payloads and personal / sensitive applicant data.
+ *
+ * fast-redact treats `*` as one object level, so each key is listed on its
+ * own and under every parent depth up to {@link REDACT_DEPTH}.
  */
-const REDACT_PATHS: string[] = [
+const SENSITIVE_KEYS = [
   // Auth & secrets
   'authorization',
-  '*.authorization',
-  'headers.authorization',
-  'headers.cookie',
   'cookie',
-  '*.cookie',
   'password',
-  '*.password',
   'token',
-  '*.token',
-  '*.accessToken',
-  '*.refreshToken',
+  'accessToken',
+  'refreshToken',
   'totp',
-  '*.totp',
   'recoveryCodes',
-  '*.recoveryCodes',
   'secret',
   '*.secret',
+  'headers.x-blakpath-origin-verify',
+  '*.x-blakpath-origin-verify',
+  'ORIGIN_VERIFY_SECRET',
+  '*.ORIGIN_VERIFY_SECRET',
   'wrappedDek',
-  '*.wrappedDek',
   'ciphertext',
-  '*.ciphertext',
+  // Driver payloads (query text and bound values)
+  'params',
+  'query',
+  'detail',
   // Evidence & message content
   'content',
-  '*.content',
   'body',
-  '*.body',
   'messageBody',
-  '*.messageBody',
   'evidence',
-  '*.evidence',
   'fileContent',
-  '*.fileContent',
   // Personal identifiers (applicant PII must not appear in operational logs)
   'email',
-  '*.email',
   'phone',
-  '*.phone',
   'dateOfBirth',
-  '*.dateOfBirth',
   'firstName',
-  '*.firstName',
   'lastName',
-  '*.lastName',
   'fullName',
-  '*.fullName',
   'address',
-  '*.address',
   'ipAddress',
-  '*.ipAddress',
+] as const;
+
+const REDACT_DEPTH = 6;
+
+function redactPaths(keys: readonly string[], depth: number): string[] {
+  const paths: string[] = [];
+  for (const key of keys) {
+    paths.push(key);
+    for (let level = 1; level <= depth; level += 1) {
+      paths.push(`${'*.'.repeat(level)}${key}`);
+    }
+  }
+  return paths;
+}
+
+const REDACT_PATHS = [
+  ...redactPaths(SENSITIVE_KEYS, REDACT_DEPTH),
+  ...inventoryRedactPaths(),
 ];
 
 const REDACTED = '[redacted]';
+
+/** Paths censored before operational logs are serialised. */
+export const OPERATIONAL_REDACT_PATHS = REDACT_PATHS;
+
+/** Shared with tests so a log line is censored the same way as production. */
+export const logRedaction = { paths: OPERATIONAL_REDACT_PATHS, censor: REDACTED };
+
+export const logSerializers = {
+  err: serializeLoggedError,
+  error: serializeLoggedError,
+};
 
 const base = {
   service: env.OTEL_SERVICE_NAME,
@@ -89,7 +108,8 @@ const base = {
 export const logger: Logger = pino({
   level: env.LOG_LEVEL,
   base,
-  redact: { paths: REDACT_PATHS, censor: REDACTED },
+  redact: logRedaction,
+  serializers: logSerializers,
   // ISO timestamps for cross-system correlation.
   timestamp: pino.stdTimeFunctions.isoTime,
   formatters: {

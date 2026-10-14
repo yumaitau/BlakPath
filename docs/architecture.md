@@ -63,7 +63,7 @@ flowchart TB
   redis[("Redis<br/>queues / ephemeral state")]
   s3[("Object storage (S3)<br/>evidence + quarantine buckets")]
   clamav["ClamAV<br/>malware scanning"]
-  smtp["Email (SMTP)"]
+  smtp["Email<br/>(SES API; Mailpit locally)"]
 
   applicant --> web
   staff --> web
@@ -76,6 +76,7 @@ flowchart TB
   worker --> redis
   worker --> s3
   worker --> clamav
+  web --> smtp
   worker --> smtp
 ```
 
@@ -172,7 +173,8 @@ path:
 
 - **Evidence scanning** — pick up a quarantined upload, scan with ClamAV,
   promote clean files or hold/reject infected ones (`docs/evidence-scanning-design.md`).
-- **Notifications** — send email via SMTP.
+- **Notifications** — send email via the SES API under the workload role
+  (Mailpit SMTP locally; see `docs/adr/0090-production-email-sender.md`).
 - **Audit integrity verification** — periodically re-walk the hash chain and
   write/verify integrity checkpoints (`docs/audit-log-design.md`).
 - **Retention & lifecycle** — apply retention/deletion policies where lawful,

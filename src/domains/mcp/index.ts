@@ -18,3 +18,28 @@ export {
   type JsonRpcRequest,
   type JsonRpcResponse,
 } from './server';
+
+export {
+  AI_FEATURES_FLAG,
+  AiFeatureChangeError,
+  MCP_PII_SCOPE,
+  MCP_READ_SCOPE,
+  MCP_WITHHELD_FIELDS,
+  allowsMcpPii,
+  assertAiFeatureChange,
+  hasMcpScope,
+  mcpAuditAfter,
+  mcpHttpStatus,
+  mcpRateAllows,
+  mcpRateWindow,
+  minimiseMcpValue,
+} from './policy';
+
+export {
+  getTenantAiFeatures,
+  setTenantAiFeatures,
+  tenantAiOptedIn,
+  type TenantAiFeaturesStatus,
+} from './opt-in';
+
+export { consumeMcpRateLimit, McpRateLimitError } from './rate-limit';

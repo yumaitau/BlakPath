@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Audit chain-head bucket. Object Lock must be enabled at creation and cannot
+  be turned off later. Compliance retention blocks overwrite and delete until
+  the retain-until date, including for the account root.
+
+Parameters:
+  RetentionDays:
+    Type: Number
+    Default: 2555
+  AnchorKmsKeyArn:
+    Type: String
+    Description: Customer-managed CMK in ap-southeast-2 for object encryption.
+
+Resources:
+  AuditAnchorBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'blakpath-prod-audit-anchors-${AWS::AccountId}-${AWS::Region}'
+      ObjectLockEnabled: true
+      VersioningConfiguration:
+        Status: Enabled
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: COMPLIANCE
+            Days: !Ref RetentionDays
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref AnchorKmsKeyArn
+            BucketKeyEnabled: true
+
+  AuditAnchorBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AuditAnchorBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt AuditAnchorBucket.Arn
+              - !Sub '${AuditAnchorBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: DenyAnchorDelete
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:DeleteObject
+              - s3:DeleteObjectVersion
+              - s3:BypassGovernanceRetention
+            Resource:
+              - !GetAtt AuditAnchorBucket.Arn
+              - !Sub '${AuditAnchorBucket.Arn}/*'
+
+Outputs:
+  AuditAnchorBucketArn:
+    Value: !GetAtt AuditAnchorBucket.Arn
+  AuditAnchorBucketName:
+    Value: !Ref AuditAnchorBucket

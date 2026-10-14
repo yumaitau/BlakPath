@@ -22,24 +22,11 @@ function context(
 
 integration('audit log viewer', () => {
   let closeDatabase: (() => Promise<unknown>) | undefined;
-  const organisationIds: string[] = [];
 
+  // audit_events is append-only (DELETE raises 42501), so the per-run
+  // organisations and their trail stay behind; ids are fresh uuidv7s.
   afterAll(async () => {
-    if (!closeDatabase) return;
-    const [{ db }, schema, drizzle] = await Promise.all([
-      import('@/db/client'),
-      import('@/db/schema'),
-      import('drizzle-orm'),
-    ]);
-    for (const organisationId of organisationIds) {
-      await db
-        .delete(schema.auditEvents)
-        .where(drizzle.eq(schema.auditEvents.organisationId, organisationId));
-      await db
-        .delete(schema.organisations)
-        .where(drizzle.eq(schema.organisations.id, organisationId));
-    }
-    await closeDatabase();
+    if (closeDatabase) await closeDatabase();
   });
 
   it('scopes reads to the tenant, audits the view, and exports formula-safe csv', async () => {
@@ -61,7 +48,6 @@ integration('audit log viewer', () => {
     const caseId = uuidv7();
     const otherCaseId = uuidv7();
     const evidenceId = uuidv7();
-    organisationIds.push(orgA, orgB);
 
     await db.insert(schema.organisations).values([
       {
@@ -132,6 +118,16 @@ integration('audit log viewer', () => {
       result: 'success',
       reason: '=OTHER_TENANT',
     });
+    await audit.recordPlatformAudit({
+      actorUserId: null,
+      actingRole: 'platform-operator',
+      sessionId: null,
+      action: 'key.viewed',
+      resourceType: 'organisation_key',
+      resourceId: orgA,
+      result: 'success',
+      reason: 'PLATFORM_CHAIN',
+    });
 
     const viewer = context(orgA, viewerId, ['audit:view']);
 
@@ -145,6 +141,7 @@ integration('audit log viewer', () => {
 
     const all = await tenancy.runWithTenantContext(viewer, () => audit.listAuditLog({}));
     expect(JSON.stringify(all)).not.toContain('OTHER_TENANT');
+    expect(JSON.stringify(all)).not.toContain('PLATFORM_CHAIN');
     expect(all.total).toBe(5);
     expect(all.items.some((item) => item.action === 'audit.viewed')).toBe(true);
 
@@ -184,6 +181,7 @@ integration('audit log viewer', () => {
     );
     expect(exported.csv).toContain("'=1+1");
     expect(exported.csv).not.toContain('OTHER_TENANT');
+    expect(exported.csv).not.toContain('PLATFORM_CHAIN');
     expect(exported.csv).not.toMatch(/(^|,)=1\+1/);
     expect(exported.truncated).toBe(false);
   });

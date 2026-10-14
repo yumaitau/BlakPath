@@ -7,7 +7,6 @@ import {
   BREAK_GLASS_ACTION_LIKE,
   auditEventsToCsv,
   auditLogQuerySchema,
-  neutraliseSpreadsheetFormula,
   recordMonthlyReviewSchema,
   tenantAuditWhere,
 } from '@/domains/audit';
@@ -86,21 +85,13 @@ describe('audit log filters', () => {
 
 describe('audit csv', () => {
   it('neutralises formula prefixes and still quotes ordinary commas', () => {
-    expect(neutraliseSpreadsheetFormula('=1+1')).toBe("'=1+1");
-    expect(neutraliseSpreadsheetFormula('+1')).toBe("'+1");
-    expect(neutraliseSpreadsheetFormula('-2')).toBe("'-2");
-    expect(neutraliseSpreadsheetFormula('@cmd')).toBe("'@cmd");
-    expect(neutraliseSpreadsheetFormula('\t=1')).toBe("'\t=1");
-    expect(neutraliseSpreadsheetFormula('\r=1')).toBe("'\r=1");
-    expect(neutraliseSpreadsheetFormula('plain')).toBe('plain');
-
     const csv = auditEventsToCsv([
       {
         id: '1',
         timestamp: '2026-01-02T03:04:05.000Z',
         actorUserId: null,
         actorName: '=1+1',
-        actingRole: null,
+        actingRole: '-2',
         action: 'application.viewed',
         resourceType: 'application',
         resourceId: '+1',
@@ -118,6 +109,7 @@ describe('audit csv', () => {
     expect(lines[1]).toContain("'=1+1");
     expect(lines[1]).toContain("'+1");
     expect(lines[1]).toContain("'@cmd");
+    expect(lines[1]).toContain("'-2");
     expect(lines[1]).toContain('"Smith, Ada"');
     expect(lines[1]).not.toMatch(/(^|,)=1\+1/);
     expect(csv.endsWith('\r\n')).toBe(true);

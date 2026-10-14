@@ -32,9 +32,6 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/;
 const ACTION_PATTERN = /^[a-z0-9_.:-]{1,80}$/;
 
-/** Cells a spreadsheet would execute if they landed in a formula column. */
-const FORMULA_PREFIX = /^[=+\-@\t\r]/;
-
 export const AUDIT_CSV_HEADERS = [
   'timestamp',
   'actorUserId',
@@ -279,11 +276,6 @@ export const recordMonthlyReviewSchema = z.object({
   }, z.string().trim().max(500).optional()),
 });
 
-/** Prefix formula triggers so Excel/Sheets store the cell as text. */
-export function neutraliseSpreadsheetFormula(value: string): string {
-  return FORMULA_PREFIX.test(value) ? `'${value}` : value;
-}
-
 function metaCell(value: unknown): string {
   if (value === null || value === undefined) return '';
   try {
@@ -293,25 +285,26 @@ function metaCell(value: unknown): string {
   }
 }
 
-/** Serialise audit rows to a UTF-8 CSV with a BOM and formula-safe cells. */
+/**
+ * Serialise audit rows to a UTF-8 CSV with a BOM. Formula neutralisation and
+ * RFC 4180 quoting come from the shared `toCsv` helper (GHSA-jffr-f883-3x9f).
+ */
 export function auditEventsToCsv(rows: readonly AuditLogRow[]): string {
-  const body: CsvCell[][] = rows.map((row) =>
-    [
-      row.timestamp,
-      row.actorUserId ?? '',
-      row.actorName ?? '',
-      row.actingRole ?? '',
-      row.action,
-      row.resourceType,
-      row.resourceId ?? '',
-      row.result,
-      row.reason ?? '',
-      row.ipAddress ?? '',
-      row.correlationId ?? '',
-      metaCell(row.beforeMeta),
-      metaCell(row.afterMeta),
-    ].map((cell) => neutraliseSpreadsheetFormula(cell)),
-  );
+  const body: CsvCell[][] = rows.map((row) => [
+    row.timestamp,
+    row.actorUserId ?? '',
+    row.actorName ?? '',
+    row.actingRole ?? '',
+    row.action,
+    row.resourceType,
+    row.resourceId ?? '',
+    row.result,
+    row.reason ?? '',
+    row.ipAddress ?? '',
+    row.correlationId ?? '',
+    metaCell(row.beforeMeta),
+    metaCell(row.afterMeta),
+  ]);
   return `\uFEFF${toCsv(AUDIT_CSV_HEADERS, body)}`;
 }
 
