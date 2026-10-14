@@ -40,6 +40,10 @@ async function main(): Promise<void> {
       decisionId: certificates.decisionId,
       verificationCode: certificates.verificationCode,
       signedAt: certificates.signedAt,
+      payloadVersion: certificates.payloadVersion,
+      holderNameHash: certificates.holderNameHash,
+      holderDobHash: certificates.holderDobHash,
+      sha256: certificates.sha256,
       signature: certificates.signature,
       signingAlgorithm: certificates.signingAlgorithm,
       signingKeyId: certificates.signingKeyId,
@@ -83,6 +87,10 @@ async function main(): Promise<void> {
       continue;
     }
     const canonical = await rebuildCanonicalPayload({ ...cert, signedAt: cert.signedAt });
+    if (!canonical) {
+      unresolved.push(cert.reference);
+      continue;
+    }
     let match: CoaSigningPublicKey | null = null;
     for (const keyId of [cert.signingKeyId, ...extraCandidates]) {
       const key = await candidate(keyId);

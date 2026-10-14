@@ -13,3 +13,6 @@ src/db/migrations/
 # Coverage / build outputs.
 coverage/
 dist/
+
+# Vendored SIL OFL font binaries.
+src/domains/certificates/fonts/

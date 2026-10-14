@@ -27,7 +27,6 @@ integration('coa signing keys', () => {
   let runtime: Awaited<ReturnType<typeof loadRuntime>>;
   let organisationId: string;
   let applicationId: string;
-  let decisionId: string;
 
   async function loadRuntime() {
     const [client, schema, certificates, sign, sdk] = await Promise.all([
@@ -80,9 +79,22 @@ integration('coa signing keys', () => {
       });
   }
 
-  /** Seal a certificate row the way `signCertificate` does, minus the session. */
+  /**
+   * Seal a certificate row the way `signCertificate` does, minus the session.
+   * Each seal gets its own finalised decision: one live certificate per decision.
+   */
   async function sealCertificate(): Promise<string> {
     const id = randomUUID();
+    const decisionId = randomUUID();
+    await runtime.db.insert(runtime.schema.decisions).values({
+      id: decisionId,
+      organisationId,
+      applicationId,
+      proposedOutcome: 'confirmed',
+      finalOutcome: 'confirmed',
+      status: 'finalised',
+      finalisedAt: new Date(),
+    });
     const verificationCode = randomUUID().replace(/-/g, '').slice(0, 16).toUpperCase();
     const reference = `CERT-IT-${id.slice(0, 8)}`;
     const signedAt = new Date();
@@ -124,7 +136,6 @@ integration('coa signing keys', () => {
     runtime = await loadRuntime();
     organisationId = randomUUID();
     applicationId = randomUUID();
-    decisionId = randomUUID();
     const suffix = randomUUID().slice(0, 8);
     await runtime.db.insert(runtime.schema.organisations).values({
       id: organisationId,
@@ -137,15 +148,6 @@ integration('coa signing keys', () => {
       organisationId,
       reference: `APP-IT-${suffix}`,
       applicantName: 'Name supplied for integration testing',
-    });
-    await runtime.db.insert(runtime.schema.decisions).values({
-      id: decisionId,
-      organisationId,
-      applicationId,
-      proposedOutcome: 'confirmed',
-      finalOutcome: 'confirmed',
-      status: 'finalised',
-      finalisedAt: new Date(),
     });
   });
 
@@ -185,9 +187,8 @@ integration('coa signing keys', () => {
     for (const code of [oldCode, newCode]) {
       const result = await runtime.certificates.verifyCertificate(code);
       expect(result).toMatchObject({
-        valid: true,
-        signatureValid: true,
-        payloadIntact: true,
+        status: 'ok',
+        verification: { valid: true, signatureValid: true, payloadIntact: true },
       });
     }
     expect(send).not.toHaveBeenCalled();

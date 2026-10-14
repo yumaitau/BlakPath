@@ -52,14 +52,17 @@ export {
 
 export {
   addNote,
+  applyApplicationTransition,
   assignApplication,
   createApplication,
   getApplication,
   getApplicationCaseRecord,
   listApplicationParticipants,
   listApplications,
+  recordApplicationTransitionAudit,
   transitionApplication,
   updateIntake,
+  type AppliedApplicationTransition,
   type ApplicationAssignmentRow,
   type ApplicationCaseRecord,
   type ApplicationDetail,
