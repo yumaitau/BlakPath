@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { z } from 'zod';
+import { WEB_POOL_MAX, WORKER_POOL_MAX } from '@/db/connection-budget';
 import { validateProductionReadiness } from '@/lib/production-readiness';
 
 /**
@@ -39,9 +40,14 @@ const serverSchema = z
     // Database. Runtime uses DATABASE_URL (application role). Migrations in
     // production use DATABASE_MIGRATION_URL (owning role) and refuse to share
     // the application role. Local development may omit the migration URL.
+    // Workers set BLAKPATH_PROCESS=worker and use the worker pool, sized
+    // separately so queue concurrency is not squeezed into the web pool.
+    // See src/db/connection-budget.ts.
     DATABASE_URL: z.string().url(),
     DATABASE_MIGRATION_URL: z.string().url().optional(),
-    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
+    DATABASE_POOL_MAX: z.coerce.number().int().positive().default(WEB_POOL_MAX),
+    DATABASE_WORKER_POOL_MAX: z.coerce.number().int().positive().default(WORKER_POOL_MAX),
+    BLAKPATH_PROCESS: z.enum(['web', 'worker']).default('web'),
     AUDIT_DB_APP_ROLE: z
       .string()
       .regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/)

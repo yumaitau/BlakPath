@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import { readConflictMessage } from '@/lib/http/conflict-message';
 import { cn } from '@/lib/utils';
 
@@ -61,6 +62,7 @@ export function FormInvitations({ formId, initialInvitations }: FormInvitationsP
   const [email, setEmail] = useState('');
   const [expiresInDays, setExpiresInDays] = useState('14');
   const [creating, setCreating] = useState(false);
+  const hydrated = useHydrated();
   const [error, setError] = useState<string | null>(null);
   const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -188,7 +190,7 @@ export function FormInvitations({ formId, initialInvitations }: FormInvitationsP
           </div>
         </div>
         <div>
-          <Button type="submit" size="sm" disabled={creating}>
+          <Button type="submit" size="sm" disabled={!hydrated || creating}>
             {creating ? 'Creating…' : 'Create invitation'}
           </Button>
         </div>

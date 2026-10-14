@@ -293,9 +293,25 @@ Record who rotated, when, and which keys. Do not record the values.
 
 ## Data services
 
-- RDS Postgres with point-in-time recovery. Proxy in front for failover.
+- RDS Postgres with point-in-time recovery. RDS Proxy in front for failover.
   Two roles: `blakpath_migrator` (owner, migrate Job only) and
   `blakpath_app` (runtime DML). See `infra/postgres/audit-roles.sql`.
+  Clients connect to the proxy hostname, not an IP and not a CNAME that is
+  absent from the certificate.
+- TLS is `sslmode=verify-full` for web, worker and the migrate Job. The app and
+  worker images bake
+  `certs/rds-global-bundle.pem` (the public Amazon RDS global bundle) and set
+  `ssl: { ca, rejectUnauthorized: true }`. The release gate rejects
+  `require`, `verify-ca`, and any missing mode. `require` is not verification:
+  postgres.js then skips certificate verification.
+- Session timeouts are startup parameters, not `SET` (a PostgreSQL `SET` pins
+  an RDS Proxy session). App connections use `statement_timeout=60s`,
+  `lock_timeout=10s`, `idle_in_transaction_session_timeout=30s`. The migrate Job
+  uses `lock_timeout=4s` and a 10 minute statement cap on its own single
+  connection (startup parameters, then `SET` by the runner).
+- Named prepared statements are off (`prepare: false`). RDS Proxy can multiplex
+  the extended query protocol, but SQL `PREPARE`/`EXECUTE` still pins, and
+  older proxies pinned named protocol statements. The client never issues those.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS,
   versioning on, AWS Backup coverage. The bucket default CMK is
@@ -395,6 +411,38 @@ the CoA key. Private key material never leaves KMS.
 4. Set `S3_BUCKET_AUDIT_ANCHORS` and `AUDIT_ANCHOR_OBJECT_LOCK=true` in the
    ConfigMap. Confirm the first day's objects exist before accepting
    production records.
+
+## Database connection budget
+
+Checked in `src/db/connection-budget.ts` and `tests/unit/connection-budget.test.ts`.
+The instance must provide at least 225 `max_connections`. That is the RDS
+default for 2 GiB (`LEAST({DBInstanceClassMemory/9531392}, 5000)`), so
+`db.t4g.small` or larger. Do not use a smaller class without lowering the
+pools and updating the budget test. Leave `max_connections` at the default on
+that size or larger.
+
+| Process                            | Replicas at HPA max | Pool | Connections          |
+| ---------------------------------- | ------------------- | ---- | -------------------- |
+| Web (`blakpath-app`)               | 4                   | 10   | 40                   |
+| Worker (`blakpath-worker`, no HPA) | 2                   | 33   | 66                   |
+| Migration job                      | 1                   | 1    | 1                    |
+| **Steady total**                   |                     |      | **107** (48% of 225) |
+
+Rollout surge is web `maxSurge: 1` (5 × 10) and worker `maxSurge: 1` (3 × 33)
+plus the migration connection: 150, which is 67% of 225. Both stay at or under
+70% (157). The worker pool is 11 queues × concurrency 3, so each in-flight job
+can hold a connection.
+
+`DATABASE_URL` in the runtime secret must include `sslmode=verify-full`.
+`DATABASE_POOL_MAX=10` is in the ConfigMap. The worker deployment sets
+`BLAKPATH_PROCESS=worker` and `DATABASE_WORKER_POOL_MAX=33`.
+
+After the proxy is in service, under load, confirm CloudWatch
+`DatabaseConnectionsCurrentlySessionPinned` stays near zero. This repository
+does not create the proxy or run that load. A non-zero metric means some
+session state is pinning (a `SET`, SQL `PREPARE`, a temporary table, or a
+session advisory lock). Transaction-scoped advisory locks
+(`pg_advisory_xact_lock`) do not pin.
 
 ## CoA signing key (KMS)
 
