@@ -33,9 +33,21 @@ vi.mock('@/domains/audit/service', () => ({
   recordPlatformAudit: vi.fn(),
 }));
 
+vi.mock('@/domains/audit', () => ({
+  recordAudit: vi.fn(),
+  recordPlatformAudit: vi.fn(),
+}));
+
+vi.mock('@/domains/organisation-keys/service', () => ({
+  getOrganisationKey: vi.fn(),
+}));
+
 const { setOrganisationStatus, OrganisationNotFoundError } =
   await import('@/domains/organisations/service');
 const { recordPlatformAudit } = await import('@/domains/audit/service');
+const { getOrganisationKey } = await import('@/domains/organisation-keys/service');
+const { OrganisationActivationError } =
+  await import('@/domains/organisation-keys/activation');
 
 const base = {
   organisationId: 'org-1',
@@ -49,6 +61,7 @@ beforeEach(() => {
   selected.length = 0;
   updates = 0;
   vi.mocked(recordPlatformAudit).mockReset();
+  vi.mocked(getOrganisationKey).mockReset();
   vi.mocked(recordPlatformAudit).mockResolvedValue({
     id: 'audit-1',
     organisationId: null,
@@ -108,5 +121,33 @@ describe('setOrganisationStatus', () => {
       'audit down',
     );
     expect(updates).toBe(2);
+  });
+
+  it('refuses to reactivate without a validated tenant key', async () => {
+    for (const key of [
+      null,
+      { status: 'pending_validation', validationStatus: 'pending' },
+      { status: 'disabled', validationStatus: 'passed' },
+    ]) {
+      selected.push([{ id: 'org-1', status: 'suspended' }]);
+      vi.mocked(getOrganisationKey).mockResolvedValueOnce(key as never);
+      await expect(
+        setOrganisationStatus({ ...base, status: 'active' }),
+      ).rejects.toBeInstanceOf(OrganisationActivationError);
+    }
+    expect(updates).toBe(0);
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('reactivates when the tenant key is active and validated', async () => {
+    selected.push([{ id: 'org-1', status: 'suspended' }]);
+    vi.mocked(getOrganisationKey).mockResolvedValueOnce({
+      status: 'active',
+      validationStatus: 'passed',
+    } as never);
+    const result = await setOrganisationStatus({ ...base, status: 'active' });
+    expect(result).toEqual({ id: 'org-1', status: 'active' });
+    expect(updates).toBe(1);
+    expect(recordPlatformAudit).toHaveBeenCalledOnce();
   });
 });

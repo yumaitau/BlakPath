@@ -2,6 +2,11 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { organisations } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit/service';
+import {
+  keyAllowsActivation,
+  OrganisationActivationError,
+} from '@/domains/organisation-keys/activation';
+import { getOrganisationKey } from '@/domains/organisation-keys/service';
 import { logger } from '@/lib/observability/logger';
 import type { OrganisationStatus } from '@/lib/tenancy/organisation-status';
 
@@ -38,7 +43,8 @@ export interface SetOrganisationStatusInput {
 /**
  * Set an organisation's status and audit the change on the platform chain.
  *
- * A no-op (already at the requested status) writes nothing. If the audit
+ * A no-op (already at the requested status) writes nothing. A move to
+ * `active` is refused unless the tenant key is active and validated. If the audit
  * append fails, the status is restored so a lifecycle change is never left
  * without a platform-chain record.
  */
@@ -53,6 +59,14 @@ export async function setOrganisationStatus(
   if (!current) throw new OrganisationNotFoundError();
   if (current.status === input.status) {
     return { id: current.id, status: current.status };
+  }
+  // Becoming `active` (first time or after suspension) needs the same
+  // validated tenant key as tenant-admin activation. Operators cannot bypass it.
+  if (
+    input.status === 'active' &&
+    !keyAllowsActivation(await getOrganisationKey(current.id))
+  ) {
+    throw new OrganisationActivationError();
   }
 
   await db

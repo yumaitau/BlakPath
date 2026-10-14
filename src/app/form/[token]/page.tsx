@@ -1,6 +1,7 @@
 import { getPublicForm } from '@/domains/forms';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PublicFormRenderer } from '@/components/forms/public-form-renderer';
+import { publicKeyDegradation } from '@/lib/encryption/public-degradation';
 import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 
 /**
@@ -10,6 +11,7 @@ import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status'
  * hash and either returns the recipient-facing form (marking the invitation
  * opened) or throws for any invalid/expired/used/revoked token. There is no
  * session here, so we call the service directly — never via `withRequestTenant`.
+ * Request limits for this page run in `src/proxy.ts` (a real 429 before render).
  *
  * PRODUCT INVARIANT: a form collects information a human provides. It never
  * scores, ranks or determines a person's Aboriginality.
@@ -25,15 +27,18 @@ export default async function PublicFormPage({
 }) {
   const { token } = await params;
 
-  // Resolve the form OUTSIDE the JSX return. Any failure is a bad token; we
-  // never distinguish "expired" from "revoked" from "never existed" — the
-  // message stays deliberately uniform.
+  // Resolve the form OUTSIDE the JSX return. A bad token stays a single
+  // message — expired, revoked and unknown are not distinguished. A tenant
+  // key failure is different: the link may be fine, the key is not.
   let form: Awaited<ReturnType<typeof getPublicForm>> | null = null;
   let unavailable = false;
+  let keyMessage: string | null = null;
   try {
     form = await getPublicForm(token);
   } catch (error) {
+    // A suspended or closed organisation is refused before the key is used.
     unavailable = error instanceof OrganisationUnavailableError;
+    keyMessage = publicKeyDegradation(error);
     form = null;
   }
 
@@ -47,6 +52,19 @@ export default async function PublicFormPage({
           <p className="text-muted-foreground text-sm">
             This organisation is unavailable. You cannot use this form right now.
           </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (keyMessage) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>This form is unavailable</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground text-sm">{keyMessage}</p>
         </CardContent>
       </Card>
     );
