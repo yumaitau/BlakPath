@@ -1,41 +1,64 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
-import { env } from '@/lib/env';
+import { env, isProduction } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
 import type { AuthMailer, AuthEmailMessage } from '@/lib/auth/emails';
 
 /**
- * SMTP email transport.
+ * Email transport.
  *
- * Three paths, chosen per environment:
- *   - Production WITHOUT SMTP_USER: SES API via the pod/task IAM role
- *     (EKS Pod Identity). No static credentials anywhere — preferred.
- *   - SMTP_USER set: SES SMTP interface (or any relay). Kept for
- *     environments without an IAM path.
- *   - Local dev: Mailpit over plain SMTP.
+ * Exactly one production sender (docs/adr/0090-production-email-sender.md):
+ *   - `EMAIL_TRANSPORT=ses`: SES v2 API in APP_REGION under the pod/task IAM
+ *     role (EKS Pod Identity). No static credentials anywhere. Every message
+ *     is tagged with SES_CONFIGURATION_SET so bounce/complaint events reach
+ *     POST /api/email/events via SNS.
+ *   - `EMAIL_TRANSPORT=smtp` (default): unauthenticated SMTP to Mailpit for
+ *     local development and CI. Refused in production.
  *
- * AUTH emails (verification, password reset) send synchronously; TENANT
- * emails (invitations, notification copies) go through the Email queue.
- * Bodies may contain bearer links: logged metadata only, never content.
+ * Verification mail sends on the request. Password-reset mail is queued
+ * (`auth-email`) so the response does not wait on the relay. TENANT emails
+ * (invitations, notification copies) go through the Email queue, which
+ * retries with backoff. Bodies may contain bearer links: logged metadata
+ * only, never content.
  */
 
-const globalForMailer = globalThis as unknown as { __blakpathMailer?: Transporter };
+/** Bound synchronous auth sends so a slow provider cannot hang a request. */
+const SES_CONNECTION_TIMEOUT_MS = 3_000;
+const SES_REQUEST_TIMEOUT_MS = 10_000;
+const SES_MAX_ATTEMPTS = 3;
 
-/** Lazily create (once) the shared SMTP transport from validated env. */
+const globalForMailer = globalThis as unknown as {
+  __blakpathMailer?: Transporter;
+  __blakpathSes?: SESv2Client;
+};
+
+/** Lazily create (once) the local SMTP transport from validated env. */
 function getTransport(): Transporter {
   if (globalForMailer.__blakpathMailer) return globalForMailer.__blakpathMailer;
   const transport = nodemailer.createTransport({
     host: env.SMTP_HOST,
     port: env.SMTP_PORT,
-    // Mailpit and most local relays speak plain SMTP on 1025; enable TLS only
-    // for the conventional secure port. Real relays advertise STARTTLS anyway.
+    // Mailpit speaks plain SMTP on 1025; enable TLS only for the
+    // conventional secure port.
     secure: env.SMTP_PORT === 465,
-    ...(env.SMTP_USER
-      ? { auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD ?? '' } }
-      : {}),
   });
   globalForMailer.__blakpathMailer = transport;
   return transport;
+}
+
+/** Lazily create (once) the SES client. Credentials come from the role chain. */
+function getSesClient(): SESv2Client {
+  if (globalForMailer.__blakpathSes) return globalForMailer.__blakpathSes;
+  const client = new SESv2Client({
+    region: env.APP_REGION,
+    maxAttempts: SES_MAX_ATTEMPTS,
+    requestHandler: {
+      connectionTimeout: SES_CONNECTION_TIMEOUT_MS,
+      requestTimeout: SES_REQUEST_TIMEOUT_MS,
+    },
+  });
+  globalForMailer.__blakpathSes = client;
+  return client;
 }
 
 /** Redact the local part of an address so logs never carry a full identity. */
@@ -55,10 +78,9 @@ export interface SendEmailInput {
 }
 
 /**
- * Send a single email. Production without SMTP_USER uses the SES API under
- * the workload IAM role; otherwise the shared SMTP transport. Used by the
- * worker's Email/Notification processors. Logs only redacted recipient and
- * subject — never the body (which may contain a bearer link).
+ * Send a single email through the configured transport. Used by the worker's
+ * Email/Notification processors and the auth mailer. Logs only redacted
+ * recipient and subject — never the body (which may contain a bearer link).
  */
 export async function sendEmail({
   to,
@@ -75,12 +97,14 @@ export async function sendEmail({
     }
     return;
   }
-  if (!env.SMTP_USER) {
-    const client = new SESv2Client({ region: env.S3_REGION });
-    await client.send(
+  if (env.EMAIL_TRANSPORT === 'ses') {
+    const result = await getSesClient().send(
       new SendEmailCommand({
         FromEmailAddress: env.SMTP_FROM,
         Destination: { ToAddresses: [to] },
+        ...(env.SES_CONFIGURATION_SET
+          ? { ConfigurationSetName: env.SES_CONFIGURATION_SET }
+          : {}),
         Content: {
           Simple: {
             Subject: { Data: subject, Charset: 'UTF-8' },
@@ -92,18 +116,24 @@ export async function sendEmail({
         },
       }),
     );
-    logger.info({ to: redact(to), subject, via: 'ses-api' }, 'email sent');
+    logger.info(
+      { to: redact(to), subject, via: 'ses-api', messageId: result.MessageId },
+      'email sent',
+    );
     return;
   }
-  const transport = getTransport();
-  await transport.sendMail({
+  if (isProduction()) {
+    // Fail closed: SMTP is the local Mailpit catch-all, never a production path.
+    throw new Error('SMTP email transport is not permitted in production');
+  }
+  await getTransport().sendMail({
     from: env.SMTP_FROM,
     to,
     subject,
     text,
     ...(html !== undefined ? { html } : {}),
   });
-  logger.info({ to: redact(to), subject }, 'email sent');
+  logger.info({ to: redact(to), subject, via: 'smtp' }, 'email sent');
 }
 
 /* ---------------------------------------------------------------------------
@@ -142,8 +172,27 @@ function passwordResetText(name: string, url: string): string {
 }
 
 /**
+ * SMTP delivery for a password-reset message. The worker calls this.
+ * The auth mailer must not — it only enqueues, and calling it from the
+ * worker would queue the same message again.
+ */
+export async function deliverPasswordResetEmail({
+  to,
+  name,
+  url,
+}: Pick<AuthEmailMessage, 'to' | 'name' | 'url'>): Promise<void> {
+  await sendEmail({
+    to,
+    subject: 'Reset your BlakPath password',
+    text: passwordResetText(name, url),
+  });
+}
+
+/**
  * The production auth transport injected into better-auth via `setAuthMailer`
- * at startup (see `src/instrumentation.ts`). Sends synchronously.
+ * at startup (see `src/instrumentation.ts`). Verification is synchronous.
+ * Password reset is queued; an enqueue failure is logged and swallowed so a
+ * known address does not fail the request while an unknown one succeeds.
  */
 export const authMailer: AuthMailer = {
   async sendVerificationEmail({ to, name, url }: AuthEmailMessage): Promise<void> {
@@ -154,10 +203,11 @@ export const authMailer: AuthMailer = {
     });
   },
   async sendPasswordResetEmail({ to, name, url }: AuthEmailMessage): Promise<void> {
-    await sendEmail({
-      to,
-      subject: 'Reset your BlakPath password',
-      text: passwordResetText(name, url),
-    });
+    try {
+      const { enqueuePasswordResetEmail } = await import('@/lib/auth/reset-queue');
+      await enqueuePasswordResetEmail({ to, name, url });
+    } catch (err) {
+      logger.error({ err }, 'failed to enqueue password reset email');
+    }
   },
 };

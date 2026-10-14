@@ -3,18 +3,23 @@
 # name per slug (blakpath-provision-<slug>) before apply.
 #
 # Requires the migrate and seed Jobs to have completed (permission catalogue
-# and system role templates). The command is idempotent on slug. It emails the
-# first administrator and does not print a password or invitation token.
-# The operator is not granted a tenant membership.
+# and system role templates). The operator email must belong to a platform
+# operator account. The command is idempotent on slug. It emails the first
+# administrator through SES and does not print a password or invitation token.
+# The operator is not granted a tenant membership. It runs with the app
+# database role from blakpath-runtime (DATABASE_URL), never the migrator.
+# Production needs --confirm-production repeating the slug.
 #
-# Later, as separate one-off Jobs with the same image and env, record checklist
-# items, the signed agreement reference, and activation:
-#   pnpm exec tsx scripts/provision-organisation.ts readiness --slug ... --item consent_wording --complete true --operator-email ...
-#   pnpm exec tsx scripts/provision-organisation.ts agreement --slug ... --reference MSA-... --signed-at YYYY-MM-DD --operator-email ...
-#   pnpm exec tsx scripts/provision-organisation.ts activate --slug ... --operator-email ...
-# Activation is refused until every checklist item and the agreement are recorded.
+# Later, as separate one-off Jobs with the same image, env and pod settings,
+# record checklist items, the signed agreement reference, and activation:
+#   pnpm exec tsx scripts/provision-organisation.ts readiness --slug ... --item consent_wording --complete true --operator-email ... --confirm-production ...
+#   pnpm exec tsx scripts/provision-organisation.ts agreement --slug ... --reference MSA-... --signed-at YYYY-MM-DD --operator-email ... --confirm-production ...
+#   pnpm exec tsx scripts/provision-organisation.ts activate --slug ... --operator-email ... --confirm-production ...
+# Activation is refused until the tenant key is active and validated, every
+# checklist item is recorded, and the agreement is recorded.
 #
 #   kubectl apply -f infra/k8s/jobs/provision-organisation.yaml
+# NOT in kustomization.yaml.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -23,9 +28,24 @@ metadata:
 spec:
   backoffLimit: 1
   template:
+    metadata:
+      labels:
+        # Same egress as invite-admin: Postgres, SES, KMS/STS. See
+        # network-policy.yaml (blakpath-admin-job-egress).
+        app.kubernetes.io/name: blakpath-admin-job
     spec:
-      serviceAccountName: blakpath
+      # Sends the invitation through SES, so it runs as the web identity
+      # (Pod Identity role blakpath-web), like invite-admin.
+      serviceAccountName: blakpath-web
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: provision-organisation
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
@@ -46,11 +66,19 @@ spec:
             - REPLACE_ADMIN_EMAIL
             - --operator-email
             - REPLACE_OPERATOR_EMAIL
+            - --confirm-production
+            - REPLACE_SLUG
           envFrom:
             - configMapRef:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 250m
@@ -58,3 +86,8 @@ spec:
             limits:
               cpu: 1000m
               memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

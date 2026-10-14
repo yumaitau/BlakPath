@@ -42,6 +42,7 @@ export type AuditAction =
   | 'mfa.removed'
   | 'mfa.challenge_succeeded'
   | 'mfa.challenge_failed'
+  | 'mfa.access_denied'
   | 'mfa.recovery_codes_regenerated'
   | 'mfa.recovery_code_used'
   | 'mfa.passkey_registered'
@@ -87,6 +88,7 @@ export type AuditAction =
   | 'evidence.scan_clean'
   | 'evidence.scan_infected'
   | 'evidence.scan_failed'
+  | 'evidence.scan_requeued'
   | 'evidence.rejected'
   | 'evidence.deleted'
   | 'evidence.quarantined'
@@ -94,6 +96,10 @@ export type AuditAction =
   // API keys (public REST API credentials).
   | 'api_key.created'
   | 'api_key.revoked'
+  // SCIM directory credentials (per organisation).
+  | 'scim.credential_created'
+  | 'scim.credential_rotated'
+  | 'scim.credential_revoked'
   // Custom forms & tokenised responses.
   | 'form.created'
   | 'form.updated'
@@ -103,6 +109,9 @@ export type AuditAction =
   | 'form.invitation_opened'
   | 'form.invitation_revoked'
   | 'form.response_submitted'
+  | 'form.draft_saved'
+  | 'form.response_case_created'
+  | 'form.response_attached'
   // Search.
   | 'search.performed'
   | 'search.result_opened'
@@ -158,6 +167,13 @@ export type AuditAction =
   | 'message.viewed'
   | 'message.deleted'
   | 'notification.sent'
+  // Correspondence: human-sent letters and emails stored on a case.
+  | 'correspondence.template_created'
+  | 'correspondence.template_updated'
+  | 'correspondence.drafted'
+  | 'correspondence.sent'
+  | 'correspondence.viewed'
+  | 'correspondence.downloaded'
   | 'email.suppressed'
   | 'email.suppression_cleared'
   // Meeting lifecycle & agenda.
@@ -199,6 +215,7 @@ export type AuditAction =
   | 'certificate.generated'
   | 'certificate.signed'
   | 'certificate.viewed'
+  | 'certificate.verified'
   | 'certificate.downloaded'
   | 'certificate.reissued'
   | 'certificate.revoked'
@@ -210,11 +227,17 @@ export type AuditAction =
   // Legacy data import.
   | 'import.completed'
   // Retention / lifecycle of data.
+  | 'retention.policy_drafted'
+  | 'retention.policy_activated'
   | 'retention.policy_applied'
+  | 'retention.policy_deleted'
+  | 'retention.authority_signed'
   | 'retention.record_purged'
   | 'retention.record_anonymised'
   | 'retention.hold_placed'
   | 'retention.hold_released'
+  | 'retention.purge_blocked'
+  | 'retention.register_exported'
   // Break-glass (emergency cross-tenant access).
   | 'break_glass.requested'
   | 'break_glass.approved'
@@ -224,12 +247,17 @@ export type AuditAction =
   | 'break_glass.expired'
   | 'break_glass.tenant_notified'
   | 'break_glass.reviewed'
+  // Background jobs that were not run.
+  | 'job.rejected'
   // Integrations.
   | 'integration.connected'
   | 'integration.disconnected'
   | 'integration.credentials_rotated'
   | 'integration.call_succeeded'
   | 'integration.call_failed'
+  | 'integration.redelivery_requested'
+  // Organisation lifecycle. Recorded on the platform chain by an operator.
+  | 'organisation.status_changed'
   // Admin / configuration.
   | 'admin.organisation_updated'
   | 'admin.organisation_provisioned'
@@ -243,10 +271,32 @@ export type AuditAction =
   | 'admin.domain_verified'
   | 'admin.domain_removed'
   | 'admin.terminology_updated'
-  // Audit self-events (integrity).
+  // Tenant key custody (platform chain — not a determination).
+  | 'key.registered'
+  | 'key.rotated'
+  | 'key.replacement_started'
+  | 'key.rewrap_completed'
+  | 'key.status_changed'
+  | 'key.unavailable'
+  | 'key.validation_passed'
+  | 'key.validation_failed'
+  | 'key.deletion_scheduled'
+  | 'key.destruction_certified'
+  | 'key.replacement_started'
+  | 'key.escrow_opted_in'
+  | 'key.escrow_withdrawn'
+  | 'key.health_checked'
+  | 'key.viewed'
+  // Field encryption backfill. Counts and table names only.
+  | 'encryption.backfill_batch'
+  | 'encryption.backfill_completed'
+  // Audit self-events (integrity and access to the trail itself).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'
-  | 'audit.divergence_detected';
+  | 'audit.divergence_detected'
+  | 'audit.viewed'
+  | 'audit.exported'
+  | 'audit.monthly_review_recorded';
 
 /**
  * The exhaustive set of resource types an audit event may reference. Stable
@@ -259,6 +309,9 @@ export type ResourceType =
   | 'passkey'
   | 'organisation'
   | 'organisation_settings'
+  | 'organisation_key'
+  | 'organisation_key_rewrap'
+  | 'destruction_certificate'
   | 'organisation_domain'
   | 'feature_flag'
   | 'role'
@@ -275,6 +328,7 @@ export type ResourceType =
   | 'assignment'
   | 'task'
   | 'api_key'
+  | 'scim_credential'
   | 'form'
   | 'form_invitation'
   | 'form_response'
@@ -287,6 +341,8 @@ export type ResourceType =
   | 'client'
   | 'message'
   | 'notification'
+  | 'correspondence'
+  | 'correspondence_template'
   | 'email_suppression'
   | 'meeting_pack'
   | 'conflict'
@@ -296,10 +352,14 @@ export type ResourceType =
   | 'export'
   | 'import'
   | 'retention_policy'
+  | 'disposal_authority'
+  | 'destruction_register'
   | 'break_glass_request'
   | 'integration'
+  | 'job'
   | 'search'
-  | 'audit_chain';
+  | 'audit_chain'
+  | 'audit_log';
 
 /** All audit results, useful for runtime validation and enumeration. */
 export const AUDIT_RESULTS: readonly AuditResult[] = [

@@ -22,6 +22,7 @@ import {
   type ReadinessChecklist,
   type ReadinessItemKey,
 } from '@/domains/onboarding/policy';
+import { isCodedAuditReason } from '@/domains/audit/hash';
 import {
   SYSTEM_ROLE_SEED,
   isRoleAssignableToOrganisation,
@@ -29,6 +30,8 @@ import {
 
 const NOW = new Date('2026-10-13T00:00:00.000Z');
 const TOKEN = 'invite-token-plain';
+const OPERATOR_EMAIL = 'operator@blakpath.example';
+const OPERATOR_ID = 'operator-user-1';
 
 function templateRows() {
   return SYSTEM_ROLE_SEED.map((template) => ({
@@ -46,7 +49,13 @@ function catalogue(): Set<string> {
 class MemoryStore implements OnboardingStore {
   readonly saved: NewOrganisationRecord[] = [];
   readonly orgs = new Map<string, StoredOrganisation>();
+  /** Events the store appended with its own writes (same transaction). */
+  readonly audits: PlatformAuditWrite[] = [];
   statusUpdates = 0;
+
+  async findPlatformOperator(email: string) {
+    return email === OPERATOR_EMAIL ? { id: OPERATOR_ID } : null;
+  }
 
   async findBySlug(slug: string): Promise<StoredOrganisation | null> {
     return [...this.orgs.values()].find((org) => org.slug === slug) ?? null;
@@ -64,14 +73,15 @@ class MemoryStore implements OnboardingStore {
     return catalogue();
   }
 
-  async saveNew(record: NewOrganisationRecord) {
+  async saveNew(record: NewOrganisationRecord, audit: PlatformAuditWrite) {
     this.saved.push(record);
+    this.audits.push(audit);
     this.orgs.set(record.id, {
       id: record.id,
       slug: record.slug,
       legalName: record.legalName,
       status: record.status,
-      staffMfaRequired: record.staffMfaRequired,
+      keyValidated: false,
       checklist: record.checklist,
       agreementReference: record.agreementReference,
       agreementSignedAt: record.agreementSignedAt,
@@ -83,18 +93,25 @@ class MemoryStore implements OnboardingStore {
     });
   }
 
-  async saveChecklist(organisationId: string, checklist: ReadinessChecklist) {
+  async saveChecklist(
+    organisationId: string,
+    checklist: ReadinessChecklist,
+    audit?: PlatformAuditWrite,
+  ) {
     const org = this.orgs.get(organisationId);
     if (!org) return;
+    if (audit) this.audits.push(audit);
     this.orgs.set(organisationId, { ...org, checklist });
   }
 
   async saveAgreement(
     organisationId: string,
     agreement: { reference: string; signedAt: Date },
+    audit?: PlatformAuditWrite,
   ) {
     const org = this.orgs.get(organisationId);
     if (!org) return;
+    if (audit) this.audits.push(audit);
     this.orgs.set(organisationId, {
       ...org,
       agreementReference: agreement.reference,
@@ -102,16 +119,22 @@ class MemoryStore implements OnboardingStore {
     });
   }
 
-  async setStatusOnboardingToActive(organisationId: string) {
+  async setStatusOnboardingToActive(organisationId: string, audit: PlatformAuditWrite) {
     const org = this.orgs.get(organisationId);
     if (!org || org.status !== 'onboarding') return false;
+    this.audits.push(audit);
     this.statusUpdates += 1;
     this.orgs.set(organisationId, { ...org, status: 'active' });
     return true;
   }
 
-  async rotatePendingInvitation() {
+  async rotatePendingInvitation(_invitation: unknown, audit: PlatformAuditWrite) {
+    this.audits.push(audit);
     return true;
+  }
+
+  validateKey(): void {
+    for (const [id, org] of this.orgs) this.orgs.set(id, { ...org, keyValidated: true });
   }
 }
 
@@ -122,7 +145,9 @@ function harness(store = new MemoryStore()): {
   deps: OnboardingDeps;
 } {
   let sequence = 0;
-  const audits: PlatformAuditWrite[] = [];
+  // One ordered list: transactional appends from the store and standalone
+  // failure/denial events from effects.
+  const audits = store.audits;
   const emails: Array<{ to: string; subject: string; text: string }> = [];
   return {
     store,
@@ -150,7 +175,7 @@ const provisionInput = {
   legalName: 'Example Aboriginal Corporation',
   slug: 'Example-AC',
   adminEmail: 'Admin@Example.org',
-  operatorEmail: 'operator@blakpath.example',
+  operatorEmail: OPERATOR_EMAIL,
   organisationType: 'council',
 };
 
@@ -166,6 +191,7 @@ async function readyOrganisation(store: MemoryStore): Promise<void> {
     reference: 'MSA-2026-014',
     signedAt: new Date('2026-10-01T00:00:00.000Z'),
   });
+  store.validateKey();
 }
 
 describe('organisation provisioning policy', () => {
@@ -230,13 +256,14 @@ describe('organisation provisioning policy', () => {
     expect(
       evaluateActivation({
         status: 'onboarding',
+        keyValidated: false,
         checklist,
         agreementReference: null,
         agreementSignedAt: null,
       }),
     ).toEqual({
       allowed: false,
-      reasons: ['checklist_incomplete', 'agreement_missing'],
+      reasons: ['key_not_validated', 'checklist_incomplete', 'agreement_missing'],
     });
 
     let complete = checklist;
@@ -246,14 +273,26 @@ describe('organisation provisioning policy', () => {
     expect(
       evaluateActivation({
         status: 'onboarding',
+        keyValidated: true,
         checklist: complete,
         agreementReference: null,
         agreementSignedAt: null,
       }).allowed,
     ).toBe(false);
+    // Checklist and agreement are not enough without a validated tenant key.
     expect(
       evaluateActivation({
         status: 'onboarding',
+        keyValidated: false,
+        checklist: complete,
+        agreementReference: 'MSA-2026-014',
+        agreementSignedAt: new Date('2026-10-01T00:00:00.000Z'),
+      }),
+    ).toEqual({ allowed: false, reasons: ['key_not_validated'] });
+    expect(
+      evaluateActivation({
+        status: 'onboarding',
+        keyValidated: true,
         checklist: complete,
         agreementReference: 'MSA-2026-014',
         agreementSignedAt: new Date('2026-10-01T00:00:00.000Z'),
@@ -262,6 +301,7 @@ describe('organisation provisioning policy', () => {
     expect(
       evaluateActivation({
         status: 'suspended',
+        keyValidated: true,
         checklist: complete,
         agreementReference: 'MSA-2026-014',
         agreementSignedAt: new Date('2026-10-01T00:00:00.000Z'),
@@ -300,7 +340,6 @@ describe('organisation provisioning command', () => {
     expect(saved.status).toBe('onboarding');
     expect(saved.region).toBe('ap-southeast-2');
     expect(saved.publicApplicationsOpen).toBe(false);
-    expect(saved.staffMfaRequired).toBe(true);
     expect(saved.memberships).toEqual([]);
     expect(saved.roles.map((role) => role.slug)).not.toContain('platform-operator');
     expect(saved.roles.flatMap((role) => [...role.permissions])).not.toContain(
@@ -319,13 +358,13 @@ describe('organisation provisioning command', () => {
         action: 'admin.organisation_provisioned',
         result: 'success',
         resourceId: saved.id,
+        actorUserId: OPERATOR_ID,
       }),
     ]);
     expect(JSON.stringify(audits)).not.toContain(TOKEN);
-    expect(audits[0]?.after?.data).toMatchObject({
-      operatorEmail: 'operator@blakpath.example',
-      slug: 'example-ac',
-    });
+    // The operator is recorded by user id. No email address enters the trail.
+    expect(JSON.stringify(audits)).not.toContain('@');
+    expect(audits[0]?.after?.data).toMatchObject({ slug: 'example-ac' });
   });
 
   it('is a no-op when the slug already exists', async () => {
@@ -355,7 +394,7 @@ describe('organisation provisioning command', () => {
         slug,
         legalName: 'Example',
         status: 'onboarding',
-        staffMfaRequired: true,
+        keyValidated: false,
         checklist: null,
         agreementReference: null,
         agreementSignedAt: null,
@@ -376,24 +415,23 @@ describe('organisation provisioning command', () => {
     const { store, audits, deps } = harness();
     await executeProvision(provisionInput, deps);
     await expect(
-      executeActivate(
-        { slug: 'example-ac', operatorEmail: 'operator@blakpath.example' },
-        deps,
-      ),
+      executeActivate({ slug: 'example-ac', operatorEmail: OPERATOR_EMAIL }, deps),
     ).rejects.toMatchObject({
       code: 'ACTIVATION_REFUSED',
-      reasons: ['checklist_incomplete', 'agreement_missing'],
+      reasons: ['key_not_validated', 'checklist_incomplete', 'agreement_missing'],
     });
     expect(store.statusUpdates).toBe(0);
     expect(store.orgs.values().next().value?.status).toBe('onboarding');
     expect(audits.at(-1)).toMatchObject({
       action: 'admin.organisation_activated',
       result: 'denied',
+      reason: 'onboarding.activation_refused',
+      actorUserId: OPERATOR_ID,
     });
 
     await executeRecordChecklist(
       {
-        target: { slug: 'example-ac', operatorEmail: 'operator@blakpath.example' },
+        target: { slug: 'example-ac', operatorEmail: OPERATOR_EMAIL },
         item: 'consent_wording' satisfies ReadinessItemKey,
         complete: true,
       },
@@ -403,14 +441,14 @@ describe('organisation provisioning command', () => {
 
     await readyOrganisation(store);
     const activated = await executeActivate(
-      { slug: 'example-ac', operatorEmail: 'operator@blakpath.example' },
+      { slug: 'example-ac', operatorEmail: OPERATOR_EMAIL },
       deps,
     );
     expect(activated).toMatchObject({ status: 'active', changed: true });
     expect(store.statusUpdates).toBe(1);
     expect(store.orgs.values().next().value?.status).toBe('active');
     const again = await executeActivate(
-      { slug: 'example-ac', operatorEmail: 'operator@blakpath.example' },
+      { slug: 'example-ac', operatorEmail: OPERATOR_EMAIL },
       deps,
     );
     expect(again.changed).toBe(false);
@@ -425,7 +463,7 @@ describe('organisation provisioning command', () => {
         slug: 'example-ac',
         reference: 'MSA-2026-014',
         signedAt: '2026-10-01',
-        operatorEmail: 'operator@blakpath.example',
+        operatorEmail: OPERATOR_EMAIL,
       },
       deps,
     );
@@ -442,7 +480,31 @@ describe('organisation provisioning command', () => {
     await expect(executeProvision(provisionInput, deps)).rejects.toMatchObject({
       code: 'INVITE_EMAIL_FAILED',
     });
-    expect(audits.map((event) => event.result)).toEqual(['failure']);
+    // The organisation and its event committed together; the failed send is
+    // a second, standalone event.
+    expect(audits.map((event) => event.result)).toEqual(['success', 'failure']);
+    expect(audits[1]?.reason).toBe('onboarding.invitation_email_failed');
     expect(JSON.stringify(audits)).not.toContain(TOKEN);
+  });
+
+  it('refuses an operator email without a platform operator account', async () => {
+    const { store, audits, emails, deps } = harness();
+    await expect(
+      executeProvision({ ...provisionInput, operatorEmail: 'someone@example.org' }, deps),
+    ).rejects.toMatchObject({ code: 'OPERATOR_NOT_FOUND' });
+    expect(store.saved).toHaveLength(0);
+    expect(emails).toHaveLength(0);
+    expect(audits).toHaveLength(0);
+  });
+
+  it('writes only coded audit reasons', async () => {
+    const { audits, deps } = harness();
+    await executeProvision(provisionInput, deps);
+    await expect(
+      executeActivate({ slug: 'example-ac', operatorEmail: OPERATOR_EMAIL }, deps),
+    ).rejects.toMatchObject({ code: 'ACTIVATION_REFUSED' });
+    for (const event of audits) {
+      if (event.reason !== undefined) expect(isCodedAuditReason(event.reason)).toBe(true);
+    }
   });
 });

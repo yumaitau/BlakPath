@@ -68,6 +68,7 @@ export interface ReadinessChecklist {
 
 export const ACTIVATION_BLOCKERS = [
   'not_onboarding',
+  'key_not_validated',
   'checklist_incomplete',
   'agreement_missing',
 ] as const;
@@ -197,14 +198,21 @@ export function recordChecklistItem(
   };
 }
 
+/**
+ * May an onboarding organisation become active? The tenant key gate is the
+ * same one every other activation path uses (`keyAllowsActivation`): the key
+ * must be active and have passed the handshake.
+ */
 export function evaluateActivation(input: {
   status: OrganisationLifecycle;
+  keyValidated: boolean;
   checklist: ReadinessChecklist | null;
   agreementReference: string | null;
   agreementSignedAt: Date | null;
 }): ActivationDecision {
   const reasons: ActivationBlocker[] = [];
   if (input.status !== 'onboarding') reasons.push('not_onboarding');
+  if (!input.keyValidated) reasons.push('key_not_validated');
   if (!input.checklist || !isChecklistComplete(input.checklist)) {
     reasons.push('checklist_incomplete');
   }

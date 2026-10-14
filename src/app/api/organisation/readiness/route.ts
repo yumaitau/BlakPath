@@ -7,7 +7,8 @@ import {
   getTenantReadiness,
   recordTenantReadinessItem,
 } from '@/domains/onboarding';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 
 /**
  * GET/PATCH /api/organisation/readiness
@@ -22,18 +23,16 @@ const patchSchema = z.object({
   complete: z.boolean(),
 });
 
-export async function GET(): Promise<Response> {
-  try {
-    const readiness = await withRequestTenant(() => getTenantReadiness());
-    return NextResponse.json(readiness);
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const GET = tenantHandler(async function GET(): Promise<Response> {
+  const readiness = await withRequestTenant(() => getTenantReadiness());
+  return NextResponse.json(readiness);
+});
 
-export async function PATCH(request: NextRequest): Promise<Response> {
+export const PATCH = tenantHandler(async function PATCH(
+  request: NextRequest,
+): Promise<Response> {
+  const body = patchSchema.parse(await request.json().catch(() => null));
   try {
-    const body = patchSchema.parse(await request.json().catch(() => null));
     const checklist = await withRequestTenant(() =>
       recordTenantReadinessItem(body.item, body.complete),
     );
@@ -43,6 +42,6 @@ export async function PATCH(request: NextRequest): Promise<Response> {
       const status = error.code === 'UNKNOWN_CHECKLIST_ITEM' ? 400 : 409;
       return NextResponse.json({ error: error.message, code: error.code }, { status });
     }
-    return toErrorResponse(error);
+    throw error;
   }
-}
+});

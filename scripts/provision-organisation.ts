@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { ZodError } from 'zod';
 
 import { ActivationRefusedError, OnboardingError } from '@/domains/onboarding/policy';
@@ -9,13 +10,19 @@ import {
   resendOrganisationInvite,
 } from '@/domains/onboarding/service';
 import { sqlClient } from '@/db/client';
+import { env } from '@/lib/env';
 
 /**
  * Operator command for a new organisation.
  *
  * Prints a JSON result and never a password or invitation token. The token is
  * emailed to the first administrator. Re-running `provision` for an existing
- * slug does nothing.
+ * slug does nothing. Runs with the application database role (DATABASE_URL),
+ * never the migrator. `--operator-email` must belong to a platform operator
+ * account; that account's id is what the platform audit chain records.
+ *
+ * With NODE_ENV=production every command also needs
+ * `--confirm-production <slug>` repeating the target slug.
  *
  *   pnpm org:provision -- provision --legal-name "..." --slug ... \
  *     --admin-email ... --operator-email ... [--type council|community] [--abn] [--trading-name]
@@ -72,8 +79,27 @@ function completeFlag(flags: Map<string, string>): boolean {
   throw new OnboardingError('INVALID_INPUT', '--complete must be true or false.');
 }
 
+/**
+ * Production writes need the operator to repeat the slug, so a command pasted
+ * into the wrong shell cannot touch production by accident.
+ */
+function assertProductionConfirmed(
+  nodeEnv: string,
+  flags: ReadonlyMap<string, string>,
+): void {
+  if (nodeEnv !== 'production') return;
+  const slug = flags.get('slug');
+  if (!slug || flags.get('confirm-production') !== slug) {
+    throw new OnboardingError(
+      'PRODUCTION_NOT_CONFIRMED',
+      'Production requires --confirm-production <slug> matching --slug.',
+    );
+  }
+}
+
 async function run(argv: readonly string[]): Promise<unknown> {
   const { command, flags } = parseFlags(argv);
+  assertProductionConfirmed(env.NODE_ENV, flags);
   switch (command) {
     case 'provision': {
       const tradingName = flagValue(flags, 'trading-name');

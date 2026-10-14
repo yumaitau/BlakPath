@@ -25,9 +25,12 @@ import {
 /**
  * Onboarding commands, with storage and email injected.
  *
- * The operator who runs these commands is recorded on the platform audit chain
- * and is never given a membership. Re-running provision for an existing slug
- * writes nothing and sends nothing.
+ * The operator who runs these commands must hold a platform operator account.
+ * They are recorded by user id on the platform audit chain and are never given
+ * a membership. Every write and its audit event commit in one transaction: the
+ * store receives the event and appends it inside the same transaction as the
+ * change. Re-running provision for an existing slug writes nothing and sends
+ * nothing.
  */
 
 export interface SystemRoleTemplateRow {
@@ -48,7 +51,8 @@ export interface StoredOrganisation {
   readonly slug: string;
   readonly legalName: string;
   readonly status: OrganisationLifecycle;
-  readonly staffMfaRequired: boolean;
+  /** Tenant key is active and passed the handshake (`keyAllowsActivation`). */
+  readonly keyValidated: boolean;
   readonly checklist: unknown;
   readonly agreementReference: string | null;
   readonly agreementSignedAt: Date | null;
@@ -74,7 +78,6 @@ export interface NewOrganisationRecord {
   readonly status: 'onboarding';
   readonly region: typeof PROVISIONED_REGION;
   readonly publicApplicationsOpen: false;
-  readonly staffMfaRequired: true;
   readonly checklist: ReadinessChecklist;
   readonly agreementReference: null;
   readonly agreementSignedAt: null;
@@ -91,24 +94,43 @@ export interface NewOrganisationRecord {
   readonly memberships: readonly [];
 }
 
+/**
+ * Storage for onboarding. Each mutating method takes the audit event for that
+ * change and must append it inside the same transaction, so a change is never
+ * committed without its record (and a failed append rolls the change back).
+ */
 export interface OnboardingStore {
   findBySlug(slug: string): Promise<StoredOrganisation | null>;
   findById(organisationId: string): Promise<StoredOrganisation | null>;
+  /** A user with `isPlatformOperator` and this email, or null. */
+  findPlatformOperator(email: string): Promise<{ id: string } | null>;
   loadSystemRoleTemplates(): Promise<readonly SystemRoleTemplateRow[]>;
   permissionCatalogueKeys(): Promise<ReadonlySet<string>>;
-  saveNew(record: NewOrganisationRecord): Promise<void>;
-  saveChecklist(organisationId: string, checklist: ReadinessChecklist): Promise<void>;
+  saveNew(record: NewOrganisationRecord, audit: PlatformAuditWrite): Promise<void>;
+  saveChecklist(
+    organisationId: string,
+    checklist: ReadinessChecklist,
+    audit: PlatformAuditWrite,
+  ): Promise<void>;
   saveAgreement(
     organisationId: string,
     agreement: { reference: string; signedAt: Date },
+    audit: PlatformAuditWrite,
   ): Promise<void>;
-  /** Returns false when the row is no longer `onboarding`. */
-  setStatusOnboardingToActive(organisationId: string): Promise<boolean>;
+  /** Returns false (and writes nothing) when the row is no longer `onboarding`. */
+  setStatusOnboardingToActive(
+    organisationId: string,
+    audit: PlatformAuditWrite,
+  ): Promise<boolean>;
+  /** Returns false (and writes nothing) when the invitation is no longer pending. */
   rotatePendingInvitation(
-    invitationId: string,
-    tokenHash: string,
-    expiresAt: Date,
-    lastSentAt: Date,
+    invitation: {
+      id: string;
+      tokenHash: string;
+      expiresAt: Date;
+      lastSentAt: Date;
+    },
+    audit: PlatformAuditWrite,
   ): Promise<boolean>;
 }
 
@@ -117,7 +139,10 @@ export interface PlatformAuditWrite {
   readonly resourceType: ResourceType;
   readonly resourceId: string;
   readonly result: AuditResult;
+  /** Coded reason only (`onboarding.*`). Never free text. */
   readonly reason?: string;
+  /** Platform operator user id. Omitted on the tenant path (taken from context). */
+  readonly actorUserId?: string;
   readonly after?: AuditMetaInput;
 }
 
@@ -189,6 +214,21 @@ function requireChecklist(org: StoredOrganisation): ReadinessChecklist {
   return parsed;
 }
 
+/**
+ * The operator must already hold a platform operator account. Their user id,
+ * not their email, goes on the audit chain.
+ */
+async function requireOperator(email: string, store: OnboardingStore): Promise<string> {
+  const operator = await store.findPlatformOperator(email);
+  if (!operator) {
+    throw new OnboardingError(
+      'OPERATOR_NOT_FOUND',
+      'No platform operator account has that email address.',
+    );
+  }
+  return operator.id;
+}
+
 export async function executeProvision(
   input: {
     legalName: string;
@@ -202,6 +242,7 @@ export async function executeProvision(
   deps: OnboardingDeps,
 ): Promise<ProvisionResult> {
   const command = parseProvisionCommand(input);
+  const operatorId = await requireOperator(command.operatorEmail, deps.store);
   const existing = await deps.store.findBySlug(command.slug);
   if (existing) {
     return {
@@ -265,7 +306,6 @@ export async function executeProvision(
     status: 'onboarding',
     region: PROVISIONED_REGION,
     publicApplicationsOpen: false,
-    staffMfaRequired: true,
     checklist: initialReadinessChecklist(),
     agreementReference: null,
     agreementSignedAt: null,
@@ -282,8 +322,24 @@ export async function executeProvision(
   };
   assertNoOperatorAccess(record);
 
+  const provisionedMeta = {
+    data: {
+      slug: command.slug,
+      organisationType: command.organisationType,
+      region: PROVISIONED_REGION,
+    },
+    allow: ['slug', 'organisationType', 'region'],
+  };
+
   try {
-    await deps.store.saveNew(record);
+    await deps.store.saveNew(record, {
+      action: 'admin.organisation_provisioned',
+      resourceType: 'organisation',
+      resourceId: organisationId,
+      result: 'success',
+      actorUserId: operatorId,
+      after: provisionedMeta,
+    });
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     const raced = await deps.store.findBySlug(command.slug);
@@ -309,38 +365,15 @@ export async function executeProvision(
       resourceType: 'organisation',
       resourceId: organisationId,
       result: 'failure',
-      reason: 'invitation_email_failed',
-      after: {
-        data: {
-          slug: command.slug,
-          organisationType: command.organisationType,
-          region: PROVISIONED_REGION,
-          operatorEmail: command.operatorEmail,
-        },
-        allow: ['slug', 'organisationType', 'region', 'operatorEmail'],
-      },
+      reason: 'onboarding.invitation_email_failed',
+      actorUserId: operatorId,
+      after: provisionedMeta,
     });
     throw new OnboardingError(
       'INVITE_EMAIL_FAILED',
       'Organisation was created but the invitation email was not sent. Re-running provision will not send another email. Run resend-invite.',
     );
   }
-
-  await deps.effects.audit({
-    action: 'admin.organisation_provisioned',
-    resourceType: 'organisation',
-    resourceId: organisationId,
-    result: 'success',
-    after: {
-      data: {
-        slug: command.slug,
-        organisationType: command.organisationType,
-        region: PROVISIONED_REGION,
-        operatorEmail: command.operatorEmail,
-      },
-      allow: ['slug', 'organisationType', 'region', 'operatorEmail'],
-    },
-  });
 
   return {
     organisationId,
@@ -356,6 +389,7 @@ export async function executeResendInvite(
   deps: OnboardingDeps,
 ): Promise<{ organisationId: string; invitationSent: true }> {
   const command = parseOperatorTarget(input);
+  const operatorId = await requireOperator(command.operatorEmail, deps.store);
   const org = await deps.store.findBySlug(command.slug);
   if (!org) {
     throw new OnboardingError('ORGANISATION_NOT_FOUND', 'Organisation was not found.');
@@ -368,11 +402,22 @@ export async function executeResendInvite(
   }
   const now = deps.effects.now();
   const token = deps.effects.newToken();
+  const resentMeta = { data: { slug: org.slug }, allow: ['slug'] };
   const rotated = await deps.store.rotatePendingInvitation(
-    org.pendingInvitation.id,
-    hashInvitationToken(token),
-    new Date(now.getTime() + INVITATION_LIFETIME_MS),
-    now,
+    {
+      id: org.pendingInvitation.id,
+      tokenHash: hashInvitationToken(token),
+      expiresAt: new Date(now.getTime() + INVITATION_LIFETIME_MS),
+      lastSentAt: now,
+    },
+    {
+      action: 'admin.organisation_invite_resent',
+      resourceType: 'organisation',
+      resourceId: org.id,
+      result: 'success',
+      actorUserId: operatorId,
+      after: resentMeta,
+    },
   );
   if (!rotated) {
     throw new OnboardingError(
@@ -392,27 +437,15 @@ export async function executeResendInvite(
       resourceType: 'organisation',
       resourceId: org.id,
       result: 'failure',
-      reason: 'invitation_email_failed',
-      after: {
-        data: { slug: org.slug, operatorEmail: command.operatorEmail },
-        allow: ['slug', 'operatorEmail'],
-      },
+      reason: 'onboarding.invitation_email_failed',
+      actorUserId: operatorId,
+      after: resentMeta,
     });
     throw new OnboardingError(
       'INVITE_EMAIL_FAILED',
       'The invitation email was not sent. Run resend-invite again.',
     );
   }
-  await deps.effects.audit({
-    action: 'admin.organisation_invite_resent',
-    resourceType: 'organisation',
-    resourceId: org.id,
-    result: 'success',
-    after: {
-      data: { slug: org.slug, operatorEmail: command.operatorEmail },
-      allow: ['slug', 'operatorEmail'],
-    },
-  });
   return { organisationId: org.id, invitationSent: true };
 }
 
@@ -439,7 +472,7 @@ export async function executeRecordChecklist(
   deps: OnboardingDeps,
 ): Promise<ReadinessChecklist> {
   let lookup: { slug: string } | { organisationId: string };
-  let operatorEmail: string | undefined;
+  let operatorId: string | undefined;
   let item = input.item;
   let complete = input.complete;
   if ('operatorEmail' in input.target) {
@@ -450,7 +483,7 @@ export async function executeRecordChecklist(
       operatorEmail: input.target.operatorEmail,
     });
     lookup = { slug: parsed.slug };
-    operatorEmail = parsed.operatorEmail;
+    operatorId = await requireOperator(parsed.operatorEmail, deps.store);
     item = parsed.item;
     complete = parsed.complete;
   } else {
@@ -464,23 +497,16 @@ export async function executeRecordChecklist(
     complete,
     deps.effects.now().toISOString(),
   );
-  await deps.store.saveChecklist(org.id, next);
-  const data: Record<string, string | boolean> = {
-    item,
-    complete,
-    slug: org.slug,
-  };
-  const allow = ['item', 'complete', 'slug'];
-  if (operatorEmail !== undefined) {
-    data.operatorEmail = operatorEmail;
-    allow.push('operatorEmail');
-  }
-  await deps.effects.audit({
+  await deps.store.saveChecklist(org.id, next, {
     action: 'admin.readiness_recorded',
     resourceType: 'organisation_settings',
     resourceId: org.id,
     result: 'success',
-    after: { data, allow },
+    ...(operatorId !== undefined ? { actorUserId: operatorId } : {}),
+    after: {
+      data: { item, complete, slug: org.slug },
+      allow: ['item', 'complete', 'slug'],
+    },
   });
   return next;
 }
@@ -490,28 +516,27 @@ export async function executeRecordAgreement(
   deps: OnboardingDeps,
 ): Promise<{ organisationId: string; agreementRecorded: true }> {
   const command = parseAgreementCommand(input, deps.effects.now());
+  const operatorId = await requireOperator(command.operatorEmail, deps.store);
   const org = await deps.store.findBySlug(command.slug);
   if (!org) {
     throw new OnboardingError('ORGANISATION_NOT_FOUND', 'Organisation was not found.');
   }
-  await deps.store.saveAgreement(org.id, {
-    reference: command.reference,
-    signedAt: command.signedAt,
-  });
-  await deps.effects.audit({
-    action: 'admin.agreement_recorded',
-    resourceType: 'organisation_settings',
-    resourceId: org.id,
-    result: 'success',
-    after: {
-      data: {
-        slug: org.slug,
-        agreementReference: command.reference,
-        operatorEmail: command.operatorEmail,
+  // The reference stays on organisation_settings; the trail records the change.
+  await deps.store.saveAgreement(
+    org.id,
+    { reference: command.reference, signedAt: command.signedAt },
+    {
+      action: 'admin.agreement_recorded',
+      resourceType: 'organisation_settings',
+      resourceId: org.id,
+      result: 'success',
+      actorUserId: operatorId,
+      after: {
+        data: { slug: org.slug, signedAt: command.signedAt },
+        allow: ['slug', 'signedAt'],
       },
-      allow: ['slug', 'agreementReference', 'operatorEmail'],
     },
-  });
+  );
   return { organisationId: org.id, agreementRecorded: true };
 }
 
@@ -526,6 +551,7 @@ export async function executeActivate(
   deps: OnboardingDeps,
 ): Promise<ActivationResult> {
   const command = parseOperatorTarget(input);
+  const operatorId = await requireOperator(command.operatorEmail, deps.store);
   const org = await deps.store.findBySlug(command.slug);
   if (!org) {
     throw new OnboardingError('ORGANISATION_NOT_FOUND', 'Organisation was not found.');
@@ -533,27 +559,33 @@ export async function executeActivate(
   if (org.status === 'active') {
     return { organisationId: org.id, status: 'active', changed: false };
   }
-  const decision = evaluateActivation({
-    status: org.status,
-    checklist: checklistOrNull(org.checklist),
-    agreementReference: org.agreementReference,
-    agreementSignedAt: org.agreementSignedAt,
-  });
+  const decision = activationFor(org);
   if (!decision.allowed) {
     await deps.effects.audit({
       action: 'admin.organisation_activated',
       resourceType: 'organisation',
       resourceId: org.id,
       result: 'denied',
-      reason: decision.reasons.join(','),
+      reason: 'onboarding.activation_refused',
+      actorUserId: operatorId,
       after: {
-        data: { slug: org.slug, operatorEmail: command.operatorEmail },
-        allow: ['slug', 'operatorEmail'],
+        data: { slug: org.slug, blockers: [...decision.reasons] },
+        allow: ['slug', 'blockers'],
       },
     });
     throw new ActivationRefusedError(decision.reasons);
   }
-  const updated = await deps.store.setStatusOnboardingToActive(org.id);
+  const updated = await deps.store.setStatusOnboardingToActive(org.id, {
+    action: 'admin.organisation_activated',
+    resourceType: 'organisation',
+    resourceId: org.id,
+    result: 'success',
+    actorUserId: operatorId,
+    after: {
+      data: { slug: org.slug, status: 'active' },
+      allow: ['slug', 'status'],
+    },
+  });
   if (!updated) {
     const again = await deps.store.findBySlug(org.slug);
     if (again?.status === 'active') {
@@ -561,22 +593,13 @@ export async function executeActivate(
     }
     throw new ActivationRefusedError(['not_onboarding']);
   }
-  await deps.effects.audit({
-    action: 'admin.organisation_activated',
-    resourceType: 'organisation',
-    resourceId: org.id,
-    result: 'success',
-    after: {
-      data: { slug: org.slug, operatorEmail: command.operatorEmail },
-      allow: ['slug', 'operatorEmail'],
-    },
-  });
   return { organisationId: org.id, status: 'active', changed: true };
 }
 
 export function activationFor(org: StoredOrganisation): ActivationDecision {
   return evaluateActivation({
     status: org.status,
+    keyValidated: org.keyValidated,
     checklist: checklistOrNull(org.checklist),
     agreementReference: org.agreementReference,
     agreementSignedAt: org.agreementSignedAt,

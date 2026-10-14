@@ -1,7 +1,11 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-import { FormTokenError, submitPublicResponse } from '@/domains/forms';
+import { submitPublicResponse } from '@/domains/forms';
+import { isTenantKeyUnavailable } from '@/lib/encryption/errors';
+import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
+import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -21,38 +25,32 @@ import { isAuthorizationError } from '@/lib/permissions/errors';
 // Token-specific and side-effecting; never cached.
 export const dynamic = 'force-dynamic';
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await params;
+  const ip = clientIpForLimits(request.headers);
+  const limited = await enforcePair(REQUEST_LIMITS.publicFormPost, ip, token);
+  if (limited) return limited;
+  const ipAddress = ip === UNKNOWN_CLIENT_IP ? undefined : ip;
 
-  let answers: unknown;
+  // FormTokenError (404) and OrganisationUnavailableError (403) map in the
+  // shared mapper with the same status and message as before.
   try {
     const body = (await request.json()) as { answers?: unknown };
-    answers = body.answers;
-  } catch {
-    // Malformed JSON is treated as invalid answers rather than a server fault.
-    return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
-  }
-
-  // First value of x-forwarded-for is the originating client (best-effort only).
-  const forwardedFor = request.headers.get('x-forwarded-for');
-  const ipAddress = forwardedFor?.split(',')[0]?.trim() || undefined;
-
-  try {
-    await submitPublicResponse(token, answers, ipAddress);
+    await submitPublicResponse(token, body.answers, ipAddress);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    if (error instanceof FormTokenError) {
-      return NextResponse.json(
-        { error: 'This form link is invalid or has expired.' },
-        { status: 404 },
-      );
+    // Malformed JSON and answer-policy failures share one message so the
+    // response does not reveal whether the token was usable.
+    if (error instanceof SyntaxError || isAuthorizationError(error)) {
+      throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Some answers are invalid.');
     }
-    if (isAuthorizationError(error)) {
-      return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
+    // The staff key-lock message is not for the public. Keep the old opaque 500.
+    if (isTenantKeyUnavailable(error)) {
+      throw new ClientSafeError(500, 'INTERNAL_ERROR', 'Internal error');
     }
-    return NextResponse.json({ error: 'Something went wrong.' }, { status: 500 });
+    throw error;
   }
-}
+});

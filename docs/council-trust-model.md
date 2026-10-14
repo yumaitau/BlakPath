@@ -42,5 +42,5 @@ determination of Aboriginality.
 2. Create council teams (Intake, Casework, Committee).
 3. Further staff use `membership_invitations` (hash only, email-verified).
 4. Assign teams/groups, verify isolation with `tests/e2e/team-isolation.spec.ts`.
-5. Activate only after the readiness checklist and signed agreement are
-   recorded. Open public applications when ready.
+5. Activate only after the tenant key is validated and the readiness checklist
+   and signed agreement are recorded. Open public applications when ready.

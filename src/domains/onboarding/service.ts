@@ -10,8 +10,15 @@ import {
   permissions,
   rolePermissions,
   roles,
+  users,
 } from '@/db/schema';
-import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
+import {
+  recordAudit,
+  recordPlatformAudit,
+  type AuditTransaction,
+} from '@/domains/audit/service';
+import { keyAllowsActivation } from '@/domains/organisation-keys/activation';
+import { getOrganisationKey } from '@/domains/organisation-keys/service';
 import { sendEmail } from '@/lib/email/mailer';
 import { env } from '@/lib/env';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -41,10 +48,14 @@ import {
 /**
  * Drizzle-backed onboarding commands.
  *
- * Operator commands write a platform audit event and do not open a tenant
- * context, so they cannot read or write tenant records beyond the organisation
- * row they are creating. The operator is not inserted into `memberships`.
+ * Operator commands run with the application database role, write to the
+ * platform audit chain, and do not open a tenant context, so they cannot read
+ * or write tenant records beyond the organisation rows they are creating. The
+ * operator is not inserted into `memberships`. Every change and its audit
+ * event commit in one transaction.
  */
+
+type AuditChain = 'platform' | 'tenant';
 
 function mapAudit(event: PlatformAuditWrite) {
   return {
@@ -57,19 +68,33 @@ function mapAudit(event: PlatformAuditWrite) {
   };
 }
 
-function operatorEffects(): OnboardingEffects {
+async function writeAudit(
+  chain: AuditChain,
+  event: PlatformAuditWrite,
+  tx?: AuditTransaction,
+): Promise<void> {
+  if (chain === 'platform') {
+    await recordPlatformAudit(
+      {
+        ...mapAudit(event),
+        actorUserId: event.actorUserId ?? null,
+        actingRole: 'platform-operator',
+      },
+      tx,
+    );
+    return;
+  }
+  // Tenant path: actor, session and organisation come from the verified context.
+  await recordAudit(mapAudit(event), tx);
+}
+
+function effectsFor(chain: AuditChain): OnboardingEffects {
   return {
     appUrl: env.APP_URL,
     now: () => new Date(),
     newId: () => uuidv7(),
     newToken: () => nanoid(36),
-    audit: async (event) => {
-      await recordPlatformAudit({
-        ...mapAudit(event),
-        actorUserId: null,
-        actingRole: 'platform-operator',
-      });
-    },
+    audit: (event) => writeAudit(chain, event),
     sendInvite: (message) => sendEmail({ ...message, failIfSuppressed: true }),
   };
 }
@@ -105,7 +130,6 @@ async function loadOrganisation(
       slug: organisations.slug,
       legalName: organisations.legalName,
       status: organisations.status,
-      staffMfaRequired: organisations.staffMfaRequired,
       checklist: organisationSettings.readinessChecklist,
       agreementReference: organisationSettings.agreementReference,
       agreementSignedAt: organisationSettings.agreementSignedAt,
@@ -122,138 +146,180 @@ async function loadOrganisation(
     )
     .limit(1);
   if (!org) return null;
+  const [pendingInvitation, key] = await Promise.all([
+    pendingAdminInvitation(org.id),
+    getOrganisationKey(org.id),
+  ]);
   return {
     ...org,
-    pendingInvitation: await pendingAdminInvitation(org.id),
+    keyValidated: keyAllowsActivation(key),
+    pendingInvitation,
   };
 }
 
-const store: OnboardingStore = {
-  findBySlug: (slug) => loadOrganisation({ slug }),
-  findById: (id) => loadOrganisation({ id }),
-  async loadSystemRoleTemplates(): Promise<readonly SystemRoleTemplateRow[]> {
-    const roleRows = await db
-      .select({
-        id: roles.id,
-        slug: roles.slug,
-        name: roles.name,
-        description: roles.description,
-      })
-      .from(roles)
-      .where(isNull(roles.organisationId));
-    if (roleRows.length === 0) return [];
-    const grants = await db
-      .select({
-        roleId: rolePermissions.roleId,
-        permissionKey: rolePermissions.permissionKey,
-      })
-      .from(rolePermissions)
-      .where(
-        inArray(
-          rolePermissions.roleId,
-          roleRows.map((role) => role.id),
-        ),
-      );
-    return roleRows.map((role) => ({
-      slug: role.slug,
-      name: role.name,
-      description: role.description,
-      permissions: grants
-        .filter((grant) => grant.roleId === role.id)
-        .map((grant) => grant.permissionKey),
-    }));
-  },
-  async permissionCatalogueKeys() {
-    const rows = await db.select({ key: permissions.key }).from(permissions);
-    return new Set(rows.map((row) => row.key));
-  },
-  async saveNew(record: NewOrganisationRecord) {
-    await db.transaction(async (tx) => {
-      await tx.insert(organisations).values({
-        id: record.id,
-        legalName: record.legalName,
-        tradingName: record.tradingName,
-        organisationType: record.organisationType,
-        abn: record.abn,
-        slug: record.slug,
-        status: record.status,
-        region: record.region,
-        publicApplicationsOpen: record.publicApplicationsOpen,
-        staffMfaRequired: record.staffMfaRequired,
-      });
-      await tx.insert(organisationSettings).values({
-        organisationId: record.id,
-        readinessChecklist: record.checklist,
-        agreementReference: record.agreementReference,
-        agreementSignedAt: record.agreementSignedAt,
-      });
-      for (const role of record.roles) {
-        await tx.insert(roles).values({
-          id: role.id,
-          organisationId: record.id,
-          slug: role.slug,
-          name: role.name,
-          description: role.description,
-          isSystem: role.isSystem,
+function createStore(chain: AuditChain): OnboardingStore {
+  return {
+    findBySlug: (slug) => loadOrganisation({ slug }),
+    findById: (id) => loadOrganisation({ id }),
+    async findPlatformOperator(email) {
+      const [operator] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.email, email), eq(users.isPlatformOperator, true)))
+        .limit(1);
+      return operator ?? null;
+    },
+    async loadSystemRoleTemplates(): Promise<readonly SystemRoleTemplateRow[]> {
+      const roleRows = await db
+        .select({
+          id: roles.id,
+          slug: roles.slug,
+          name: roles.name,
+          description: roles.description,
+        })
+        .from(roles)
+        .where(isNull(roles.organisationId));
+      if (roleRows.length === 0) return [];
+      const grants = await db
+        .select({
+          roleId: rolePermissions.roleId,
+          permissionKey: rolePermissions.permissionKey,
+        })
+        .from(rolePermissions)
+        .where(
+          inArray(
+            rolePermissions.roleId,
+            roleRows.map((role) => role.id),
+          ),
+        );
+      return roleRows.map((role) => ({
+        slug: role.slug,
+        name: role.name,
+        description: role.description,
+        permissions: grants
+          .filter((grant) => grant.roleId === role.id)
+          .map((grant) => grant.permissionKey),
+      }));
+    },
+    async permissionCatalogueKeys() {
+      const rows = await db.select({ key: permissions.key }).from(permissions);
+      return new Set(rows.map((row) => row.key));
+    },
+    async saveNew(record: NewOrganisationRecord, audit) {
+      await db.transaction(async (tx) => {
+        await tx.insert(organisations).values({
+          id: record.id,
+          legalName: record.legalName,
+          tradingName: record.tradingName,
+          organisationType: record.organisationType,
+          abn: record.abn,
+          slug: record.slug,
+          status: record.status,
+          region: record.region,
+          publicApplicationsOpen: record.publicApplicationsOpen,
         });
-        for (const permissionKey of role.permissions) {
-          await tx.insert(rolePermissions).values({
-            roleId: role.id,
-            permissionKey,
+        await tx.insert(organisationSettings).values({
+          organisationId: record.id,
+          readinessChecklist: record.checklist,
+          agreementReference: record.agreementReference,
+          agreementSignedAt: record.agreementSignedAt,
+        });
+        for (const role of record.roles) {
+          await tx.insert(roles).values({
+            id: role.id,
+            organisationId: record.id,
+            slug: role.slug,
+            name: role.name,
+            description: role.description,
+            isSystem: role.isSystem,
           });
+          if (role.permissions.length > 0) {
+            await tx.insert(rolePermissions).values(
+              role.permissions.map((permissionKey) => ({
+                roleId: role.id,
+                permissionKey,
+              })),
+            );
+          }
         }
-      }
-      await tx.insert(membershipInvitations).values({
-        id: record.invitation.id,
-        organisationId: record.id,
-        email: record.invitation.email,
-        roleId: record.invitation.roleId,
-        tokenHash: record.invitation.tokenHash,
-        status: 'pending',
-        expiresAt: record.invitation.expiresAt,
-        lastSentAt: record.invitation.lastSentAt,
+        await tx.insert(membershipInvitations).values({
+          id: record.invitation.id,
+          organisationId: record.id,
+          email: record.invitation.email,
+          roleId: record.invitation.roleId,
+          tokenHash: record.invitation.tokenHash,
+          status: 'pending',
+          expiresAt: record.invitation.expiresAt,
+          lastSentAt: record.invitation.lastSentAt,
+        });
+        await writeAudit(chain, audit, tx);
       });
-    });
-  },
-  async saveChecklist(organisationId, checklist) {
-    await db
-      .update(organisationSettings)
-      .set({ readinessChecklist: checklist })
-      .where(eq(organisationSettings.organisationId, organisationId));
-  },
-  async saveAgreement(organisationId, agreement) {
-    await db
-      .update(organisationSettings)
-      .set({
-        agreementReference: agreement.reference,
-        agreementSignedAt: agreement.signedAt,
-      })
-      .where(eq(organisationSettings.organisationId, organisationId));
-  },
-  async setStatusOnboardingToActive(organisationId) {
-    const updated = await db
-      .update(organisations)
-      .set({ status: 'active' })
-      .where(
-        and(eq(organisations.id, organisationId), eq(organisations.status, 'onboarding')),
-      )
-      .returning({ id: organisations.id });
-    return updated.length > 0;
-  },
-  async rotatePendingInvitation(invitationId, tokenHash, expiresAt, lastSentAt) {
-    const updated = await db
-      .update(membershipInvitations)
-      .set({ tokenHash, expiresAt, lastSentAt })
-      .where(
-        and(
-          eq(membershipInvitations.id, invitationId),
-          eq(membershipInvitations.status, 'pending'),
-        ),
-      )
-      .returning({ id: membershipInvitations.id });
-    return updated.length > 0;
-  },
-};
+    },
+    async saveChecklist(organisationId, checklist, audit) {
+      await db.transaction(async (tx) => {
+        await tx
+          .update(organisationSettings)
+          .set({ readinessChecklist: checklist })
+          .where(eq(organisationSettings.organisationId, organisationId));
+        await writeAudit(chain, audit, tx);
+      });
+    },
+    async saveAgreement(organisationId, agreement, audit) {
+      await db.transaction(async (tx) => {
+        await tx
+          .update(organisationSettings)
+          .set({
+            agreementReference: agreement.reference,
+            agreementSignedAt: agreement.signedAt,
+          })
+          .where(eq(organisationSettings.organisationId, organisationId));
+        await writeAudit(chain, audit, tx);
+      });
+    },
+    async setStatusOnboardingToActive(organisationId, audit) {
+      return db.transaction(async (tx) => {
+        const updated = await tx
+          .update(organisations)
+          .set({ status: 'active' })
+          .where(
+            and(
+              eq(organisations.id, organisationId),
+              eq(organisations.status, 'onboarding'),
+            ),
+          )
+          .returning({ id: organisations.id });
+        if (updated.length === 0) return false;
+        await writeAudit(chain, audit, tx);
+        return true;
+      });
+    },
+    async rotatePendingInvitation(invitation, audit) {
+      return db.transaction(async (tx) => {
+        const updated = await tx
+          .update(membershipInvitations)
+          .set({
+            tokenHash: invitation.tokenHash,
+            expiresAt: invitation.expiresAt,
+            lastSentAt: invitation.lastSentAt,
+          })
+          .where(
+            and(
+              eq(membershipInvitations.id, invitation.id),
+              eq(membershipInvitations.status, 'pending'),
+            ),
+          )
+          .returning({ id: membershipInvitations.id });
+        if (updated.length === 0) return false;
+        await writeAudit(chain, audit, tx);
+        return true;
+      });
+    },
+  };
+}
+
+function operatorDeps() {
+  return { store: createStore('platform'), effects: effectsFor('platform') };
+}
 
 export async function provisionOrganisation(input: {
   legalName: string;
@@ -264,14 +330,14 @@ export async function provisionOrganisation(input: {
   adminEmail: string;
   operatorEmail: string;
 }) {
-  return executeProvision(input, { store, effects: operatorEffects() });
+  return executeProvision(input, operatorDeps());
 }
 
 export async function resendOrganisationInvite(input: {
   slug: string;
   operatorEmail: string;
 }) {
-  return executeResendInvite(input, { store, effects: operatorEffects() });
+  return executeResendInvite(input, operatorDeps());
 }
 
 export async function recordOperatorReadiness(input: {
@@ -286,7 +352,7 @@ export async function recordOperatorReadiness(input: {
       item: input.item,
       complete: input.complete,
     },
-    { store, effects: operatorEffects() },
+    operatorDeps(),
   );
 }
 
@@ -296,23 +362,14 @@ export async function recordSignedAgreement(input: {
   signedAt: string;
   operatorEmail: string;
 }) {
-  return executeRecordAgreement(input, { store, effects: operatorEffects() });
+  return executeRecordAgreement(input, operatorDeps());
 }
 
 export async function activateOrganisation(input: {
   slug: string;
   operatorEmail: string;
 }) {
-  return executeActivate(input, { store, effects: operatorEffects() });
-}
-
-function tenantEffects(): OnboardingEffects {
-  return {
-    ...operatorEffects(),
-    audit: async (event) => {
-      await recordAudit(mapAudit(event));
-    },
-  };
+  return executeActivate(input, operatorDeps());
 }
 
 export async function getTenantReadiness(): Promise<{
@@ -324,7 +381,7 @@ export async function getTenantReadiness(): Promise<{
 }> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
-  const org = await store.findById(ctx.organisationId);
+  const org = await createStore('tenant').findById(ctx.organisationId);
   if (!org) throw new AuthorizationError('POLICY_DENIED');
   const decision = activationFor(org);
   const checklist =
@@ -352,6 +409,6 @@ export async function recordTenantReadinessItem(
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   return executeRecordChecklist(
     { target: { organisationId: ctx.organisationId }, item, complete },
-    { store, effects: tenantEffects() },
+    { store: createStore('tenant'), effects: effectsFor('tenant') },
   );
 }

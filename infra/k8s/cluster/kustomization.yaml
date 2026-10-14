@@ -1,0 +1,6 @@
+# Cluster-scoped enablement. Not part of infra/k8s/kustomization.yaml:
+# that overlay sets namespace blakpath and would rewrite this ConfigMap.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - enable-network-policy.yaml
