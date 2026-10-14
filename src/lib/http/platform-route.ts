@@ -8,6 +8,7 @@ import {
   STEP_UP_WINDOWS,
   UnauthenticatedError,
 } from '@/lib/auth/session';
+import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { BreakGlassError } from '@/domains/break-glass';
 
@@ -28,6 +29,11 @@ export async function requirePlatformOperator(): Promise<{ userId: string }> {
   if (!rows[0]?.isPlatformOperator) {
     throw new AuthorizationError('POLICY_DENIED');
   }
+  await requireStaffMfa(session.user.id, {
+    organisationId: null,
+    sessionId: session.session.id,
+    actingRole: 'platform-operator',
+  });
   return { userId: session.user.id };
 }
 
@@ -41,6 +47,12 @@ export function breakGlassErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof UnauthenticatedError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (error instanceof StaffMfaRequiredError) {
+    return NextResponse.json(
+      { error: 'A verified second factor is required', code: error.code },
+      { status: error.status },
+    );
   }
   if (error instanceof BreakGlassError || error instanceof AuthorizationError) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

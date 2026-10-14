@@ -1,6 +1,7 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
+import { StaffMfaRequiredError } from '@/lib/auth/staff-policy';
 import {
   requireSession,
   StepUpRequiredError,
@@ -20,6 +21,7 @@ import { AuthorizationError } from '@/lib/permissions/errors';
  * (`withTenant`), which re-verifies the user's active membership of that
  * organisation against the database. The org id is therefore never trusted from
  * client input, and no tenant-scoped code runs without a verified context.
+ * `withTenant` also enforces the staff second-factor policy before `fn`.
  */
 
 /** Thrown when a signed-in user has no active organisation selected. */
@@ -72,6 +74,12 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof NoActiveOrganisationError) {
     return NextResponse.json({ error: 'No active organisation' }, { status: 409 });
+  }
+  if (error instanceof StaffMfaRequiredError) {
+    return NextResponse.json(
+      { error: 'A verified second factor is required', code: error.code },
+      { status: error.status },
+    );
   }
   if (error instanceof ZodError) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });

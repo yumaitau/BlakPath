@@ -42,6 +42,7 @@ export type AuditAction =
   | 'mfa.removed'
   | 'mfa.challenge_succeeded'
   | 'mfa.challenge_failed'
+  | 'mfa.access_denied'
   | 'mfa.recovery_codes_regenerated'
   | 'mfa.recovery_code_used'
   | 'mfa.passkey_registered'

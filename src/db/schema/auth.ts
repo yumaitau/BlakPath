@@ -41,7 +41,8 @@ export const users = pgTable(
     isPlatformOperator: boolean('is_platform_operator').notNull().default(false),
     /**
      * Set by the two-factor plugin once a TOTP code is confirmed. Sign-in
-     * issues a second-factor challenge only when this is true.
+     * issues a second-factor challenge only when this is true. A pending
+     * enrolment leaves this false.
      */
     twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
     ...timestamps,
@@ -172,11 +173,12 @@ export const twoFactors = pgTable('two_factors', {
   /** Envelope-encrypted recovery codes ciphertext. Never plaintext. */
   backupCodes: text('backup_codes').notNull(),
   /**
-   * Plugin default is true. First enrolment writes false until the user
-   * confirms a code.
+   * True once the user has proved they can produce a code for this secret.
+   * Defaults to true so rows written before this column existed stay valid.
+   * A new enrolment is inserted with `verified` false until that proof.
    */
   verified: boolean('verified').notNull().default(true),
-  /** Consecutive failed second-factor verifications. Reset after a success. */
+  /** Consecutive failed second-factor checks. Reset after a success. */
   failedVerificationCount: integer('failed_verification_count').notNull().default(0),
   /** When set and still in the future, second-factor verification is refused. */
   lockedUntil: timestamp('locked_until', { withTimezone: true }),

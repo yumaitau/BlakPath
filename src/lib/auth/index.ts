@@ -5,6 +5,7 @@ import { uuidv7 } from 'uuidv7';
 import { db, schema } from '@/db/client';
 import { env, isProduction } from '@/lib/env';
 import { sendVerificationEmail, sendPasswordResetEmail } from './emails';
+import { auditPasskeyRegistration, staffMfaDatabaseHooks } from './mfa-audit';
 import { createAuthPlugins } from './plugins';
 import { assertAuthSchemaCoverage } from './schema-coverage';
 
@@ -185,6 +186,16 @@ export const auth = betterAuth({
     database: {
       generateId: () => uuidv7(),
     },
+  },
+
+  /**
+   * Enrolment audit. TOTP completion is observed from the user update that
+   * marks the factor enabled. Passkey registration is observed from the
+   * verification endpoint. Neither hook decides access.
+   */
+  databaseHooks: staffMfaDatabaseHooks,
+  hooks: {
+    after: auditPasskeyRegistration,
   },
 
   /**
