@@ -33,6 +33,7 @@ export const STEP_UP_ROUTES = {
   'POST /api/certificates/[id]/revoke': STEP_UP_WINDOWS.sensitiveAction,
   'POST /api/keys': STEP_UP_WINDOWS.privileged,
   'POST /api/webhooks': STEP_UP_WINDOWS.privileged,
+  'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver': STEP_UP_WINDOWS.privileged,
   'POST /api/sso/providers': STEP_UP_WINDOWS.privileged,
   'DELETE /api/retention/holds/[id]': STEP_UP_WINDOWS.destructive,
   'DELETE /api/retention/policies/[id]': STEP_UP_WINDOWS.destructive,

@@ -5,6 +5,7 @@ import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
 import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
 import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
+import { webhookBackoffStrategy } from '@/domains/webhooks/retry';
 import { closeMalwareScanDlq, deadLetterExhaustedScan } from '@/lib/queues/dlq';
 import { malwareScanBackoffStrategy } from '@/lib/queues/scan-policy';
 import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
@@ -109,9 +110,12 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
       // Do not autorun until all workers are constructed and listeners wired.
       autorun: false,
       // BullMQ reads the custom backoff from the worker that owns the job.
+      // Webhook deliveries retry over hours (see domains/webhooks/retry.ts).
       ...(queueName === QueueName.MalwareScan
         ? { settings: { backoffStrategy: malwareScanBackoffStrategy } }
-        : {}),
+        : queueName === QueueName.Webhook
+          ? { settings: { backoffStrategy: webhookBackoffStrategy } }
+          : {}),
     },
   );
 
