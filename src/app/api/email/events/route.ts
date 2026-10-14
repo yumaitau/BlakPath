@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { env } from '@/lib/env';
 import { clientIpForLimits } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, limitIp, limitSubject } from '@/lib/http/request-limits';
+import { currentRequestIds } from '@/lib/observability/correlation';
 import { logger } from '@/lib/observability/logger';
+import { ClientSafeError, sanitiseError, tenantHandler } from '@/lib/http/error-response';
 import {
   isAllowedSigningCertUrl,
   isAllowedSubscribeUrl,
@@ -68,12 +70,17 @@ async function loadSigningCert(url: string): Promise<string | null> {
     }
     return pem;
   } catch (error) {
-    logger.error({ err: error }, 'email events signing certificate unavailable');
+    logger.error(
+      { err: sanitiseError(error), requestId: currentRequestIds()?.requestId },
+      'email events signing certificate unavailable',
+    );
     return null;
   }
 }
 
-export async function POST(request: NextRequest): Promise<Response> {
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
   const ipLimited = await limitIp(
     REQUEST_LIMITS.emailEvents,
     clientIpForLimits(request.headers),
@@ -88,7 +95,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const secret = env.EMAIL_WEBHOOK_SECRET;
   const topicArn = env.EMAIL_SNS_TOPIC_ARN;
   if (!secret || !topicArn) {
-    return NextResponse.json({ error: 'Not configured' }, { status: 503 });
+    throw new ClientSafeError(503, 'NOT_CONFIGURED', 'Not configured');
   }
 
   const url = new URL(request.url);
@@ -100,12 +107,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     return forbidden();
   }
 
-  let envelope: SnsEnvelope;
-  try {
-    envelope = snsEnvelope.parse(await request.json());
-  } catch {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
+  // Malformed JSON (SyntaxError) and a bad envelope (ZodError) map to 400.
+  const envelope: SnsEnvelope = snsEnvelope.parse(await request.json());
 
   const certUrl = envelope.SigningCertURL;
   if (!envelope.Signature || !certUrl) return forbidden();
@@ -121,7 +124,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   if (envelope.Type === 'SubscriptionConfirmation' && envelope.SubscribeURL) {
     if (!isAllowedSubscribeUrl(envelope.SubscribeURL)) {
-      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+      throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Invalid request');
     }
     try {
       await fetch(envelope.SubscribeURL, {
@@ -130,8 +133,11 @@ export async function POST(request: NextRequest): Promise<Response> {
         signal: AbortSignal.timeout(5_000),
       });
     } catch (error) {
-      logger.error({ err: error }, 'email events subscription confirm failed');
-      return NextResponse.json({ error: 'Upstream unavailable' }, { status: 502 });
+      logger.error(
+        { err: sanitiseError(error), requestId: currentRequestIds()?.requestId },
+        'email events subscription confirm failed',
+      );
+      throw new ClientSafeError(502, 'UPSTREAM_UNAVAILABLE', 'Upstream unavailable');
     }
     logger.info('email events subscription confirmed');
     return NextResponse.json({ confirmed: true });
@@ -142,7 +148,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const message = parseSesEvent(envelope.Message);
-  if (!message) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  if (!message) throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Invalid request');
 
   if (message.notificationType !== 'Bounce' && message.notificationType !== 'Complaint') {
     return NextResponse.json({ received: true });
@@ -157,9 +163,12 @@ export async function POST(request: NextRequest): Promise<Response> {
         ...(message.mail?.messageId ? { sourceMessageId: message.mail.messageId } : {}),
       });
     } catch (error) {
-      logger.error({ err: error }, 'failed to record email suppression');
+      logger.error(
+        { err: sanitiseError(error), requestId: currentRequestIds()?.requestId },
+        'failed to record email suppression',
+      );
     }
   }
   logger.info({ count: targets.length }, 'email suppressions recorded');
   return NextResponse.json({ suppressed: targets.length });
-}
+});

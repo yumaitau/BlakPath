@@ -4,7 +4,7 @@ import {
   staffMfaApplies,
   StaffMfaRequiredError,
 } from '@/lib/auth/staff-policy';
-import { toErrorResponse } from '@/lib/http/tenant-route';
+import { errorResponse } from '@/lib/http/error-response';
 
 describe('staff second-factor policy', () => {
   it('accepts a passkey or a confirmed authenticator factor', () => {
@@ -26,9 +26,9 @@ describe('staff second-factor policy', () => {
   });
 
   it('maps a missing factor to 403 STAFF_MFA_REQUIRED', async () => {
-    const response = toErrorResponse(new StaffMfaRequiredError('user-1'));
+    const response = errorResponse(new StaffMfaRequiredError('user-1'));
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toEqual({
+    await expect(response.json()).resolves.toMatchObject({
       error: 'A verified second factor is required',
       code: 'STAFF_MFA_REQUIRED',
     });

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { apiErrorResponse, withApiKey } from '@/lib/http/api-route';
+import { withApiKey } from '@/lib/http/api-route';
+import { tenantHandler } from '@/lib/http/error-response';
 import { recordAudit } from '@/domains/audit/service';
 import { env } from '@/lib/env';
 import { REQUEST_LIMITS } from '@/lib/http/request-limits';
@@ -10,7 +11,6 @@ import {
   hasMcpScope,
   mcpAuditAfter,
   mcpHttpStatus,
-  McpRateLimitError,
   tenantAiOptedIn,
   type JsonRpcRequest,
   type JsonRpcResponse,
@@ -35,7 +35,9 @@ export function GET(): Response {
   return notFound();
 }
 
-export async function POST(request: Request): Promise<Response> {
+export const POST = tenantHandler(async function POST(
+  request: Request,
+): Promise<Response> {
   // Global flag is the only check that hides the route. Tenant opt-in and
   // scope are decided after the key is authenticated, so pass them as satisfied
   // here — a false value would refuse before we know the tenant.
@@ -49,59 +51,46 @@ export async function POST(request: Request): Promise<Response> {
     return notFound();
   }
 
-  try {
-    const body = (await request.json().catch(() => undefined)) as
-      | JsonRpcRequest
-      | undefined;
+  const body = (await request.json().catch(() => undefined)) as
+    | JsonRpcRequest
+    | undefined;
 
-    const response = await withApiKey(
-      request,
-      async (ctx): Promise<JsonRpcResponse | null> => {
-        const status = mcpHttpStatus({
-          globalEnabled: true,
-          tenantOptedIn: await tenantAiOptedIn(),
-          hasMcpScope: hasMcpScope(ctx.permissions),
+  const response = await withApiKey(
+    request,
+    async (ctx): Promise<JsonRpcResponse | null> => {
+      const status = mcpHttpStatus({
+        globalEnabled: true,
+        tenantOptedIn: await tenantAiOptedIn(),
+        hasMcpScope: hasMcpScope(ctx.permissions),
+      });
+      if (status === 403) {
+        const keyId = ctx.userId;
+        await recordAudit({
+          action: 'search.performed',
+          resourceType: 'api_key',
+          resourceId: keyId,
+          result: 'denied',
+          reason: 'mcp.scope_denied',
+          after: mcpAuditAfter({ keyId, tool: 'endpoint', piiDisclosed: false }),
         });
-        if (status === 403) {
-          const keyId = ctx.userId;
-          await recordAudit({
-            action: 'search.performed',
-            resourceType: 'api_key',
-            resourceId: keyId,
-            result: 'denied',
-            reason: 'mcp.scope_denied',
-            after: mcpAuditAfter({ keyId, tool: 'endpoint', piiDisclosed: false }),
-          });
-          throw new AuthorizationError('POLICY_DENIED');
-        }
+        throw new AuthorizationError('POLICY_DENIED');
+      }
 
-        await consumeMcpRateLimit(ctx.organisationId, ctx.userId);
+      await consumeMcpRateLimit(ctx.organisationId, ctx.userId);
 
-        if (!body || typeof body.method !== 'string') {
-          return {
-            jsonrpc: '2.0',
-            id: null,
-            error: { code: -32700, message: 'Parse error' },
-          };
-        }
-        return handleMcpMessage(body);
-      },
-      REQUEST_LIMITS.mcp,
-    );
+      if (!body || typeof body.method !== 'string') {
+        return {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32700, message: 'Parse error' },
+        };
+      }
+      return handleMcpMessage(body);
+    },
+    REQUEST_LIMITS.mcp,
+  );
 
-    // A notification (no id) yields no response body.
-    if (response === null) return new Response(null, { status: 202 });
-    return NextResponse.json(response);
-  } catch (error) {
-    if (error instanceof McpRateLimitError) {
-      return NextResponse.json(
-        { error: 'Too many requests' },
-        {
-          status: 429,
-          headers: { 'Retry-After': String(error.retryAfterSeconds) },
-        },
-      );
-    }
-    return apiErrorResponse(error);
-  }
-}
+  // A notification (no id) yields no response body.
+  if (response === null) return new Response(null, { status: 202 });
+  return NextResponse.json(response);
+});

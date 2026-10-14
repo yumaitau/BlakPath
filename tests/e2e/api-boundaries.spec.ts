@@ -23,7 +23,7 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
     await test.step(`${path} rejects anonymous access`, async () => {
       const response = await request.get(path);
       expect(response.status()).toBe(401);
-      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+      await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
     });
   }
 
@@ -76,7 +76,7 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
         data: mutation.data,
       });
       expect(response.status()).toBe(401);
-      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+      await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
     });
   }
 });

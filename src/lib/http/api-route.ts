@@ -1,19 +1,13 @@
-import { NextResponse } from 'next/server';
 import { runWithTenantContext, type TenantContext } from '@/lib/tenancy/context';
-import { ConcurrencyConflictError } from '@/lib/concurrency/error';
-import { AuthorizationError } from '@/lib/permissions/errors';
 import { ApiKeyError, parseBearer, resolveApiKeyContext } from '@/domains/api-keys';
-import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
 import {
   REQUEST_LIMITS,
-  RateLimitedError,
   assertIp,
   assertKey,
-  rateLimitResponse,
   type RequestLimitPolicy,
 } from '@/lib/http/request-limits';
-import { tenantKeyErrorResponse } from '@/lib/http/tenant-key-response';
+import { currentRequestIds } from '@/lib/observability/correlation';
 
 /**
  * Route helper for the public REST API (`/api/v1/*`).
@@ -37,9 +31,10 @@ export async function withApiKey<T>(
   const raw = parseBearer(request.headers.get('authorization'));
   if (!raw) throw new ApiKeyError();
 
+  const bound = currentRequestIds();
   const ctx = await resolveApiKeyContext(raw, {
-    correlationId: globalThis.crypto.randomUUID(),
-    requestId: globalThis.crypto.randomUUID(),
+    correlationId: bound?.correlationId ?? globalThis.crypto.randomUUID(),
+    requestId: bound?.requestId ?? globalThis.crypto.randomUUID(),
     ...(ip === UNKNOWN_CLIENT_IP ? {} : { ipAddress: ip }),
     userAgent: request.headers.get('user-agent') ?? undefined,
   });
@@ -47,24 +42,4 @@ export async function withApiKey<T>(
   await assertKey(limits, ctx.userId);
 
   return runWithTenantContext(ctx, () => fn(ctx));
-}
-
-/** Map an error thrown in an API route to a non-leaking JSON response. */
-export function apiErrorResponse(error: unknown): NextResponse {
-  const locked = tenantKeyErrorResponse(error);
-  if (locked) return locked;
-  if (error instanceof RateLimitedError) return rateLimitResponse(error.retryAfter);
-  if (error instanceof ApiKeyError) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (error instanceof ConcurrencyConflictError) {
-    return NextResponse.json({ error: error.message }, { status: 409 });
-  }
-  if (
-    error instanceof AuthorizationError ||
-    error instanceof OrganisationUnavailableError
-  ) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  return NextResponse.json({ error: 'Internal error' }, { status: 500 });
 }
