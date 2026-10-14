@@ -30,6 +30,7 @@ export {
   submitPublicResponse,
   updateForm,
   type FormInvitationRow,
+  type PublicFormInvitation,
   type FormResponseRow,
   type FormRow,
   type PublicForm,

@@ -60,6 +60,8 @@ integration('applicant portal boundaries', () => {
       status: 'active',
       publicApplicationsOpen: false,
     });
+    const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+    await ensureOrganisationKey(organisationId);
 
     const base = {
       organisationId,
@@ -163,6 +165,8 @@ integration('applicant portal boundaries', () => {
       runtime.portal.listOwnApplications(),
     );
     expect(ownList.map((item) => item.id)).toEqual([own.id]);
+    expect(ownList[0]?.applicantName).toBe('Portal Applicant');
+    expect(view.applicantName).toBe('Portal Applicant');
 
     const listed = await runtime.tenancy.runWithTenantContext(applicantContext, () =>
       runtime.applications.listApplications(),

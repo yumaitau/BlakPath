@@ -2,10 +2,12 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { SignOutButton } from '@/components/auth/sign-out-button';
+import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import { getServerSession } from '@/lib/auth/session';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,
+  organisationAccessForUser,
 } from '@/lib/tenancy/memberships';
 
 /**
@@ -19,7 +21,14 @@ export default async function ApplicantLayout({ children }: { children: ReactNod
   if (!session) redirect('/sign-in?returnTo=/portal');
 
   const activeOrganisationId = getActiveOrganisationId(session);
+  if (!activeOrganisationId) redirect('/select-organisation');
   const organisations = await listMembershipsForUser(session.user.id);
+  // Same organisation-status gate as the staff shell. The copy does not name
+  // the status.
+  const access = await organisationAccessForUser(session.user.id, activeOrganisationId);
+  if (access === 'unavailable') {
+    return <OrganisationUnavailable canSwitch={organisations.length > 0} />;
+  }
   const current = organisations.find(
     (org) => org.organisationId === activeOrganisationId,
   );

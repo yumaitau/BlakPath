@@ -15,12 +15,16 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-worker
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-worker
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         seccompProfile:
           type: RuntimeDefault
+      # tsx/esbuild scratch. HOME is /tmp so a read-only root has one writable path.
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: worker
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
@@ -31,6 +35,12 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 500m
@@ -40,51 +50,6 @@ spec:
               memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: blakpath-clamav
-  namespace: blakpath
-  labels:
-    app.kubernetes.io/name: blakpath-clamav
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: blakpath-clamav
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: blakpath-clamav
-    spec:
-      serviceAccountName: blakpath
-      containers:
-        - name: clamav
-          image: clamav/clamav-debian:1.4
-          ports:
-            - containerPort: 3310
-              name: clamav
-          resources:
-            requests:
-              cpu: 500m
-              memory: 2Gi
-            limits:
-              cpu: 1500m
-              memory: 2Gi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: blakpath-clamav
-  namespace: blakpath
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: blakpath-clamav
-  ports:
-    - name: clamav
-      port: 3310
-      targetPort: clamav

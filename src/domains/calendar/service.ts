@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, lte, or } from 'drizzle-orm';
 import {
   calendarEventAttendees,
   calendarEventReminders,
@@ -6,6 +6,7 @@ import {
   featureFlags,
 } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -90,14 +91,22 @@ async function resourceConflicts(input: {
 /**
  * Whether this tenant hard-blocks resource double-booking. Tenant override
  * wins; platform default row (null organisation) next; absent = warn-only.
+ * The read is limited to this organisation and the platform default.
  */
-async function resourceHardBlock(): Promise<boolean> {
+export async function resourceHardBlock(): Promise<boolean> {
   const scope = currentScope();
   const rows = await scope.db
     .select()
     .from(featureFlags)
-    .where(eq(featureFlags.key, 'calendar-resource-hard-block'))
-    .limit(10);
+    .where(
+      and(
+        eq(featureFlags.key, 'calendar-resource-hard-block'),
+        or(
+          eq(featureFlags.organisationId, scope.organisationId),
+          isNull(featureFlags.organisationId),
+        ),
+      ),
+    );
   const orgRow = rows.find((r) => r.organisationId === scope.organisationId);
   if (orgRow) return orgRow.enabled;
   const platform = rows.find((r) => r.organisationId === null);
@@ -320,27 +329,23 @@ export async function inviteAttendees(eventId: string): Promise<{ invited: numbe
       ),
     )
     .limit(100);
-  const { addJob, QueueName } = await import('@/lib/queues');
+  const { queueTenantEmail } = await import('@/lib/email/queue');
   let invited = 0;
   for (const a of attendees) {
     if (!a.email || a.userId) continue;
     const when = event.startAt.toISOString();
-    await addJob(
-      QueueName.Email,
-      'event-invite',
-      {
-        organisationId: scope.organisationId,
-        correlationId: ctx.correlationId,
-        to: a.email,
-        subject: `Invitation: ${event.title}`,
-        text: [
-          `You are invited: ${event.title}.`,
-          `When: ${when}${event.location ? ` at ${event.location}` : ''}.`,
-          'Sign in to BlakPath to respond.',
-        ].join('\n'),
-      },
-      { jobId: `event-invite:${a.id}` },
-    );
+    await queueTenantEmail({
+      organisationId: scope.organisationId,
+      correlationId: ctx.correlationId,
+      to: a.email,
+      subject: `Invitation: ${event.title}`,
+      text: [
+        `You are invited: ${event.title}.`,
+        `When: ${when}${event.location ? ` at ${event.location}` : ''}.`,
+        'Sign in to BlakPath to respond.',
+      ].join('\n'),
+      jobId: `event-invite:${a.id}`,
+    });
     invited += 1;
   }
   await recordAudit({
@@ -348,7 +353,8 @@ export async function inviteAttendees(eventId: string): Promise<{ invited: numbe
     resourceType: 'calendar_event',
     resourceId: eventId,
     result: 'success',
-    reason: `invited ${invited} attendee(s)`,
+    reason: 'calendar.attendees_invited',
+    after: { data: { invited }, allow: ['invited'] },
   });
   return { invited };
 }
@@ -431,7 +437,7 @@ export async function countUpcoming(): Promise<number> {
     resourceType: 'calendar_event',
     resourceId: row.eventId,
     result: 'success',
-    reason: `rsvp ${responseStatus}`,
+    reason: auditReason('calendar.rsvp', responseStatus),
   });
   return updatedRow;
 }

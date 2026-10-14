@@ -8,6 +8,11 @@ import {
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import {
+  openApplicantName,
+  openDecisionRows,
+  openNoteRows,
+} from '@/lib/encryption/tenant-fields';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -27,7 +32,9 @@ import {
  *
  * Every query is constrained to `applicant_user_id = actor`. A wider staff
  * permission does not widen this path. Missing and someone else's application
- * both become the same denial, so a guessed id reveals nothing.
+ * both become the same denial, so a guessed id reveals nothing. Sealed tenant
+ * fields (applicant name, shared note bodies, decision rationale) are opened
+ * with the organisation key before projection.
  */
 
 export async function listOwnApplications(): Promise<ApplicantPortalSummary[]> {
@@ -52,10 +59,20 @@ export async function listOwnApplications(): Promise<ApplicantPortalSummary[]> {
     )
     .orderBy(desc(applications.createdAt));
 
-  return rows.flatMap((row) => {
-    const summary = projectApplicantSummary(ctx.userId, row);
-    return summary ? [summary] : [];
-  });
+  const summaries: ApplicantPortalSummary[] = [];
+  for (const row of rows) {
+    const opened = {
+      ...row,
+      applicantName: await openApplicantName(
+        scope.organisationId,
+        row.id,
+        row.applicantName,
+      ),
+    };
+    const summary = projectApplicantSummary(ctx.userId, opened);
+    if (summary) summaries.push(summary);
+  }
+  return summaries;
 }
 
 export async function getApplicantPortal(
@@ -89,12 +106,12 @@ export async function getApplicantPortal(
       resourceType: 'application',
       resourceId: applicationId,
       result: 'denied',
-      reason: 'not the applicant or not found',
+      reason: 'portal.not_applicant',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
 
-  const [history, notes, requests, outcomes] = await Promise.all([
+  const [history, sealedNotes, requests, sealedOutcomes] = await Promise.all([
     scope.db
       .select({
         id: applicationStatusHistory.id,
@@ -144,6 +161,7 @@ export async function getApplicantPortal(
       ),
     scope.db
       .select({
+        id: decisions.id,
         status: decisions.status,
         finalOutcome: decisions.finalOutcome,
         rationale: decisions.rationale,
@@ -160,9 +178,15 @@ export async function getApplicantPortal(
       ),
   ]);
 
+  const [notes, outcomes, applicantName] = await Promise.all([
+    openNoteRows(scope.organisationId, sealedNotes),
+    openDecisionRows(scope.organisationId, sealedOutcomes),
+    openApplicantName(scope.organisationId, application.id, application.applicantName),
+  ]);
+
   const view = projectApplicantPortal({
     actorUserId: ctx.userId,
-    application,
+    application: { ...application, applicantName },
     history: history satisfies readonly PortalHistorySource[],
     notes: notes satisfies readonly PortalNoteSource[],
     requests: requests satisfies readonly PortalRequestSource[],

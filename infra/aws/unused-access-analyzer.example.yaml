@@ -1,0 +1,16 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Account unused-access analyzer for a per-role review of blakpath-web and
+  blakpath-worker. Skip this stack if the account already has an
+  ACCOUNT_UNUSED_ACCESS analyzer. Findings are not a grant list — see
+  infra/aws/unused-access-review.md.
+
+Resources:
+  BlakPathUnusedAccess:
+    Type: AWS::AccessAnalyzer::Analyzer
+    Properties:
+      AnalyzerName: blakpath-unused-access
+      Type: ACCOUNT_UNUSED_ACCESS
+      AnalyzerConfiguration:
+        UnusedAccessConfiguration:
+          UnusedAccessAge: 90

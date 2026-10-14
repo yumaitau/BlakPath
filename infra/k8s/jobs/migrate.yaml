@@ -1,6 +1,7 @@
 # One-shot operational jobs. NOT in kustomization.yaml — apply manually:
 #   kubectl apply -f infra/k8s/jobs/migrate.yaml
 #   kubectl apply -f infra/k8s/jobs/seed.yaml
+#   kubectl apply -f infra/k8s/jobs/invite-admin.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -10,8 +11,17 @@ spec:
   backoffLimit: 2
   template:
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-migrate
+      automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: migrate
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
@@ -22,6 +32,20 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            - name: HOME
+              value: /tmp
+            # Owning role. Must not be the application DATABASE_URL. The
+            # runtime secret must not carry this value; web and worker never
+            # mount blakpath-migrator.
+            - name: DATABASE_MIGRATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-migrator
+                  key: DATABASE_MIGRATION_URL
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 250m
@@ -29,3 +53,8 @@ spec:
             limits:
               cpu: 1000m
               memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

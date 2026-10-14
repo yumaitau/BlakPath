@@ -1,14 +1,17 @@
 import { z } from 'zod';
+import { webhookUrlIssue } from './destination';
 import { isWebhookEvent } from './events';
 
 /** Input validation for webhook endpoint management (zod v4). */
 
 export const createEndpointSchema = z.object({
-  /** Must be an absolute HTTPS URL. */
-  url: z
-    .string()
-    .url()
-    .refine((u) => u.startsWith('https://'), { message: 'URL must be HTTPS.' }),
+  /**
+   * Absolute public HTTPS URL. Names that still need DNS are checked again
+   * in the service before anything is stored.
+   */
+  url: z.string().refine((value) => webhookUrlIssue(value) === null, {
+    message: 'URL must be a public HTTPS endpoint.',
+  }),
   events: z
     .array(z.string())
     .min(1)

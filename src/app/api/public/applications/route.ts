@@ -1,4 +1,3 @@
-import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import {
@@ -6,6 +5,7 @@ import {
   startPublicApplication,
 } from '@/domains/organisations';
 import { requireSession } from '@/lib/auth/session';
+import { clientIp } from '@/lib/http/client-ip';
 import { toErrorResponse } from '@/lib/http/tenant-route';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 
@@ -36,7 +36,6 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const session = await requireSession();
-    const h = await headers();
     const application = await withTenant(
       {
         userId: session.user.id,
@@ -44,8 +43,8 @@ export async function POST(request: Request): Promise<Response> {
         organisationId: organisation.id,
         correlationId: globalThis.crypto.randomUUID(),
         requestId: globalThis.crypto.randomUUID(),
-        ipAddress: h.get('x-forwarded-for') ?? undefined,
-        userAgent: h.get('user-agent') ?? undefined,
+        ipAddress: clientIp(request) ?? undefined,
+        userAgent: request.headers.get('user-agent') ?? undefined,
       },
       () => startPublicApplication({ applicantName: body.applicantName }),
     );

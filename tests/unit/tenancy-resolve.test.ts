@@ -52,6 +52,8 @@ vi.mock('@/db/client', () => {
 // Import AFTER the mock is registered.
 const { resolveTenantContext } = await import('@/lib/tenancy/resolve');
 const { TenantContextError } = await import('@/lib/tenancy/context');
+const { OrganisationUnavailableError } =
+  await import('@/lib/tenancy/organisation-status');
 
 const baseInput = {
   userId: 'user-1',
@@ -88,7 +90,7 @@ describe('resolveTenantContext', () => {
   });
 
   it('builds a context from an active membership, its roles and permissions', async () => {
-    queue.push([{ id: 'membership-1' }]); // membership
+    queue.push([{ id: 'membership-1', organisationStatus: 'active' }]); // membership
     queue.push([
       { id: 'role-a', slug: 'case-officer' },
       { id: 'role-b', slug: 'committee-member' },
@@ -119,8 +121,37 @@ describe('resolveTenantContext', () => {
     expect(ctx.userAgent).toBe('test-agent');
   });
 
+  it.each(['suspended', 'closed'] as const)(
+    'rejects a %s organisation without naming the status',
+    async (organisationStatus) => {
+      queue.push([{ id: 'membership-1', organisationStatus }]);
+      try {
+        await resolveTenantContext({ ...baseInput });
+        throw new Error('expected a throw');
+      } catch (error) {
+        expect(error).toBeInstanceOf(OrganisationUnavailableError);
+        expect(error).toMatchObject({ status: 403 });
+        const message = (error as Error).message.toLowerCase();
+        expect(message).toContain('organisation unavailable');
+        expect(message).not.toContain(organisationStatus);
+        expect(message).not.toContain('org-1');
+      }
+    },
+  );
+
+  it.each(['draft', 'onboarding'] as const)(
+    'allows an active membership while the organisation is %s',
+    async (organisationStatus) => {
+      queue.push([{ id: 'membership-3', organisationStatus }]);
+      queue.push([]);
+      const ctx = await resolveTenantContext({ ...baseInput });
+      expect(ctx.membershipId).toBe('membership-3');
+      expect(ctx.organisationId).toBe('org-1');
+    },
+  );
+
   it('yields an empty permission set when the membership has no roles', async () => {
-    queue.push([{ id: 'membership-2' }]); // membership
+    queue.push([{ id: 'membership-2', organisationStatus: 'active' }]); // membership
     queue.push([]); // roles
     // permissions lookup is skipped entirely when there are no roles.
 

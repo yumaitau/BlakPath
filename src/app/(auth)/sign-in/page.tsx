@@ -1,14 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 
 import { AuthCard } from '@/components/auth/auth-card';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { signIn } from '@/lib/auth/client';
+import { authClient, signIn } from '@/lib/auth/client';
 import { safeReturnPath } from '@/lib/auth/return-path';
 
 /**
@@ -28,10 +28,25 @@ import { safeReturnPath } from '@/lib/auth/return-path';
 const GENERIC_ERROR =
   'Those sign-in details didn’t match. Check your email and password and try again.';
 
+/** One message for every SSO failure: nothing about bindings or accounts leaks. */
+const SSO_ERROR =
+  'Single sign-on isn’t available for this account right now. Sign in with your password instead.';
+
 /** Keep invitation and portal return paths without accepting arbitrary URLs. */
 function returnPathFromLocation(): string {
   const requested = new URLSearchParams(window.location.search).get('returnTo');
   return safeReturnPath(requested);
+}
+
+const noSubscription = () => () => {};
+
+/** The SSO callback returns to `/sign-in?error=sso` on any failure. */
+function useSsoFailed(): boolean {
+  return useSyncExternalStore(
+    noSubscription,
+    () => new URLSearchParams(window.location.search).get('error') === 'sso',
+    () => false,
+  );
 }
 
 export default function SignInPage() {
@@ -41,12 +56,16 @@ export default function SignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [passkeyPending, setPasskeyPending] = useState(false);
+  const [ssoPending, setSsoPending] = useState(false);
 
   const emailRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (error) emailRef.current?.focus();
   }, [error]);
+
+  const ssoFailed = useSsoFailed();
+  const shownError = error ?? (ssoFailed ? SSO_ERROR : null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -89,11 +108,30 @@ export default function SignInPage() {
     window.location.href = returnPathFromLocation();
   }
 
+  async function handleSso() {
+    setError(null);
+    if (!email.includes('@')) {
+      setError('Enter your work email to continue with single sign-on.');
+      return;
+    }
+    setSsoPending(true);
+    const { data, error: ssoError } = await authClient.$fetch<{ url: string }>(
+      '/sso/sign-in',
+      { method: 'POST', body: { email } },
+    );
+    if (ssoError || !data?.url) {
+      setError(SSO_ERROR);
+      setSsoPending(false);
+      return;
+    }
+    window.location.href = data.url;
+  }
+
   return (
     <AuthCard title="Sign in" subtitle="Sign in to your organisation to continue.">
-      {error ? (
+      {shownError ? (
         <Alert tone="destructive" role="alert" title="We couldn’t sign you in">
-          {error}
+          {shownError}
         </Alert>
       ) : null}
 
@@ -164,6 +202,10 @@ export default function SignInPage() {
         disabled={passkeyPending}
       >
         {passkeyPending ? 'Waiting for passkey…' : 'Sign in with a passkey'}
+      </Button>
+
+      <Button type="button" variant="outline" onClick={handleSso} disabled={ssoPending}>
+        {ssoPending ? 'Redirecting…' : 'Sign in with organisation SSO'}
       </Button>
 
       <p className="text-muted-foreground text-center text-sm">
