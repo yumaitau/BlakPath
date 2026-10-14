@@ -9,6 +9,7 @@ import {
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import type { AuditAction, ResourceType } from '@/domains/audit/events';
+import { sealApplicationFields } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { deleteObject, EVIDENCE_BUCKET, QUARANTINE_BUCKET } from '@/lib/storage/s3';
 import { dueForRetention, isRetentionResourceType } from './rules';
@@ -19,8 +20,10 @@ import { dueForRetention, isRetentionResourceType } from './rules';
  * For each active policy, finds records past their retention period that are NOT
  * under a legal hold, and purges or anonymises them. Runs with an explicit
  * organisation id. FAIL-SAFE: a held record is never touched; every action is
- * audited; the append-only audit trail itself is never a target. Batched so one
- * run is bounded — the next sweep continues where this left off.
+ * audited; the append-only audit trail itself is never a target and is never
+ * rewritten. Anonymisation therefore removes the applicant name only when the
+ * trail never stored it. Batched so one run is bounded — the next sweep
+ * continues where this left off.
  */
 
 const BATCH = 500;
@@ -114,11 +117,17 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
       for (const r of rows) {
         if (!due(r.createdAt, r.id)) continue;
         if (policy.action === 'anonymise') {
+          const sealed = await sealApplicationFields(organisationId, r.id, {
+            applicantName: '[retained-anonymised]',
+            intake: null,
+          });
           await scope.db.transaction(async (tx) => {
             await tx
               .update(applications)
               .set({
-                applicantName: '[retained-anonymised]',
+                applicantName: sealed.applicantName,
+                applicantNameBidx: sealed.applicantNameBidx,
+                applicantNameTokenBidx: sealed.applicantNameTokenBidx,
                 applicantUserId: null,
                 intake: null,
               })

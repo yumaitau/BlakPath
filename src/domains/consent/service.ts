@@ -1,10 +1,12 @@
 import { asc, eq, gt, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
-import { consentRecords } from '@/db/schema';
+import { uuidv7 } from 'uuidv7';
+import { consentRecords, organisationSettings } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
+import { openConsentRows, sealWordingSnapshot } from '@/lib/encryption/tenant-fields';
 
 /**
  * Consent service — tenant-scoped, permission-checked, audited.
@@ -44,46 +46,61 @@ export async function recordConsent(
   requireAny(subjectFromContext(ctx), CONSENT_WRITE);
   const input = recordSchema.parse(raw);
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const wordingRows = await scope.db
+    .select({ consentWording: organisationSettings.consentWording })
+    .from(organisationSettings)
+    .where(eq(organisationSettings.organisationId, scope.organisationId))
+    .limit(1);
+  const id = uuidv7();
+  const wordingSnapshot = await sealWordingSnapshot(
+    scope.organisationId,
+    id,
+    wordingRows[0]?.consentWording ?? null,
+  );
+  const stored = await scope.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(consentRecords)
       .values(
         scope.insertValues({
+          id,
           subjectUserId: input.subjectUserId,
           recordedByUserId: ctx.userId,
           purpose: input.purpose,
           status: 'granted',
           expiresAt: input.expiresAt ?? null,
           notes: input.notes ?? null,
+          wordingSnapshot,
         }),
       )
       .returning();
-    const row = must(inserted[0], 'consent record');
+    const created = must(inserted[0], 'consent record');
     await recordAudit(
       {
         action: 'consent.recorded',
         resourceType: 'consent',
-        resourceId: row.id,
+        resourceId: created.id,
         result: 'success',
       },
       tx,
     );
-    return row;
+    return created;
   });
+  const [row] = await openConsentRows(scope.organisationId, [stored]);
+  return must(row, 'consent record');
 }
 
 export async function withdrawConsent(id: string): Promise<ConsentRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_WRITE);
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const stored = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(consentRecords)
       .set({ status: 'withdrawn', revokedAt: new Date() })
       .where(scope.where(consentRecords.organisationId, eq(consentRecords.id, id)))
       .returning();
-    const row = updated[0];
-    if (!row) {
+    const withdrawn = updated[0];
+    if (!withdrawn) {
       const { AuthorizationError } = await import('@/lib/permissions/errors');
       throw new AuthorizationError('POLICY_DENIED');
     }
@@ -96,15 +113,17 @@ export async function withdrawConsent(id: string): Promise<ConsentRow> {
       },
       tx,
     );
-    return row;
+    return withdrawn;
   });
+  const [row] = await openConsentRows(scope.organisationId, [stored]);
+  return must(row, 'consent record');
 }
 
 export async function listConsents(subjectUserId: string): Promise<ConsentRow[]> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_READ);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(consentRecords)
     .where(
@@ -114,6 +133,7 @@ export async function listConsents(subjectUserId: string): Promise<ConsentRow[]>
       ),
     )
     .orderBy(asc(consentRecords.grantedAt));
+  return openConsentRows(scope.organisationId, rows);
 }
 
 /** True when a live (granted, unexpired, unrevoked) grant exists. */

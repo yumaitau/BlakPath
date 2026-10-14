@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
+import { uuidv7 } from 'uuidv7';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
@@ -7,9 +8,12 @@ import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { addJob, QueueName } from '@/lib/queues';
+import { sealWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
-import { createEndpointSchema, type CreateEndpointInput } from './schemas';
+import { assertWebhookDestinationForCreate } from './destination';
 import type { WebhookEvent } from './events';
+import { createEndpointSchema, type CreateEndpointInput } from './schemas';
+import { toWebhookEndpointView, type WebhookEndpointView } from './view';
 
 /**
  * Webhook management + event emission.
@@ -23,6 +27,15 @@ import type { WebhookEvent } from './events';
 
 export type WebhookEndpointRow = typeof webhookEndpoints.$inferSelect;
 export type WebhookDeliveryRow = typeof webhookDeliveries.$inferSelect;
+export type { WebhookEndpointView };
+
+/** Returned once, on create. `secret` is plaintext; it is not stored. */
+export interface WebhookEndpointCreated {
+  id: string;
+  url: string;
+  events: unknown;
+  secret: string;
+}
 
 const secretGen = customAlphabet(
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
@@ -34,55 +47,118 @@ function must<T>(row: T | undefined, what: string): T {
   return row;
 }
 
-/** Create an endpoint. The signing secret is returned so it can be configured. */
+/** Create an endpoint. The signing secret is returned once; only ciphertext is stored. */
 export async function createEndpoint(
   rawInput: CreateEndpointInput,
-): Promise<WebhookEndpointRow> {
+): Promise<WebhookEndpointCreated> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
 
   const input = createEndpointSchema.parse(rawInput);
+  await assertWebhookDestinationForCreate(input.url);
+  const secret = secretGen();
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  // The id is fixed before sealing so the ciphertext is bound to this row.
+  const id = uuidv7();
+  const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
+  const row = await scope.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(webhookEndpoints)
       .values(
         scope.insertValues({
+          id,
           url: input.url,
-          secret: secretGen(),
+          secretCiphertext,
           events: input.events,
           active: true,
           createdByUserId: ctx.userId,
         }),
       )
-      .returning();
-    const row = must(inserted[0], 'webhook endpoint');
+      .returning({
+        id: webhookEndpoints.id,
+        url: webhookEndpoints.url,
+        events: webhookEndpoints.events,
+      });
+    const created = must(inserted[0], 'webhook endpoint');
 
     await recordAudit(
       {
         action: 'integration.connected',
         resourceType: 'integration',
-        resourceId: row.id,
+        resourceId: created.id,
         result: 'success',
         after: { data: { url: input.url }, allow: ['url'] },
       },
       tx,
     );
-    return row;
+    return created;
   });
+  return { id: row.id, url: row.url, events: row.events, secret };
 }
 
-export async function listEndpoints(): Promise<WebhookEndpointRow[]> {
+export async function listEndpoints(): Promise<WebhookEndpointView[]> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const scope = currentScope();
-  return scope.db
-    .select()
+  const rows = await scope.db
+    .select({
+      id: webhookEndpoints.id,
+      organisationId: webhookEndpoints.organisationId,
+      url: webhookEndpoints.url,
+      events: webhookEndpoints.events,
+      active: webhookEndpoints.active,
+      createdByUserId: webhookEndpoints.createdByUserId,
+      createdAt: webhookEndpoints.createdAt,
+      updatedAt: webhookEndpoints.updatedAt,
+      deletedAt: webhookEndpoints.deletedAt,
+    })
     .from(webhookEndpoints)
     .where(
       scope.where(webhookEndpoints.organisationId, isNull(webhookEndpoints.deletedAt)),
     )
     .orderBy(desc(webhookEndpoints.createdAt));
+  return rows.map((row) => toWebhookEndpointView(row));
+}
+
+/**
+ * Replace the signing secret. The new plaintext is returned once. A missing
+ * endpoint is refused with the same error as a permission failure.
+ */
+export async function rotateEndpointSecret(
+  id: string,
+): Promise<{ id: string; secret: string }> {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'tenant:configure');
+  const secret = secretGen();
+  const scope = currentScope();
+  const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(webhookEndpoints)
+      .set({ secretCiphertext, updatedAt: new Date() })
+      .where(
+        scope.where(
+          webhookEndpoints.organisationId,
+          eq(webhookEndpoints.id, id),
+          isNull(webhookEndpoints.deletedAt),
+        ),
+      )
+      .returning({ id: webhookEndpoints.id });
+    const rotated = updated[0];
+    if (!rotated) throw new AuthorizationError('PERMISSION_DENIED');
+
+    await recordAudit(
+      {
+        action: 'integration.credentials_rotated',
+        resourceType: 'integration',
+        resourceId: rotated.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return rotated;
+  });
+  return { id: row.id, secret };
 }
 
 export async function deleteEndpoint(id: string): Promise<void> {

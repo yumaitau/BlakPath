@@ -2,6 +2,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { breakGlassRequests } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -232,7 +233,7 @@ export async function denyBreakGlass(
   return scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(breakGlassRequests)
-      .set({ status: 'denied' })
+      .set({ status: 'denied', denialReason: input.reason })
       .where(
         scope.where(
           breakGlassRequests.organisationId,
@@ -248,7 +249,7 @@ export async function denyBreakGlass(
         resourceType: 'break_glass_request',
         resourceId: requestId,
         result: 'success',
-        reason: input.reason,
+        reason: auditReason('break_glass.denied', requestId),
       },
       tx,
     );

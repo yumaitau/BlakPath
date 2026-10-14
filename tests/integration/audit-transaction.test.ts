@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AUDIT_APPEND_ONLY_TRIGGERS } from '@/db/audit-guard';
 import type { AuditResult } from '@/domains/audit';
 
 /**
@@ -28,12 +29,31 @@ integration('audit joins the business transaction', () => {
       import('drizzle-orm'),
     ]);
     if (organisationIds.length > 0) {
-      await db
-        .delete(schema.auditEvents)
-        .where(drizzle.inArray(schema.auditEvents.organisationId, organisationIds));
-      await db
-        .delete(schema.auditEvents)
-        .where(drizzle.inArray(schema.auditEvents.resourceId, organisationIds));
+      // The trail is append-only; lift the guard only for test cleanup.
+      for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
+        await db
+          .execute(
+            drizzle.sql.raw(
+              `ALTER TABLE ${trigger.table} DISABLE TRIGGER ${trigger.name}`,
+            ),
+          )
+          .catch(() => undefined);
+      }
+      try {
+        await db
+          .delete(schema.auditEvents)
+          .where(drizzle.inArray(schema.auditEvents.organisationId, organisationIds));
+      } finally {
+        for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
+          await db
+            .execute(
+              drizzle.sql.raw(
+                `ALTER TABLE ${trigger.table} ENABLE ALWAYS TRIGGER ${trigger.name}`,
+              ),
+            )
+            .catch(() => undefined);
+        }
+      }
       await db
         .delete(schema.organisations)
         .where(drizzle.inArray(schema.organisations.id, organisationIds));
@@ -139,15 +159,23 @@ integration('audit joins the business transaction', () => {
   });
 
   it('finishes 50 concurrent assignments without hanging', async () => {
-    const [{ db, sqlClient }, schema, applications, tenancy, { uuidv7 }, drizzle] =
-      await Promise.all([
-        import('@/db/client'),
-        import('@/db/schema'),
-        import('@/domains/applications'),
-        import('@/lib/tenancy/context'),
-        import('uuidv7'),
-        import('drizzle-orm'),
-      ]);
+    const [
+      { db, sqlClient },
+      schema,
+      applications,
+      organisationKeys,
+      tenancy,
+      { uuidv7 },
+      drizzle,
+    ] = await Promise.all([
+      import('@/db/client'),
+      import('@/db/schema'),
+      import('@/domains/applications'),
+      import('@/domains/organisation-keys'),
+      import('@/lib/tenancy/context'),
+      import('uuidv7'),
+      import('drizzle-orm'),
+    ]);
     closeDatabase = () => sqlClient.end({ timeout: 5 });
     const { env } = await import('@/lib/env');
     expect(env.DATABASE_POOL_MAX).toBe(5);
@@ -180,6 +208,7 @@ integration('audit joins the business transaction', () => {
       slug: `audit-assign-${orgId}`,
       status: 'active',
     });
+    await organisationKeys.ensureOrganisationKey(orgId);
     await db.insert(schema.memberships).values({
       id: membershipId,
       organisationId: orgId,

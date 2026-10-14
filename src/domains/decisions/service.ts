@@ -1,8 +1,13 @@
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { uuidv7 } from 'uuidv7';
 import { conflictDeclarations, decisions, decisionVotes } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
-import { getApplication, transitionApplication } from '@/domains/applications';
+import {
+  applyApplicationTransition,
+  getApplication,
+  recordApplicationTransitionAudit,
+} from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
   assertNotConflicted,
@@ -11,6 +16,7 @@ import {
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
+import { openDecisionRows, sealRationale } from '@/lib/encryption/tenant-fields';
 import {
   castVoteSchema,
   finaliseDecisionSchema,
@@ -19,8 +25,10 @@ import {
   type FinaliseDecisionInput,
   type ProposeDecisionInput,
 } from './schemas';
+import { DecisionWorkflowError } from './errors';
 import {
   canFinalise,
+  canProposeOnCase,
   canVote,
   tallyVotes,
   type DecisionStatus,
@@ -31,11 +39,12 @@ import {
 /**
  * Decisions service — tenant-scoped, permission-checked, audited.
  *
- * Proposing, voting and finalising are separate capabilities. Two integrity
- * gates protect the process beyond the capability check: a conflict guard keeps
- * a conflicted member out of a proposal/vote/finalisation, and finalising a
- * decision drives the application's own workflow transition to `decided`. The
- * software records the committee's decision; it never makes one.
+ * Proposing, voting and finalising are separate capabilities. Integrity gates
+ * beyond the capability check: a conflict guard keeps a conflicted member out
+ * of a proposal/vote/finalisation; a proposal is legal only once the case is
+ * ready for or in committee; finalising the decision and moving the case to
+ * `decided` commit in one transaction. The software records the committee's
+ * decision; it never makes one.
  */
 
 export type DecisionRow = typeof decisions.$inferSelect;
@@ -61,7 +70,10 @@ async function loadDecision(id: string): Promise<DecisionRow | null> {
       ),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const row = scope.assertOwned(rows[0]) ?? null;
+  if (!row) return null;
+  const [opened] = await openDecisionRows(scope.organisationId, [row]);
+  return opened ?? null;
 }
 
 /** The set of users conflicted out of an application (declared or recused). */
@@ -89,38 +101,49 @@ export async function proposeDecision(
   requirePermission(subjectFromContext(ctx), 'decision:propose');
 
   const input = proposeDecisionSchema.parse(rawInput);
-  await getApplication(applicationId); // read enforcement + audit
+  const { application } = await getApplication(applicationId); // read enforcement + audit
+  if (!canProposeOnCase(application.status)) {
+    throw new DecisionWorkflowError(application.status);
+  }
   assertNotConflicted(ctx.userId, await conflictedUserIds(applicationId));
 
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const id = uuidv7();
+  const rationale = await sealRationale(
+    scope.organisationId,
+    id,
+    input.rationale ?? null,
+  );
+  const stored = await scope.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(decisions)
       .values(
         scope.insertValues({
+          id,
           applicationId,
           proposedByUserId: ctx.userId,
           proposedOutcome: input.outcome,
-          rationale: input.rationale ?? null,
+          rationale,
           status: 'proposed',
         }),
       )
       .returning();
-    const row = must(inserted[0], 'decision');
+    const created = must(inserted[0], 'decision');
 
     await recordAudit(
       {
         action: 'decision.proposed',
         resourceType: 'decision',
-        resourceId: row.id,
+        resourceId: created.id,
         result: 'success',
         after: { data: { applicationId }, allow: ['applicationId'] },
       },
       tx,
     );
-
-    return row;
+    return created;
   });
+  const [row] = await openDecisionRows(scope.organisationId, [stored]);
+  return must(row, 'decision');
 }
 
 /** Cast or change a committee vote on a proposed decision. */
@@ -157,8 +180,8 @@ export async function castVote(
     .limit(1);
   const existing = existingRows[0];
 
-  if (existing) {
-    return scope.db.transaction(async (tx) => {
+  return scope.db.transaction(async (tx) => {
+    if (existing) {
       const updated = await tx
         .update(decisionVotes)
         .set({ choice: input.choice, note: input.note ?? null })
@@ -177,10 +200,8 @@ export async function castVote(
         tx,
       );
       return row;
-    });
-  }
+    }
 
-  return scope.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(decisionVotes)
       .values(
@@ -261,7 +282,9 @@ export async function finaliseDecision(
   assertNotConflicted(ctx.userId, await conflictedUserIds(decision.applicationId));
 
   const scope = currentScope();
-  const row = await scope.db.transaction(async (tx) => {
+  // Decision write and case transition share one transaction. If the case is
+  // not in committee, `record_decision` throws and the finalisation rolls back.
+  const committed = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(decisions)
       .set({
@@ -272,27 +295,26 @@ export async function finaliseDecision(
       })
       .where(scope.where(decisions.organisationId, eq(decisions.id, decisionId)))
       .returning();
-    const updatedRow = must(updated[0], 'decision');
-
+    const row = must(updated[0], 'decision');
+    const transition = await applyApplicationTransition(
+      tx,
+      decision.applicationId,
+      'record_decision',
+      { note: input.note },
+    );
+    await recordApplicationTransitionAudit('record_decision', transition, tx);
     await recordAudit(
       {
         action: 'decision.finalised',
         resourceType: 'decision',
         resourceId: decisionId,
         result: 'success',
-        reason: input.note ?? null,
+        reason: input.note ? 'decision.finalise_note' : null,
         after: { data: { outcome: input.outcome }, allow: ['outcome'] },
       },
       tx,
     );
-
-    return updatedRow;
-  });
-
-  // Drive the application's own workflow. This re-checks decision:finalise and
-  // that the application is in the committee stage (throws otherwise).
-  await transitionApplication(decision.applicationId, 'record_decision', {
-    note: input.note,
+    return { row, transition };
   });
 
   // Notify subscribed webhook endpoints (best-effort; never fails the decision).
@@ -307,14 +329,15 @@ export async function finaliseDecision(
     correlationId: ctx.correlationId,
   });
 
-  return row;
+  const [opened] = await openDecisionRows(scope.organisationId, [committed.row]);
+  return must(opened, 'decision');
 }
 
 /** List decisions for an application the actor may read. */
 export async function listDecisions(applicationId: string): Promise<DecisionRow[]> {
   await getApplication(applicationId);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(decisions)
     .where(
@@ -325,6 +348,7 @@ export async function listDecisions(applicationId: string): Promise<DecisionRow[
       ),
     )
     .orderBy(desc(decisions.createdAt));
+  return openDecisionRows(scope.organisationId, rows);
 }
 
 /** Load a decision with its votes and a tally (readable to application readers). */

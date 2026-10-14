@@ -1,5 +1,7 @@
 import { desc, eq, isNull } from 'drizzle-orm';
+import { uuidv7 } from 'uuidv7';
 import { familyLinks } from '@/db/schema';
+import { openFamilyRows, sealFamilyFields } from '@/lib/encryption/tenant-fields';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
@@ -51,7 +53,10 @@ async function loadLink(id: string): Promise<FamilyLinkRow | null> {
       ),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const row = scope.assertOwned(rows[0]) ?? null;
+  if (!row) return null;
+  const [opened] = await openFamilyRows(scope.organisationId, [row]);
+  return opened ?? null;
 }
 
 /** Request that a family connection be recorded for an application. */
@@ -67,28 +72,35 @@ export async function requestFamilyLink(
   await getApplication(applicationId);
 
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const id = uuidv7();
+  const sealed = await sealFamilyFields(scope.organisationId, id, {
+    relativeName: input.relativeName,
+    community: input.community ?? null,
+    notes: input.notes ?? null,
+  });
+  const stored = await scope.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(familyLinks)
       .values(
         scope.insertValues({
+          id,
           applicationId,
           requestedByUserId: ctx.userId,
           relationship: input.relationship,
-          relativeName: input.relativeName,
-          community: input.community ?? null,
-          notes: input.notes ?? null,
+          relativeName: sealed.relativeName,
+          community: sealed.community,
+          notes: sealed.notes,
           status: 'requested',
         }),
       )
       .returning();
-    const row = must(inserted[0], 'family link');
+    const created = must(inserted[0], 'family link');
 
     await recordAudit(
       {
         action: 'family_link.created',
         resourceType: 'family_link',
-        resourceId: row.id,
+        resourceId: created.id,
         result: 'success',
         after: {
           data: { applicationId, relationship: input.relationship },
@@ -97,9 +109,10 @@ export async function requestFamilyLink(
       },
       tx,
     );
-
-    return row;
+    return created;
   });
+  const [row] = await openFamilyRows(scope.organisationId, [stored]);
+  return must(row, 'family link');
 }
 
 /** Shared approve/dispute path. `next` is the resulting decided status. */
@@ -121,7 +134,7 @@ async function decideLink(
   assertDifferentActor(ctx.userId, link.requestedByUserId);
 
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const stored = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(familyLinks)
       .set({
@@ -132,7 +145,7 @@ async function decideLink(
       })
       .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
       .returning();
-    const row = must(updated[0], 'family link');
+    const decided = must(updated[0], 'family link');
 
     await recordAudit(
       {
@@ -140,15 +153,16 @@ async function decideLink(
         resourceType: 'family_link',
         resourceId: linkId,
         result: 'success',
-        reason: input.note ?? null,
+        reason: input.note ? 'family_link.decision_note' : null,
         before: { data: { status: 'requested' }, allow: ['status'] },
         after: { data: { status: next }, allow: ['status'] },
       },
       tx,
     );
-
-    return row;
+    return decided;
   });
+  const [row] = await openFamilyRows(scope.organisationId, [stored]);
+  return must(row, 'family link');
 }
 
 /** Approve a requested family link (approver must differ from the requester). */
@@ -182,13 +196,13 @@ export async function withdrawFamilyLink(linkId: string): Promise<FamilyLinkRow>
   }
 
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const stored = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(familyLinks)
       .set({ status: 'withdrawn' })
       .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
       .returning();
-    const row = must(updated[0], 'family link');
+    const withdrawn = must(updated[0], 'family link');
 
     await recordAudit(
       {
@@ -199,9 +213,10 @@ export async function withdrawFamilyLink(linkId: string): Promise<FamilyLinkRow>
       },
       tx,
     );
-
-    return row;
+    return withdrawn;
   });
+  const [row] = await openFamilyRows(scope.organisationId, [stored]);
+  return must(row, 'family link');
 }
 
 /** List family links for an application the actor may read. */
@@ -210,7 +225,7 @@ export async function listFamilyLinks(applicationId: string): Promise<FamilyLink
   await getApplication(applicationId);
 
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(familyLinks)
     .where(
@@ -221,4 +236,5 @@ export async function listFamilyLinks(applicationId: string): Promise<FamilyLink
       ),
     )
     .orderBy(desc(familyLinks.createdAt));
+  return openFamilyRows(scope.organisationId, rows);
 }

@@ -1,5 +1,10 @@
 import { headers } from 'next/headers';
+import { headersWithTrustedClientIp } from '@/lib/http/client-ip';
+import { isAuthenticationStale, STEP_UP_WINDOWS } from './step-up-policy';
+import { enforceStaffSessionLifetime } from './staff-session';
 import { auth } from './index';
+
+export { STEP_UP_WINDOWS };
 
 /**
  * Server-side session helpers for React Server Components, route handlers and
@@ -19,16 +24,47 @@ export type ServerSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSe
 
 export type SessionUser = ServerSession['user'];
 
+function sessionInstant(value: Date | string | null | undefined): Date | null {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
 /**
  * Reads the current session for the incoming request, or `null` when the
  * caller is unauthenticated. Safe to call from RSCs. Because RSCs cannot set
  * cookies, any cookie-cache refresh is deferred until the next mutating
  * interaction (route handler / server action) — this returns the current
  * verified session either way.
+ *
+ * When the session has an active organisation, a 12-hour absolute cap and the
+ * tenant idle timeout are applied here. An expired staff session is deleted
+ * and this returns null.
  */
 export async function getServerSession(): Promise<ServerSession | null> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  return session ?? null;
+  const session = await auth.api.getSession({
+    headers: headersWithTrustedClientIp(new Headers(await headers())),
+  });
+  if (!session) return null;
+
+  const row = session.session as {
+    activeOrganisationId?: string | null;
+    updatedAt?: Date | string | null;
+    lastAuthenticatedAt?: Date | string | null;
+  };
+  const organisationId = row.activeOrganisationId;
+  if (!organisationId) return session;
+
+  const createdAt = sessionInstant(session.session.createdAt);
+  if (!createdAt) return null;
+  const lifetime = await enforceStaffSessionLifetime({
+    sessionId: session.session.id,
+    organisationId,
+    createdAt,
+    lastActivityAt: sessionInstant(row.updatedAt) ?? createdAt,
+  });
+  if (lifetime === 'expired') return null;
+  return session;
 }
 
 /**
@@ -93,33 +129,22 @@ export async function requireUser(): Promise<SessionUser> {
  * reading, but must never be sufficient on its own to perform an irreversible
  * or authority-bearing act.
  *
- * Freshness is measured from the session's `createdAt`: Better Auth mints a new
- * session on password sign-in and after a successful second factor, so a
- * genuine re-authentication resets this clock. This complements the auth
- * config's `session.freshAge`.
+ * Freshness is measured from `lastAuthenticatedAt` when set, otherwise
+ * `createdAt`. Re-authentication mints a new session and stamps
+ * `lastAuthenticatedAt`, which resets this clock. Rows written before that
+ * column was populated fall back to `createdAt`. Sensitive routes use
+ * `STEP_UP_ROUTES` rather than `session.freshAge`.
  *
  * @param maxAgeSeconds Maximum allowed age of the authentication, in seconds.
  * @returns The current, sufficiently-fresh session.
  */
 export async function requireRecentAuth(maxAgeSeconds: number): Promise<ServerSession> {
   const session = await requireSession();
-  const authenticatedAt = session.session.createdAt;
-  const ageSeconds = (Date.now() - new Date(authenticatedAt).getTime()) / 1000;
-  if (!Number.isFinite(ageSeconds) || ageSeconds > maxAgeSeconds) {
+  const row = session.session as { lastAuthenticatedAt?: Date | string | null };
+  const authenticatedAt =
+    sessionInstant(row.lastAuthenticatedAt) ?? sessionInstant(session.session.createdAt);
+  if (!authenticatedAt || isAuthenticationStale(authenticatedAt, maxAgeSeconds)) {
     throw new StepUpRequiredError(maxAgeSeconds);
   }
   return session;
 }
-
-/**
- * Common step-up windows, in seconds. Named so call sites read intent rather
- * than magic numbers. Values are intentionally short.
- */
-export const STEP_UP_WINDOWS = {
-  /** Break-glass activation and permission/role changes: 5 minutes. */
-  privileged: 5 * 60,
-  /** Evidence export and certificate signing: 10 minutes. */
-  sensitiveAction: 10 * 60,
-  /** Ordinary destructive actions (soft-delete etc.): 15 minutes. */
-  destructive: 15 * 60,
-} as const;

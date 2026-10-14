@@ -1,5 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+import { requireRecentAuth } from '@/lib/auth/session';
+import { STEP_UP_ROUTES } from '@/lib/auth/step-up-policy';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
 import { createSsoBinding, listSsoBindings } from '@/domains/sso';
 
@@ -15,6 +17,7 @@ export async function GET(): Promise<Response> {
 
 export async function POST(request: NextRequest): Promise<Response> {
   try {
+    await requireRecentAuth(STEP_UP_ROUTES['POST /api/sso/providers']);
     const body = (await request.json()) as {
       providerKey: string;
       issuer: string;

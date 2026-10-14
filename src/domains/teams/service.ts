@@ -1,4 +1,5 @@
 import { and, asc, eq, exists, isNull, or } from 'drizzle-orm';
+import { uuidv7 } from 'uuidv7';
 import { clients, groupMemberships, groups, teamMemberships, teams } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
@@ -10,6 +11,7 @@ import {
   subjectFromContext,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { openClientRows, sealClientContacts } from '@/lib/encryption/tenant-fields';
 import {
   addGroupMemberSchema,
   addTeamMemberSchema,
@@ -187,32 +189,41 @@ export async function createClient(raw: CreateClientInput): Promise<ClientRow> {
   requirePermission(subjectFromContext(ctx), 'client:create');
   const input = createClientSchema.parse(raw);
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const id = uuidv7();
+  const sealed = await sealClientContacts(scope.organisationId, id, {
+    contactEmail: input.contactEmail ?? null,
+    contactPhone: input.contactPhone ?? null,
+    notes: input.notes ?? null,
+  });
+  const stored = await scope.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(clients)
       .values(
         scope.insertValues({
+          id,
           displayName: input.displayName,
-          contactEmail: input.contactEmail ?? null,
-          contactPhone: input.contactPhone ?? null,
+          contactEmail: sealed.contactEmail,
+          contactPhone: sealed.contactPhone,
           linkedUserId: input.linkedUserId ?? null,
           assignedTeamId: input.assignedTeamId ?? null,
-          notes: input.notes ?? null,
+          notes: sealed.notes,
         }),
       )
       .returning();
-    const row = must(inserted[0], 'client');
+    const created = must(inserted[0], 'client');
     await recordAudit(
       {
         action: 'client.created',
         resourceType: 'client',
-        resourceId: row.id,
+        resourceId: created.id,
         result: 'success',
       },
       tx,
     );
-    return row;
+    return created;
   });
+  const [row] = await openClientRows(scope.organisationId, [stored]);
+  return must(row, 'client');
 }
 
 export async function listClients(): Promise<ClientRow[]> {
@@ -239,7 +250,7 @@ export async function listClients(): Promise<ClientRow[]> {
             ),
         ),
       );
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(clients)
     .where(
@@ -251,6 +262,7 @@ export async function listClients(): Promise<ClientRow[]> {
     )
     .orderBy(asc(clients.displayName))
     .limit(500);
+  return openClientRows(scope.organisationId, rows);
 }
 
 export async function assignClient(
@@ -261,14 +273,14 @@ export async function assignClient(
   requirePermission(subjectFromContext(ctx), 'client:assign-team');
   const input = assignClientSchema.parse(raw);
   const scope = currentScope();
-  return scope.db.transaction(async (tx) => {
+  const stored = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(clients)
       .set({ assignedTeamId: input.assignedTeamId })
       .where(scope.where(clients.organisationId, eq(clients.id, id)))
       .returning();
-    const row = updated[0];
-    if (!row) throw new AuthorizationError('POLICY_DENIED');
+    const assigned = updated[0];
+    if (!assigned) throw new AuthorizationError('POLICY_DENIED');
     await recordAudit(
       {
         action: 'client.assigned',
@@ -278,6 +290,9 @@ export async function assignClient(
       },
       tx,
     );
-    return row;
+    return assigned;
   });
+  const [row] = await openClientRows(scope.organisationId, [stored]);
+  if (!row) throw new AuthorizationError('POLICY_DENIED');
+  return row;
 }
