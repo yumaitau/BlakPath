@@ -9,6 +9,7 @@ import { malwareScanBackoffStrategy } from '@/lib/queues/scan-policy';
 import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
 import { startKeyHealthLoop } from './key-health-loop';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
+import { isPlatformAuditJob } from './audit-verify';
 import { queueFailureSignal } from './operational-signals';
 import { startSignatureAgeMonitor } from './signature-age-monitor';
 import { startAuthEmailWorker } from './auth-email';
@@ -34,7 +35,9 @@ import {
  *
  * Security posture: this process holds privileged infrastructure access. It
  * performs NO identity determination — see `worker/processors.ts`. Every job is
- * tenant-bound (`TenantJob.organisationId`). Full processors (malware scan,
+ * tenant-bound (`TenantJob.organisationId`), except the platform audit schedule,
+ * whose `platform` sentinel maps to the null-organisation chain (see
+ * `isPlatformAuditJob`). Full processors (malware scan,
  * certificate/export rendering, email, audit verification, retention, webhooks)
  * land in later phases.
  */
@@ -59,6 +62,10 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const worker = new Worker<TenantJob>(
     queueName,
     async (job, token) => {
+      // The platform audit chain has no tenant: no status or key gate applies.
+      if (isPlatformAuditJob(queueName, job.data)) {
+        return processor(job, childLogger);
+      }
       // Drop work for a suspended or closed organisation instead of retrying
       // it. A lookup failure still throws, so an outage is retried.
       if (!(await isOrganisationAcceptingWork(job.data.organisationId))) {
