@@ -7,8 +7,20 @@ region.
 
 ## Release gate
 
-- [ ] Run `pnpm release:check` in the exact production web and worker runtime
-      environments; attach the successful key-only output to the release record.
+The gate checks the process environment and prints failing keys, never values.
+Beyond the checks below it requires an ap-southeast-2 KMS key ARN or alias for CoA signing
+(`COA_SIGNING_KEY_ID`) and rejects `COA_SIGNING_LOCAL_KEY_PEM`.
+`OTEL_EXPORTER_OTLP_ENDPOINT` may be unset (tracing stays off); when set it must
+be HTTPS and non-local. Web and worker run the same rules at boot when
+`NODE_ENV=production`, except the `DATABASE_MIGRATION_URL` checks: runtime pods
+never mount the migrator secret.
+
+- [ ] Roll out with `scripts/eks-deploy.sh <image-tag>` or the Deploy workflow.
+      That runs `node release-check.cjs` in the candidate web and worker images
+      against the production ConfigMap, runtime Secret and migrator URL, and
+      applies workloads only after the Job exits 0. Attach the key-only output to
+      the release record. `pnpm release:check` is the same gate on a machine that
+      has the source tree.
       The check fails when `PILOT_BOOTSTRAP_TOKEN` is set. Leave that variable
       unset. The web and worker processes also refuse to boot if it is set.
       The gate requires `PLATFORM_KMS_KEY_ARN` and rejects `ENCRYPTION_LOCAL_KEY`
