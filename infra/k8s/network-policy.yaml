@@ -21,7 +21,7 @@
 #   blakpath-migrate       jobs/migrate.yaml (blakpath-migrate-<sha>, per release)
 #   blakpath-job           jobs/seed.yaml
 #   blakpath-release-check release-check/job.yaml (pre-deploy gate)
-#   blakpath-admin-job     jobs/invite-admin.yaml
+#   blakpath-admin-job     jobs/invite-admin.yaml, jobs/provision-organisation.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -278,7 +278,7 @@ spec:
         - protocol: TCP
           port: 5432
 ---
-# invite-admin job: Postgres, plus the SES v2 send and the KMS/STS calls the
+# invite-admin and provision-organisation jobs: Postgres, plus the SES v2 send and the KMS/STS calls the
 # blakpath-web identity makes. No Redis, no ClamAV, no general internet.
 apiVersion: networking.k8s.aws/v1alpha1
 kind: ApplicationNetworkPolicy

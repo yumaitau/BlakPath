@@ -193,6 +193,10 @@ describe('blakpath network policy', () => {
 
     const admin = policy('blakpath-admin-job-egress');
     expect(admin).toContain('app.kubernetes.io/name: blakpath-admin-job');
+    // provision-organisation shares the admin-job label and its egress.
+    expect(read('infra/k8s/jobs/provision-organisation.yaml')).toContain(
+      'app.kubernetes.io/name: blakpath-admin-job',
+    );
     expect(admin).toContain('email.ap-southeast-2.amazonaws.com');
     expect(admin).toContain('port: 5432');
     expect(admin).not.toContain('port: 6379');

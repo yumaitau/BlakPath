@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   text,
+  timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { users } from './auth';
@@ -101,6 +102,13 @@ export const organisationSettings = pgTable(
     staffIdleTimeoutSeconds: integer('staff_idle_timeout_seconds')
       .notNull()
       .default(45 * 60),
+    /**
+     * Identifier of the signed services agreement. Together with
+     * `agreementSignedAt` this is a human attestation that counsel's agreement
+     * is signed. The document itself is not stored here.
+     */
+    agreementReference: text('agreement_reference'),
+    agreementSignedAt: timestamp('agreement_signed_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [

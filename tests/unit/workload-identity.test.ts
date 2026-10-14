@@ -102,6 +102,7 @@ const podFiles = [
   'infra/k8s/jobs/migrate.yaml',
   'infra/k8s/jobs/seed.yaml',
   'infra/k8s/jobs/invite-admin.yaml',
+  'infra/k8s/jobs/provision-organisation.yaml',
   'infra/k8s/release-check/job.yaml',
 ];
 
@@ -128,6 +129,7 @@ describe('pod security and workload identities', () => {
       'blakpath-clamav-mirror',
       'blakpath-invite-admin',
       'blakpath-migrate',
+      'blakpath-provision-REPLACE_SLUG',
       'blakpath-release-check',
       'blakpath-seed',
       'blakpath-worker',
@@ -153,6 +155,7 @@ describe('pod security and workload identities', () => {
       'blakpath-migrate',
       'blakpath-seed',
       'blakpath-invite-admin',
+      'blakpath-provision-REPLACE_SLUG',
     ]) {
       const pod = pods.find((candidate) => candidate.name === name);
       expect(pod?.doc, name).toContain('mountPath: /tmp');
@@ -201,6 +204,11 @@ describe('pod security and workload identities', () => {
     // Sends mail through SES, so it borrows the web identity.
     const invite = pods.find((pod) => pod.name === 'blakpath-invite-admin');
     expect(invite?.doc).toContain('serviceAccountName: blakpath-web');
+    const provision = pods.find((pod) => pod.name === 'blakpath-provision-REPLACE_SLUG');
+    expect(provision?.doc).toContain('serviceAccountName: blakpath-web');
+    expect(provision?.doc).toContain('app.kubernetes.io/name: blakpath-admin-job');
+    expect(provision?.doc).not.toContain('DATABASE_MIGRATION_URL');
+    expect(provision?.doc).not.toContain('blakpath-migrator');
 
     const rendered = podFiles.map((path) => read(path)).join('\n');
     expect(rendered).not.toMatch(/serviceAccountName: blakpath$/m);
