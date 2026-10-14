@@ -20,8 +20,8 @@ import {
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
-import { queueTenantEmail } from '@/lib/email/queue';
-import { env } from '@/lib/env';
+import { queueInvitationEmail } from '@/lib/email/queue';
+import { sealInvitationToken } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError, isAuthorizationError } from '@/lib/permissions/errors';
@@ -69,7 +69,7 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
       resourceType: 'user',
       resourceId: existing.id,
       result: 'denied',
-      reason: 'account already exists — sign in instead',
+      reason: 'auth.account_exists',
       organisationId: invitation.organisationId,
     });
     throw new AuthorizationError('POLICY_DENIED');
@@ -96,7 +96,7 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
     resourceType: 'user',
     resourceId: userId,
     result: 'success',
-    reason: 'invite-bound signup',
+    reason: 'auth.invite_signup',
     organisationId: invitation.organisationId,
   });
   return { userId };
@@ -219,29 +219,16 @@ async function loadAssignableRole(
 async function queueMembershipInvitationEmail(input: {
   invitationId: string;
   organisationId: string;
-  organisationName: string;
   correlationId: string;
-  email: string;
-  roleName: string;
-  token: string;
+  generation: string;
 }): Promise<void> {
-  const joinUrl = `${env.APP_URL}/join/${input.token}`;
   try {
-    await queueTenantEmail({
+    await queueInvitationEmail({
       organisationId: input.organisationId,
       correlationId: input.correlationId,
-      to: input.email,
-      subject: `Invitation to join ${input.organisationName} in BlakPath`,
-      text: [
-        `You have been invited to join ${input.organisationName} as ${input.roleName}.`,
-        '',
-        'Sign in with this email address and review the invitation:',
-        joinUrl,
-        '',
-        'The link expires in 14 days. If you were not expecting this invitation, you can ignore it.',
-        '',
-        'BlakPath',
-      ].join('\n'),
+      invitationId: input.invitationId,
+      kind: 'membership',
+      generation: input.generation,
     });
   } catch (error) {
     logger.error(
@@ -467,6 +454,12 @@ export async function createMembershipInvitation(input: {
       teamId = team.id;
     }
 
+    const tokenSeal = await sealInvitationToken(
+      scope.organisationId,
+      'membership_invitations',
+      invitationId,
+      token,
+    );
     await db.transaction(async (tx) => {
       await tx
         .update(membershipInvitations)
@@ -485,6 +478,7 @@ export async function createMembershipInvitation(input: {
         roleId: role.id,
         teamId,
         tokenHash: hashToken(token),
+        tokenSeal,
         invitedByUserId,
         status: 'pending',
         expiresAt,
@@ -502,11 +496,8 @@ export async function createMembershipInvitation(input: {
     await queueMembershipInvitationEmail({
       invitationId,
       organisationId: scope.organisationId,
-      organisationName: organisation.name,
       correlationId: ctx.correlationId,
-      email,
-      roleName: role.name,
-      token,
+      generation: String(now.getTime()),
     });
     return {
       invitation: {
@@ -543,7 +534,6 @@ export async function resendMembershipInvitation(id: string): Promise<{
         status: membershipInvitations.status,
         roleId: membershipInvitations.roleId,
         roleName: roles.name,
-        organisationName: organisations.legalName,
       })
       .from(membershipInvitations)
       .innerJoin(roles, eq(membershipInvitations.roleId, roles.id))
@@ -565,9 +555,20 @@ export async function resendMembershipInvitation(id: string): Promise<{
     const token = nanoid(36);
     const lastSentAt = new Date();
     const expiresAt = new Date(lastSentAt.getTime() + INVITATION_LIFETIME_MS);
+    const tokenSeal = await sealInvitationToken(
+      scope.organisationId,
+      'membership_invitations',
+      id,
+      token,
+    );
     await db
       .update(membershipInvitations)
-      .set({ tokenHash: hashToken(token), expiresAt, lastSentAt })
+      .set({
+        tokenHash: hashToken(token),
+        tokenSeal,
+        expiresAt,
+        lastSentAt,
+      })
       .where(
         and(
           eq(membershipInvitations.id, id),
@@ -585,11 +586,8 @@ export async function resendMembershipInvitation(id: string): Promise<{
     await queueMembershipInvitationEmail({
       invitationId: id,
       organisationId: scope.organisationId,
-      organisationName: current.organisationName,
       correlationId: ctx.correlationId,
-      email: current.email,
-      roleName: current.roleName,
-      token,
+      generation: String(lastSentAt.getTime()),
     });
     return {
       invitation: {

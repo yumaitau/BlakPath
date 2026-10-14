@@ -72,7 +72,7 @@ describe('application import', () => {
       expect.objectContaining({
         action: 'import.completed',
         result: 'success',
-        reason: expect.stringContaining('dry-run'),
+        reason: 'import.dry_run',
       }),
     );
   });
@@ -100,7 +100,11 @@ describe('application import', () => {
       priority: 'normal',
     });
     expect(audit.recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'import.completed', result: 'failure' }),
+      expect.objectContaining({
+        action: 'import.completed',
+        result: 'failure',
+        reason: 'import.committed',
+      }),
     );
   });
 });

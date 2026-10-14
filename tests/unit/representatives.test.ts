@@ -140,7 +140,7 @@ describe('representative access', () => {
       expect.objectContaining({
         action: 'representative.activated',
         result: 'denied',
-        reason: 'consent lapsed',
+        reason: 'representative.consent_lapsed',
       }),
     );
 

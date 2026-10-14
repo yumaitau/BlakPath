@@ -29,7 +29,14 @@ minio-init`) or S3 staging buckets. Without it the test skips; the path is
    resource conflict warning.
 5. `sso-consent.spec.ts` — SSO bindings gating, consent gate on
    representative access, SCIM-off denial without enumeration.
-6. Existing kept: `core-staff-flow`, `product-workflows`,
+6. `sso-sign-in.spec.ts` — federated sign-in against an in-test mock
+   Entra-style IdP (PKCE + nonce enforced): disabled binding denied with a
+   generic error and audited, successful sign-in lands in the bound tenant
+   with permissions unchanged, forged nonce denied and audited, callback
+   without the browser-bound flow cookie refused. Needs
+   `SSO_ENTRA_CLIENT_ID`, `SSO_ENTRA_CLIENT_SECRET`, `SSO_STATE_SECRET`
+   (mock values; CI sets them) or it skips.
+7. Existing kept: `core-staff-flow`, `product-workflows`,
    `membership-lifecycle`, `api-boundaries`, `accessibility`.
 
 ## Rules

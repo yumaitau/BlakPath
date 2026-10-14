@@ -1,164 +1,88 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetEnvCache } from '@/lib/env';
-import { script } from './helpers/scripted-db';
+import { describe, expect, it } from 'vitest';
+import { AuthorizationError } from '@/lib/permissions/errors';
+import { enforceScimRateLimit } from '@/domains/scim/rate-limit';
+import {
+  diffRoleIds,
+  mapGroupsToRoles,
+  scimControllableRoles,
+} from '@/domains/scim/roles';
+import { createScimCredentialSchema } from '@/domains/scim/schemas';
+import {
+  generateScimToken,
+  hashScimToken,
+  looksLikeScimToken,
+  scimDisplayPrefix,
+  SCIM_TOKEN_PREFIX,
+} from '@/domains/scim/tokens';
 
-const TOKEN = 'scim-test-token-must-be-32-characters';
-const ORG = '00000000-0000-4000-8000-0000000000aa';
-
-const audit = vi.hoisted(() => ({ recordAudit: vi.fn(async () => undefined) }));
-
-vi.mock('@/db/client', async () => {
-  const { scriptedDatabase } = await import('./helpers/scripted-db');
-  return { db: scriptedDatabase() };
-});
-
-vi.mock('@/domains/audit/service', () => ({
-  recordAudit: audit.recordAudit,
-}));
-
-const { provisionScimUser, setScimUserActive, verifyScimBearer } =
-  await import('@/domains/scim');
-const { AuthorizationError } = await import('@/lib/permissions/errors');
-
-function request(authorization?: string): Request {
-  return new Request('https://council.example/scim/Users', {
-    headers: authorization ? { authorization } : {},
-  });
-}
-
-beforeEach(() => {
-  script.reset();
-  audit.recordAudit.mockClear();
-  process.env.SCIM_BEARER_TOKEN = TOKEN;
-  __resetEnvCache();
-});
-
-describe('SCIM bearer', () => {
-  it('denies every request when SCIM is off or the bearer does not match', () => {
-    delete process.env.SCIM_BEARER_TOKEN;
-    __resetEnvCache();
-    expect(() => verifyScimBearer(request(`Bearer ${TOKEN}`))).toThrow(
-      AuthorizationError,
-    );
-
-    process.env.SCIM_BEARER_TOKEN = TOKEN;
-    __resetEnvCache();
-    expect(() => verifyScimBearer(request())).toThrow(AuthorizationError);
-    expect(() => verifyScimBearer(request(`bearer ${TOKEN}`))).toThrow(
-      AuthorizationError,
-    );
-    expect(() =>
-      verifyScimBearer(request('Bearer wrong-token-value-padded-0000')),
-    ).toThrow(AuthorizationError);
-    expect(() => verifyScimBearer(request(`Bearer ${TOKEN}`))).not.toThrow();
+describe('scim token primitives', () => {
+  it('hashes deterministically and never echoes the token', () => {
+    const token = generateScimToken();
+    const hash = hashScimToken(token);
+    expect(hash).toBe(hashScimToken(token));
+    expect(hash).not.toBe(hashScimToken(`${token}x`));
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hash).not.toBe(token);
+    expect(looksLikeScimToken(token)).toBe(true);
+    expect(looksLikeScimToken('bp_not_a_scim_token_value')).toBe(false);
+    expect(scimDisplayPrefix(token)).toBe(token.slice(0, SCIM_TOKEN_PREFIX.length + 6));
+    expect(scimDisplayPrefix(token).startsWith(SCIM_TOKEN_PREFIX)).toBe(true);
   });
 });
 
-describe('SCIM provisioning', () => {
-  it('rejects a payload that is not a user before any write', async () => {
-    await expect(provisionScimUser(ORG, { userName: 'not-an-email' })).rejects.toThrow();
-    expect(script.ops).toEqual([]);
-  });
-
-  it('refuses to provision into an organisation that is not active', async () => {
-    script.results.push([{ id: ORG, status: 'suspended' }]);
-    await expect(
-      provisionScimUser(ORG, { userName: 'staff@council.example' }),
-    ).rejects.toBeInstanceOf(AuthorizationError);
-    expect(script.ops).toEqual(['select']);
-    expect(audit.recordAudit).not.toHaveBeenCalled();
-  });
-
-  it('creates a suspended membership and ignores groups outside the role allowlist', async () => {
-    script.results.push([{ id: ORG, status: 'active' }], [], [], [], []);
-
-    const created = await provisionScimUser(ORG, {
-      userName: 'Staff@Council.Example',
-      active: false,
-      name: { formatted: '  Staff Member  ' },
-      groups: [{ display: 'Platform Owner' }, { display: 'intake-officer' }],
-    });
-
-    expect(created.userName).toBe('staff@council.example');
-    const userInsert = script.writes.find(
-      (write) =>
-        write.op === 'values' &&
-        typeof write.payload === 'object' &&
-        write.payload !== null &&
-        'email' in write.payload,
-    );
-    expect(userInsert?.payload).toMatchObject({
-      email: 'staff@council.example',
-      name: 'Staff Member',
-      emailVerified: true,
-    });
-    const membershipInsert = script.writes.find(
-      (write) =>
-        write.op === 'values' &&
-        typeof write.payload === 'object' &&
-        write.payload !== null &&
-        'status' in write.payload,
-    );
-    expect(membershipInsert?.payload).toMatchObject({
-      organisationId: ORG,
-      status: 'suspended',
-    });
-    // intake-officer is allowlisted, so roles are loaded. Platform Owner is not a slug.
-    expect(script.ops).toEqual([
-      'select',
-      'select',
-      'insert',
-      'select',
-      'insert',
-      'select',
+describe('scim role mapping', () => {
+  it('keeps allow-listed slugs and drops organisation-admin unless opted in', () => {
+    const input = {
+      userName: 'person@example.test',
+      groups: [
+        { display: 'case-officer' },
+        { display: 'organisation-admin' },
+        { display: 'platform-operator' },
+        { display: 'Case Officer' },
+      ],
+      entitlements: [{ value: 'case-officer' }, { value: 'intake-officer' }],
+    };
+    expect(mapGroupsToRoles(input, false)).toEqual(['case-officer', 'intake-officer']);
+    expect(mapGroupsToRoles(input, true)).toEqual([
+      'case-officer',
+      'organisation-admin',
+      'intake-officer',
     ]);
-    expect(audit.recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'scim provision', organisationId: ORG }),
-    );
+    expect(scimControllableRoles(false)).not.toContain('organisation-admin');
+    expect(scimControllableRoles(true)).toContain('organisation-admin');
   });
 
-  it('maps an allowlisted group onto an existing tenant role and no other role', async () => {
-    const roleId = '00000000-0000-4000-8000-000000000010';
-    script.results.push(
-      [{ id: ORG, status: 'active' }],
-      [{ id: 'user-1' }],
-      [{ id: 'membership-1' }],
-      [],
-      [{ id: roleId, slug: 'intake-officer' }],
-      [],
-    );
-
-    await provisionScimUser(ORG, {
-      userName: 'staff@council.example',
-      groups: [{ display: 'intake-officer' }, { display: 'super-admin' }],
+  it('diffs role ids so a removed group is a removal', () => {
+    expect(diffRoleIds(['case', 'intake'], ['intake'])).toEqual({
+      add: [],
+      remove: ['case'],
     });
-
-    expect(script.writes.filter((write) => write.op === 'set')[0]?.payload).toMatchObject(
-      {
-        status: 'active',
-      },
-    );
-    const roleWrite = script.writes.filter((write) => write.op === 'values').at(-1);
-    expect(roleWrite?.payload).toMatchObject({ membershipId: 'membership-1', roleId });
-    expect(script.writes.filter((write) => write.op === 'values')).toHaveLength(1);
+    expect(diffRoleIds(['intake'], ['intake', 'records'])).toEqual({
+      add: ['records'],
+      remove: [],
+    });
   });
+});
 
-  it('suspends and restores by email, and refuses an unknown user', async () => {
-    script.results.push([]);
-    await expect(
-      setScimUserActive(ORG, 'missing@council.example', false),
-    ).rejects.toBeInstanceOf(AuthorizationError);
+describe('createScimCredentialSchema', () => {
+  it('defaults the organisation-admin opt-in to off', () => {
+    const parsed = createScimCredentialSchema.parse({ name: 'Council IdP' });
+    expect(parsed.allowOrganisationAdmin).toBe(false);
+    expect(parsed.expiresInDays).toBe(365);
+    expect(
+      createScimCredentialSchema.parse({
+        name: 'Council IdP',
+        allowOrganisationAdmin: true,
+      }).allowOrganisationAdmin,
+    ).toBe(true);
+  });
+});
 
-    script.results.push([{ id: 'user-1' }], []);
-    await expect(
-      setScimUserActive(ORG, 'Staff@Council.Example', false),
-    ).rejects.toBeInstanceOf(AuthorizationError);
-
-    script.results.push([{ id: 'user-1' }], [{ id: 'membership-1' }]);
-    await setScimUserActive(ORG, 'staff@council.example', true);
-    expect(script.writes.at(-1)?.payload).toMatchObject({ status: 'active' });
-    expect(audit.recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'membership.reinstated', reason: 'scim' }),
-    );
+describe('scim rate limit', () => {
+  it('rejects once the bucket is over the max and resets after the window', () => {
+    const key = `unit-${generateScimToken()}`;
+    expect(() => enforceScimRateLimit(key, 1_000, 1)).not.toThrow();
+    expect(() => enforceScimRateLimit(key, 1_500, 1)).toThrow(AuthorizationError);
+    expect(() => enforceScimRateLimit(key, 1_000 + 60_000, 1)).not.toThrow();
   });
 });

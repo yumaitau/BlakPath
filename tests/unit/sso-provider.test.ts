@@ -14,7 +14,11 @@ const stub: SsoProvider = {
   displayName: 'Stub',
   protocol: 'oidc',
   async start() {
-    return { redirectUrl: 'https://idp.example/start', state: 'state-1' };
+    return {
+      redirectUrl: 'https://idp.example/start',
+      state: 'state-1',
+      transaction: 'sealed-transaction',
+    };
   },
   async complete() {
     return { subject: 'subject-1', emailVerified: true };
@@ -25,7 +29,7 @@ describe('SSO provider registry', () => {
   afterEach(() => {
     delete process.env.SSO_ENTRA_CLIENT_ID;
     delete process.env.SSO_ENTRA_CLIENT_SECRET;
-    delete process.env.SSO_ENTRA_ISSUER;
+    delete process.env.SSO_STATE_SECRET;
     __resetEnvCache();
   });
 
@@ -38,17 +42,26 @@ describe('SSO provider registry', () => {
     expect(() => registerSsoProvider(stub)).toThrow(/already registered/);
   });
 
-  it('leaves Entra unregistered until both client id and secret are set', () => {
+  it('leaves Entra unregistered until client id, secret and state secret are set', () => {
     expect(registerEntraFromEnv()).toBe(false);
     expect(resolveSsoProvider('entra')).toBeNull();
 
     process.env.SSO_ENTRA_CLIENT_ID = 'entra-client';
     process.env.SSO_ENTRA_CLIENT_SECRET = 'entra-secret';
-    process.env.SSO_ENTRA_ISSUER = 'https://login.microsoftonline.com/tenant/v2.0';
+    __resetEnvCache();
+    // Without a state secret the flow transaction cannot be sealed.
+    expect(registerEntraFromEnv()).toBe(false);
+    expect(resolveSsoProvider('entra')).toBeNull();
+
+    process.env.SSO_STATE_SECRET = 'sso-state-secret-at-least-32-characters';
     __resetEnvCache();
 
     expect(registerEntraFromEnv()).toBe(true);
-    expect(resolveSsoProvider('entra')?.protocol).toBe('oidc');
-    expect(() => registerEntraFromEnv()).toThrow(/already registered/);
+    const registered = resolveSsoProvider('entra');
+    expect(registered?.protocol).toBe('oidc');
+    // Re-registration is idempotent: the existing provider is kept.
+    expect(registerEntraFromEnv()).toBe(true);
+    expect(resolveSsoProvider('entra')).toBe(registered);
+    expect(listSsoProviders().filter((key) => key === 'entra')).toHaveLength(1);
   });
 });

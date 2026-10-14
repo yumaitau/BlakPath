@@ -53,7 +53,7 @@ function chain(): Record<string, unknown> {
 }
 
 export function scriptedDatabase() {
-  return {
+  const db: Record<string, unknown> = {
     select: () => {
       script.ops.push('select');
       return chain();
@@ -66,7 +66,15 @@ export function scriptedDatabase() {
       script.ops.push('update');
       return chain();
     },
+    delete: () => {
+      script.ops.push('delete');
+      return chain();
+    },
+    // The transaction handle is the same scripted surface. Throwing inside
+    // the callback rejects, as a rolled-back transaction would.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   };
+  return db;
 }
 
 /** Tenant-scope module shape used by `vi.mock('@/db/tenant-db')`. */

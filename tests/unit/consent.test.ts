@@ -14,6 +14,20 @@ vi.mock('@/domains/audit/service', () => ({
   recordAudit: audit.recordAudit,
 }));
 
+// Field sealing is covered by tenant-fields tests. Here it is a visible
+// passthrough so the service's own writes can be asserted.
+const sealing = vi.hoisted(() => ({
+  sealWordingSnapshot: vi.fn(
+    async (organisationId: string, _rowId: string, wording: unknown) =>
+      wording === null ? null : `sealed:${organisationId}:${JSON.stringify(wording)}`,
+  ),
+  openConsentRows: vi.fn(async (_organisationId: string, rows: readonly unknown[]) => [
+    ...rows,
+  ]),
+}));
+
+vi.mock('@/lib/encryption/tenant-fields', () => sealing);
+
 const { recordConsent, withdrawConsent, listConsents, hasLiveConsent } =
   await import('@/domains/consent');
 const { consentRecords } = await import('@/db/schema');
@@ -26,6 +40,8 @@ const SUBJECT = '00000000-0000-4000-8000-000000000001';
 beforeEach(() => {
   script.reset();
   audit.recordAudit.mockClear();
+  sealing.sealWordingSnapshot.mockClear();
+  sealing.openConsentRows.mockClear();
 });
 
 describe('consent', () => {
@@ -44,7 +60,10 @@ describe('consent', () => {
   });
 
   it('records an explicit grant and nothing that decides identity', async () => {
-    script.results.push([{ id: 'consent-1', status: 'granted' }]);
+    script.results.push(
+      [], // no tenant consent wording configured
+      [{ id: 'consent-1', status: 'granted', wordingSnapshot: null }],
+    );
 
     const row = await runWithTenantContext(tenantContext(['application:create']), () =>
       recordConsent({
@@ -55,7 +74,7 @@ describe('consent', () => {
     );
 
     expect(row).toMatchObject({ id: 'consent-1', status: 'granted' });
-    expect(script.ops).toEqual(['insert']);
+    expect(script.ops).toEqual(['select', 'insert']);
     expect(script.writes[0]?.payload).toMatchObject({
       organisationId: ORG_ID,
       subjectUserId: SUBJECT,
@@ -63,12 +82,32 @@ describe('consent', () => {
       purpose: 'representative-access',
       status: 'granted',
       notes: 'Spoken consent at intake',
+      wordingSnapshot: null,
     });
     expect(script.writes[0]?.payload).not.toHaveProperty('score');
     expect(audit.recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'consent.recorded', result: 'success' }),
     );
     expect(script.wheres).toEqual([]);
+  });
+
+  it('snapshots the tenant consent wording sealed to the new row', async () => {
+    const wording = { version: 2, text: 'I agree to share my records.' };
+    script.results.push(
+      [{ consentWording: wording }],
+      [{ id: 'consent-2', status: 'granted', wordingSnapshot: 'sealed' }],
+    );
+
+    await runWithTenantContext(tenantContext(['application:create']), () =>
+      recordConsent({ subjectUserId: SUBJECT, purpose: 'representative-access' }),
+    );
+
+    const payload = script.writes[0]?.payload as { id: string; wordingSnapshot: unknown };
+    expect(sealing.sealWordingSnapshot).toHaveBeenCalledWith(ORG_ID, payload.id, wording);
+    expect(payload.wordingSnapshot).toBe(`sealed:${ORG_ID}:${JSON.stringify(wording)}`);
+    expect(sealing.openConsentRows).toHaveBeenCalledWith(ORG_ID, [
+      expect.objectContaining({ id: 'consent-2' }),
+    ]);
   });
 
   it('rejects a blank purpose before writing', async () => {

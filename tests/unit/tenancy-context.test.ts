@@ -1,10 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type * as StaffPolicy from '@/lib/auth/staff-policy';
 import { tenantContext } from './helpers/tenant';
 
 const resolve = vi.hoisted(() => ({ resolveTenantContext: vi.fn() }));
+const mfa = vi.hoisted(() => ({ requireStaffMfa: vi.fn() }));
 
 vi.mock('@/lib/tenancy/resolve', () => ({
   resolveTenantContext: resolve.resolveTenantContext,
+}));
+
+// Staff role detection stays real. Only the enrolment lookup is scripted.
+vi.mock('@/lib/auth/staff-policy', async (importOriginal) => ({
+  ...(await importOriginal<typeof StaffPolicy>()),
+  requireStaffMfa: mfa.requireStaffMfa,
 }));
 
 const {
@@ -14,6 +22,7 @@ const {
   runWithTenantContext,
 } = await import('@/lib/tenancy/context');
 const { withTenant } = await import('@/lib/tenancy/with-tenant');
+const { StaffMfaRequiredError } = await import('@/lib/auth/staff-policy');
 
 const input = {
   userId: 'user-1',
@@ -25,6 +34,8 @@ const input = {
 
 beforeEach(() => {
   resolve.resolveTenantContext.mockReset();
+  mfa.requireStaffMfa.mockReset();
+  mfa.requireStaffMfa.mockResolvedValue({ satisfied: true });
 });
 
 describe('tenant context', () => {
@@ -45,10 +56,27 @@ describe('tenant context', () => {
 
     await expect(withTenant(input, fn)).resolves.toBe(ctx.organisationId);
     expect(fn).toHaveBeenCalledWith(ctx);
+    // A staff role is gated on a second factor before tenant work runs.
+    expect(mfa.requireStaffMfa).toHaveBeenCalledWith(
+      ctx.userId,
+      expect.objectContaining({ organisationId: ctx.organisationId }),
+    );
 
     resolve.resolveTenantContext.mockRejectedValue(new TenantContextError('denied'));
     const skipped = vi.fn();
     await expect(withTenant(input, skipped)).rejects.toBeInstanceOf(TenantContextError);
+    expect(skipped).not.toHaveBeenCalled();
+  });
+
+  it('never runs the callback for staff without a second factor', async () => {
+    const ctx = tenantContext(['audit:view']);
+    resolve.resolveTenantContext.mockResolvedValue(ctx);
+    mfa.requireStaffMfa.mockRejectedValue(new StaffMfaRequiredError(ctx.userId));
+    const skipped = vi.fn();
+
+    await expect(withTenant(input, skipped)).rejects.toBeInstanceOf(
+      StaffMfaRequiredError,
+    );
     expect(skipped).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 # Production seed: permission catalogue + system role templates only.
-# Developer bootstrap is refused when NODE_ENV=production (see src/db/seeds).
+# Developer accounts require ALLOW_DEV_SEED=1 and a loopback database host.
+# NODE_ENV=production never creates them (see src/db/seeds).
 #   kubectl apply -f infra/k8s/jobs/seed.yaml
 apiVersion: batch/v1
 kind: Job
@@ -10,8 +11,17 @@ spec:
   backoffLimit: 2
   template:
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-migrate
+      automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: seed
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
@@ -22,6 +32,12 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 250m
@@ -29,3 +45,8 @@ spec:
             limits:
               cpu: 1000m
               memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

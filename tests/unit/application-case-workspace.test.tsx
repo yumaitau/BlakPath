@@ -16,6 +16,7 @@ const permissions = {
   downloadEvidence: true,
   addNote: true,
   uploadEvidence: true,
+  classifyEvidence: true,
 };
 
 function workspace(
@@ -87,10 +88,22 @@ describe('application case workspace', () => {
     expect(screen.getByText('birth-record.pdf')).toBeTruthy();
     expect(screen.getByText('Scan clean')).toBeTruthy();
     expect(screen.getByText('Infected')).toBeTruthy();
-    expect(screen.getByRole('link', { name: /download/i }).getAttribute('href')).toBe(
+    // Only the clean file offers a download.
+    expect(screen.getAllByRole('button', { name: /^download$/i })).toHaveLength(1);
+  });
+
+  it('requests a download for the clean file only and reports a refusal', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 403 }));
+    render(workspace());
+
+    fireEvent.click(screen.getByRole('button', { name: /^download$/i }));
+    expect(await screen.findByText('That file could not be downloaded.')).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
       '/api/evidence/ev-clean/download',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
     );
-    expect(screen.getAllByRole('link', { name: /download/i })).toHaveLength(1);
   });
 
   it('hides intake editing when the person cannot update intake', () => {
