@@ -7,7 +7,7 @@ import { generateCertificate, listCertificates } from '@/domains/certificates';
  * Certificates collection.
  * - GET  ?applicationId=<uuid> — list an application's certificates.
  * - POST { decisionId }        — generate a draft certificate from a finalised,
- *                                confirmed decision.
+ *                                confirmed decision on a decided case.
  */
 export async function GET(request: NextRequest): Promise<Response> {
   try {

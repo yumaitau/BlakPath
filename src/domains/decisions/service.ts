@@ -3,7 +3,11 @@ import { uuidv7 } from 'uuidv7';
 import { conflictDeclarations, decisions, decisionVotes } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
-import { getApplication, transitionApplication } from '@/domains/applications';
+import {
+  applyApplicationTransition,
+  getApplication,
+  recordApplicationTransitionAudit,
+} from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
   assertNotConflicted,
@@ -21,8 +25,10 @@ import {
   type FinaliseDecisionInput,
   type ProposeDecisionInput,
 } from './schemas';
+import { DecisionWorkflowError } from './errors';
 import {
   canFinalise,
+  canProposeOnCase,
   canVote,
   tallyVotes,
   type DecisionStatus,
@@ -33,11 +39,12 @@ import {
 /**
  * Decisions service — tenant-scoped, permission-checked, audited.
  *
- * Proposing, voting and finalising are separate capabilities. Two integrity
- * gates protect the process beyond the capability check: a conflict guard keeps
- * a conflicted member out of a proposal/vote/finalisation, and finalising a
- * decision drives the application's own workflow transition to `decided`. The
- * software records the committee's decision; it never makes one.
+ * Proposing, voting and finalising are separate capabilities. Integrity gates
+ * beyond the capability check: a conflict guard keeps a conflicted member out
+ * of a proposal/vote/finalisation; a proposal is legal only once the case is
+ * ready for or in committee; finalising the decision and moving the case to
+ * `decided` commit in one transaction. The software records the committee's
+ * decision; it never makes one.
  */
 
 export type DecisionRow = typeof decisions.$inferSelect;
@@ -94,7 +101,10 @@ export async function proposeDecision(
   requirePermission(subjectFromContext(ctx), 'decision:propose');
 
   const input = proposeDecisionSchema.parse(rawInput);
-  await getApplication(applicationId); // read enforcement + audit
+  const { application } = await getApplication(applicationId); // read enforcement + audit
+  if (!canProposeOnCase(application.status)) {
+    throw new DecisionWorkflowError(application.status);
+  }
   assertNotConflicted(ctx.userId, await conflictedUserIds(applicationId));
 
   const scope = currentScope();
@@ -253,25 +263,30 @@ export async function finaliseDecision(
   assertNotConflicted(ctx.userId, await conflictedUserIds(decision.applicationId));
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(decisions)
-    .set({
-      status: 'finalised',
-      finalOutcome: input.outcome,
-      finalisedByUserId: ctx.userId,
-      finalisedAt: new Date(),
-    })
-    .where(scope.where(decisions.organisationId, eq(decisions.id, decisionId)))
-    .returning();
-  const stored = must(updated[0], 'decision');
-  const [row] = await openDecisionRows(scope.organisationId, [stored]);
-  const opened = must(row, 'decision');
-
-  // Drive the application's own workflow. This re-checks decision:finalise and
-  // that the application is in the committee stage (throws otherwise).
-  await transitionApplication(decision.applicationId, 'record_decision', {
-    note: input.note,
+  // Decision write and case transition share one transaction. If the case is
+  // not in committee, `record_decision` throws and the finalisation rolls back.
+  const committed = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(decisions)
+      .set({
+        status: 'finalised',
+        finalOutcome: input.outcome,
+        finalisedByUserId: ctx.userId,
+        finalisedAt: new Date(),
+      })
+      .where(scope.where(decisions.organisationId, eq(decisions.id, decisionId)))
+      .returning();
+    const row = must(updated[0], 'decision');
+    const transition = await applyApplicationTransition(
+      tx,
+      decision.applicationId,
+      'record_decision',
+      { note: input.note },
+    );
+    return { row, transition };
   });
+
+  await recordApplicationTransitionAudit('record_decision', committed.transition);
 
   await recordAudit({
     action: 'decision.finalised',
@@ -294,7 +309,8 @@ export async function finaliseDecision(
     correlationId: ctx.correlationId,
   });
 
-  return opened;
+  const [opened] = await openDecisionRows(scope.organisationId, [committed.row]);
+  return must(opened, 'decision');
 }
 
 /** List decisions for an application the actor may read. */

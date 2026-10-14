@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
@@ -43,9 +43,11 @@ import {
 } from './schemas';
 import { allowCertificateLookup, allowHolderCheck } from './verify-limit';
 import { renderCertificatePdf } from './render';
+import { CertificateConflictError } from './errors';
 import {
   canRevoke,
   canSign,
+  caseDecidedForCertificate,
   eligibleDecision,
   isValid,
   makeCertificateReference,
@@ -86,6 +88,32 @@ function must<T>(row: T | undefined, what: string): T {
   return row;
 }
 
+/** Walk `cause` until the Postgres driver error, if any. */
+function postgresError(error: unknown): { code?: string; constraint?: string } {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const row = current as {
+      code?: unknown;
+      constraint?: unknown;
+      constraint_name?: unknown;
+      cause?: unknown;
+    };
+    if (typeof row.code === 'string') {
+      const named =
+        typeof row.constraint === 'string'
+          ? row.constraint
+          : typeof row.constraint_name === 'string'
+            ? row.constraint_name
+            : null;
+      return named ? { code: row.code, constraint: named } : { code: row.code };
+    }
+    current = row.cause;
+  }
+  return {};
+}
+
 async function loadCertificate(id: string): Promise<CertificateRow | null> {
   const scope = currentScope();
   const rows = await scope.db
@@ -103,8 +131,9 @@ async function loadCertificate(id: string): Promise<CertificateRow | null> {
 }
 
 /**
- * Generate a draft certificate from a finalised, confirmed decision, rendering
- * the PDF to tenant-namespaced storage. Requires `certificate:generate`.
+ * Generate a draft certificate from a finalised, confirmed decision on a
+ * decided case, rendering the PDF to tenant-namespaced storage. Requires
+ * `certificate:generate`. One live certificate per decision.
  */
 export async function generateCertificate(
   rawInput: GenerateCertificateInput,
@@ -141,6 +170,7 @@ export async function generateCertificate(
     .select({
       applicantName: applications.applicantName,
       intake: applications.intake,
+      status: applications.status,
     })
     .from(applications)
     .where(
@@ -151,8 +181,34 @@ export async function generateCertificate(
     )
     .limit(1);
   const application = must(appRows[0], 'application');
+  if (!caseDecidedForCertificate(application.status)) {
+    throw new AuthorizationError(
+      'POLICY_DENIED',
+      'A certificate can only be generated after the case is decided.',
+    );
+  }
+
+  const liveRows = await scope.db
+    .select({ id: certificates.id })
+    .from(certificates)
+    .where(
+      scope.where(
+        certificates.organisationId,
+        eq(certificates.decisionId, decision.id),
+        isNull(certificates.deletedAt),
+        ne(certificates.status, 'revoked'),
+      ),
+    )
+    .limit(1);
+  if (liveRows[0]) throw new CertificateConflictError();
+
+  const applicantName = await openApplicantName(
+    scope.organisationId,
+    decision.applicationId,
+    application.applicantName,
+  );
   const holder = createHolderBinding({
-    name: application.applicantName,
+    name: applicantName,
     dateOfBirth: dateOfBirthFromIntake(application.intake),
   });
 
@@ -183,11 +239,7 @@ export async function generateCertificate(
 
   const pdf = await renderCertificatePdf({
     organisationName: org.tradingName ?? org.legalName,
-    applicantName: await openApplicantName(
-      scope.organisationId,
-      decision.applicationId,
-      application.applicantName,
-    ),
+    applicantName,
     reference,
     verificationCode,
     issuedOn: now.toISOString().slice(0, 10),
@@ -203,24 +255,33 @@ export async function generateCertificate(
   });
   const sha256 = createHash('sha256').update(pdf).digest('hex');
 
-  const inserted = await scope.db
-    .insert(certificates)
-    .values(
-      scope.insertValues({
-        id,
-        applicationId: decision.applicationId,
-        decisionId: decision.id,
-        reference,
-        verificationCode,
-        status: 'draft',
-        pdfObjectKey: key,
-        sha256,
-        holderBindingSalt: holder.salt,
-        holderNameHash: holder.nameHash,
-        holderDobHash: holder.dobHash,
-      }),
-    )
-    .returning();
+  let inserted: CertificateRow[];
+  try {
+    inserted = await scope.db
+      .insert(certificates)
+      .values(
+        scope.insertValues({
+          id,
+          applicationId: decision.applicationId,
+          decisionId: decision.id,
+          reference,
+          verificationCode,
+          status: 'draft',
+          pdfObjectKey: key,
+          sha256,
+          holderBindingSalt: holder.salt,
+          holderNameHash: holder.nameHash,
+          holderDobHash: holder.dobHash,
+        }),
+      )
+      .returning();
+  } catch (error) {
+    const pg = postgresError(error);
+    if (pg.code === '23505' && pg.constraint === 'certificates_live_decision_unique') {
+      throw new CertificateConflictError();
+    }
+    throw error;
+  }
   const row = must(inserted[0], 'certificate');
 
   await recordAudit({
