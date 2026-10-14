@@ -54,6 +54,11 @@ jobs:
       - name: Format check
         run: pnpm format:check
 
+      - name: Migration journal matches schema
+        env:
+          DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
+        run: pnpm db:drift
+
   # ---------------------------------------------------------------------------
   # Unit + integration tests. Integration tests get real Postgres + Redis.
   # ---------------------------------------------------------------------------

@@ -1,18 +1,24 @@
-# One-shot operational jobs. NOT in kustomization.yaml — apply manually:
-#   kubectl apply -f infra/k8s/jobs/migrate.yaml
-#   kubectl apply -f infra/k8s/jobs/seed.yaml
-#   kubectl apply -f infra/k8s/jobs/invite-admin.yaml
+# Rendered by scripts/eks-deploy.sh after the release gate. Do not kubectl apply.
+# Not in kustomization.yaml: a Job is immutable and is named per release.
+# __IMAGE__ is the app image digest. __RELEASE_ID__ is the git sha.
+# seed.yaml and invite-admin.yaml in this folder are still applied by hand.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: blakpath-migrate
+  name: blakpath-migrate-__RELEASE_ID__
   namespace: blakpath
+  labels:
+    app.kubernetes.io/name: blakpath-migrate
+    app.kubernetes.io/part-of: blakpath
+    blakpath.yumait.au/release: __RELEASE_ID__
 spec:
-  backoffLimit: 2
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: blakpath-job
+        app.kubernetes.io/name: blakpath-migrate
+        blakpath.yumait.au/release: __RELEASE_ID__
     spec:
       serviceAccountName: blakpath-migrate
       automountServiceAccountToken: false
@@ -27,15 +33,23 @@ spec:
           emptyDir: {}
       containers:
         - name: migrate
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          image: __IMAGE__
           imagePullPolicy: IfNotPresent
-          command: [pnpm, exec, tsx, src/db/migrate.ts]
+          command: ['node', '/app/migrate.cjs']
+          # Config only (AUDIT_DB_APP_ROLE). The Job does not mount the
+          # runtime secret: it needs no app credential.
           envFrom:
             - configMapRef:
                 name: blakpath-config
-            - secretRef:
-                name: blakpath-runtime
           env:
+            - name: NODE_ENV
+              value: production
+            - name: MIGRATIONS_FOLDER
+              value: /app/migrations
+            - name: MIGRATION_LOCK_TIMEOUT_MS
+              value: '4000'
+            - name: MIGRATION_STATEMENT_TIMEOUT_MS
+              value: '600000'
             - name: HOME
               value: /tmp
             # Owning role. Must not be the application DATABASE_URL. The

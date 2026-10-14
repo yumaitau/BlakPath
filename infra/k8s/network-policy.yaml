@@ -18,7 +18,8 @@
 #   blakpath-worker        worker Deployment
 #   blakpath-clamav        scanner StatefulSet (clamav.yaml)
 #   blakpath-clamav-mirror freshclam + nginx mirror (clamav-mirror.yaml)
-#   blakpath-job           jobs/migrate.yaml, jobs/seed.yaml
+#   blakpath-migrate       jobs/migrate.yaml (blakpath-migrate-<sha>, per release)
+#   blakpath-job           jobs/seed.yaml
 #   blakpath-release-check release-check/job.yaml (pre-deploy gate)
 #   blakpath-admin-job     jobs/invite-admin.yaml
 apiVersion: networking.k8s.io/v1
@@ -53,6 +54,7 @@ spec:
           - blakpath-worker
           - blakpath-clamav
           - blakpath-clamav-mirror
+          - blakpath-migrate
           - blakpath-job
           - blakpath-admin-job
           - blakpath-release-check
@@ -245,7 +247,7 @@ spec:
         - protocol: TCP
           port: 443
 ---
-# One-shot migrate/seed pods and the release-check gate. Database only. No
+# One-shot migrate (per release), seed and the release-check gate. Database only. No
 # AWS role, no Pod Identity. The gate validates env today and opens no
 # socket; 5432 is here so a connectivity check does not need a policy change.
 apiVersion: networking.k8s.io/v1
@@ -259,6 +261,7 @@ spec:
       - key: app.kubernetes.io/name
         operator: In
         values:
+          - blakpath-migrate
           - blakpath-job
           - blakpath-release-check
   policyTypes:

@@ -253,11 +253,14 @@ describe('blakpath network policy', () => {
     );
   });
 
-  it('lets the release-check gate reach only DNS and Postgres', () => {
+  it('lets the release gate and per-release migrate Job reach only DNS and Postgres', () => {
     const job = policy('blakpath-job-egress');
-    expect(job).toContain('- blakpath-release-check\n');
-    expect(policy('blakpath-pod-identity')).not.toContain('blakpath-release-check');
-    expect(policy('blakpath-web-egress')).not.toContain('blakpath-release-check');
-    expect(policy('blakpath-worker-egress')).not.toContain('blakpath-release-check');
+    for (const label of ['blakpath-release-check', 'blakpath-migrate']) {
+      expect(job).toContain(`- ${label}\n`);
+      expect(policy('blakpath-dns')).toContain(`- ${label}\n`);
+      expect(policy('blakpath-pod-identity')).not.toContain(label);
+      expect(policy('blakpath-web-egress')).not.toContain(label);
+      expect(policy('blakpath-worker-egress')).not.toContain(label);
+    }
   });
 });

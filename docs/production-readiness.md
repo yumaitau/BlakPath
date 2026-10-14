@@ -15,10 +15,11 @@ be HTTPS and non-local. Web and worker run the same rules at boot when
 `NODE_ENV=production`, except the `DATABASE_MIGRATION_URL` checks: runtime pods
 never mount the migrator secret.
 
-- [ ] Roll out with `scripts/eks-deploy.sh <image-tag>` or the Deploy workflow.
-      That runs `node release-check.cjs` in the candidate web and worker images
-      against the production ConfigMap, runtime Secret and migrator URL, and
-      applies workloads only after the Job exits 0. Attach the key-only output to
+- [ ] Roll out with `scripts/eks-deploy.sh` (app and worker `@sha256` digests
+      and the git sha) or the Deploy workflow. That runs `node release-check.cjs`
+      in the candidate web and worker images against the production ConfigMap,
+      runtime Secret and migrator URL, then the release-pinned migrate Job, and
+      applies workloads only after both Jobs exit 0. Attach the key-only output to
       the release record. `pnpm release:check` is the same gate on a machine that
       has the source tree.
       The check fails when `PILOT_BOOTSTRAP_TOKEN` is set. Leave that variable
