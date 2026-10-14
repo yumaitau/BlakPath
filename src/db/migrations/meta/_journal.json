@@ -253,6 +253,13 @@
       "when": 1791989775691,
       "tag": "0035_evidence_receipt_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791991573909,
+      "tag": "0036_retention_sweep",
+      "breakpoints": true
     }
   ]
 }

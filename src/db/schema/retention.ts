@@ -32,6 +32,12 @@ export const retentionPolicies = pgTable(
     /** Days a record is kept before the policy acts. */
     retentionDays: integer('retention_days').notNull(),
     action: retentionAction('action').notNull(),
+    /**
+     * Reference to an approved disposal authority. Without it the sweep will
+     * not dispose a decided application, a finalised decision, or an issued
+     * certificate. Dual-control approval of the reference is a separate control.
+     */
+    disposalAuthorityRef: text('disposal_authority_ref'),
     active: boolean('active').notNull().default(true),
     createdByUserId: refId('created_by_user_id').references(() => users.id, {
       onDelete: 'set null',

@@ -111,7 +111,8 @@ describe('pod security and workload identities', () => {
   const pods = podFiles.flatMap((path) =>
     documents(read(path))
       .filter((doc) => podKinds.has(kindOf(doc) ?? ''))
-      .map((doc) => ({ path, doc, name: nameOf(doc) })),
+      // The migrate Job is named per release (blakpath-migrate-<git sha>).
+      .map((doc) => ({ path, doc, name: nameOf(doc)?.replace(/-__RELEASE_ID__$/, '') })),
   );
 
   it('enforces restricted Pod Security Admission on the namespace', () => {
@@ -273,8 +274,10 @@ describe('EKS Pod Identity roles', () => {
       'kms:GetPublicKey',
       'kms:Sign',
       's3:DeleteObject',
+      's3:DeleteObjectVersion',
       's3:GetObject',
       's3:ListBucket',
+      's3:ListBucketVersions',
       's3:PutObject',
     ]);
     const signers = [...workerStatements.entries()].filter(

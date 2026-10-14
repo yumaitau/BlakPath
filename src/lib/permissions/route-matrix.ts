@@ -552,6 +552,10 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     body: { resourceType: 'application', retentionDays: 30, action: 'anonymise' },
   }),
   route('DELETE', '/api/retention/policies/[id]', anyOf(['retention:manage'])),
+  route('GET', '/api/retention/preview', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
   route('PATCH', '/api/reviews/[id]', anyOf(['review:finalise']), {
     body: { operation: 'finalise' },
   }),
