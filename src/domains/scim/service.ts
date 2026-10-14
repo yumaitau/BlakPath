@@ -1,6 +1,8 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import {
   membershipRoles,
   memberships,
@@ -47,10 +49,13 @@ function displayName(input: ScimUserInput): string {
   return input.userName;
 }
 
-async function touchLastUsed(credentialId: string): Promise<void> {
+async function touchLastUsed(
+  credentialId: string,
+  organisationId: string,
+): Promise<void> {
   try {
-    await db
-      .update(scimCredentials)
+    await scopeFor(organisationId)
+      .db.update(scimCredentials)
       .set({ lastUsedAt: new Date() })
       .where(eq(scimCredentials.id, credentialId));
   } catch {
@@ -74,7 +79,7 @@ export async function authenticateScim(
   const tokenHash = hashScimToken(raw);
   enforceScimRateLimit(tokenHash);
 
-  const [credential] = await db
+  const [credential] = await platformDb
     .select({
       id: scimCredentials.id,
       organisationId: scimCredentials.organisationId,
@@ -95,8 +100,8 @@ export async function authenticateScim(
     throw new AuthorizationError('POLICY_DENIED');
   }
 
-  const [org] = await db
-    .select({ id: organisations.id, status: organisations.status })
+  const [org] = await scopeFor(credential.organisationId)
+    .db.select({ id: organisations.id, status: organisations.status })
     .from(organisations)
     .where(eq(organisations.id, credential.organisationId))
     .limit(1);
@@ -104,7 +109,7 @@ export async function authenticateScim(
     throw new AuthorizationError('POLICY_DENIED');
   }
 
-  await touchLastUsed(credential.id);
+  await touchLastUsed(credential.id, credential.organisationId);
   return {
     organisationId: credential.organisationId,
     credentialId: credential.id,
@@ -297,9 +302,12 @@ async function auditSessionRevokes(
   }
 }
 
-async function findUserId(email: string): Promise<string | undefined> {
-  const [user] = await db
-    .select({ id: users.id })
+async function findUserId(
+  email: string,
+  organisationId: string,
+): Promise<string | undefined> {
+  const [user] = await scopeFor(organisationId)
+    .db.select({ id: users.id })
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
@@ -319,14 +327,14 @@ export async function provisionScimUser(
   const nextStatus = input.active === false ? 'suspended' : 'active';
   const desired = mapGroupsToRoles(input, auth.allowOrganisationAdmin);
 
-  const foundUserId = await findUserId(email);
+  const foundUserId = await findUserId(email, organisationId);
   const userId = foundUserId ?? uuidv7();
 
   // A user created here has no membership yet. The insert joins the
   // provisioning transaction below so it rolls back with the audit.
   const [existing] = foundUserId
-    ? await db
-        .select({ id: memberships.id, status: memberships.status })
+    ? await scopeFor(organisationId)
+        .db.select({ id: memberships.id, status: memberships.status })
         .from(memberships)
         .where(
           and(
@@ -351,7 +359,7 @@ export async function provisionScimUser(
     throw new AuthorizationError('POLICY_DENIED');
   }
 
-  const outcome = await db.transaction(async (tx) => {
+  const outcome = await scopeFor(organisationId).db.transaction(async (tx) => {
     if (!foundUserId) {
       await tx.insert(users).values({
         id: userId,
@@ -455,11 +463,11 @@ export async function setScimUserActive(
 ): Promise<void> {
   assertSameOrg(auth, pathOrganisationId);
   const normalised = email.trim().toLowerCase();
-  const userId = await findUserId(normalised);
+  const userId = await findUserId(normalised, auth.organisationId);
   if (!userId) throw new AuthorizationError('POLICY_DENIED');
 
-  const [membership] = await db
-    .select({ id: memberships.id, status: memberships.status })
+  const [membership] = await scopeFor(auth.organisationId)
+    .db.select({ id: memberships.id, status: memberships.status })
     .from(memberships)
     .where(
       and(
@@ -484,7 +492,7 @@ export async function setScimUserActive(
       });
       throw new AuthorizationError('POLICY_DENIED');
     }
-    await db.transaction(async (tx) => {
+    await scopeFor(auth.organisationId).db.transaction(async (tx) => {
       const revokedSessionIds = await deleteUserSessions(tx, userId);
       await auditSessionRevokes(tx, auth.organisationId, revokedSessionIds);
     });
@@ -492,7 +500,7 @@ export async function setScimUserActive(
   }
 
   if (!active && membership.status === 'active') {
-    const blocked = await db.transaction(async (tx) =>
+    const blocked = await scopeFor(auth.organisationId).db.transaction(async (tx) =>
       soleActiveAdministrator(tx, auth.organisationId, membership.id),
     );
     if (blocked) throw new AuthorizationError('POLICY_DENIED');
@@ -501,7 +509,7 @@ export async function setScimUserActive(
   const nextStatus = active ? 'active' : 'suspended';
   if (membership.status === nextStatus && active) return;
 
-  await db.transaction(async (tx) => {
+  await scopeFor(auth.organisationId).db.transaction(async (tx) => {
     await tx
       .update(memberships)
       .set({ status: nextStatus })
@@ -537,11 +545,11 @@ export async function revokeScimUser(
 ): Promise<void> {
   assertSameOrg(auth, pathOrganisationId);
   const normalised = email.trim().toLowerCase();
-  const userId = await findUserId(normalised);
+  const userId = await findUserId(normalised, auth.organisationId);
   if (!userId) throw new AuthorizationError('POLICY_DENIED');
 
-  const [membership] = await db
-    .select({ id: memberships.id, status: memberships.status })
+  const [membership] = await scopeFor(auth.organisationId)
+    .db.select({ id: memberships.id, status: memberships.status })
     .from(memberships)
     .where(
       and(
@@ -553,13 +561,13 @@ export async function revokeScimUser(
   if (!membership) throw new AuthorizationError('POLICY_DENIED');
 
   if (membership.status === 'active') {
-    const blocked = await db.transaction(async (tx) =>
+    const blocked = await scopeFor(auth.organisationId).db.transaction(async (tx) =>
       soleActiveAdministrator(tx, auth.organisationId, membership.id),
     );
     if (blocked) throw new AuthorizationError('POLICY_DENIED');
   }
 
-  await db.transaction(async (tx) => {
+  await scopeFor(auth.organisationId).db.transaction(async (tx) => {
     if (membership.status !== 'revoked') {
       await tx
         .update(memberships)

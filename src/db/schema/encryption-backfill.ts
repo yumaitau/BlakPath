@@ -2,6 +2,7 @@ import { relations } from 'drizzle-orm';
 import { index, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import { organisationId as organisationIdCol, primaryId } from './_helpers';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Progress of one tenant's field-encryption backfill.
@@ -24,8 +25,11 @@ export const encryptionBackfillRuns = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
   },
-  (table) => [index('encryption_backfill_runs_org_idx').on(table.organisationId)],
-);
+  (table) => [
+    index('encryption_backfill_runs_org_idx').on(table.organisationId),
+    tenantIsolationPolicy(),
+  ],
+).enableRLS();
 
 export const encryptionBackfillRunsRelations = relations(
   encryptionBackfillRuns,

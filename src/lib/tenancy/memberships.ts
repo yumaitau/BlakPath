@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import { memberships } from '@/db/schema/membership';
 import { organisations } from '@/db/schema/tenancy';
 import type { ServerSession } from '@/lib/auth/session';
@@ -14,7 +14,7 @@ import {
  *
  * These run BEFORE any tenant context exists — the user is in the act of
  * choosing which organisation to act within, so there is nothing to scope to
- * yet. They therefore use the raw `db` client directly rather than the
+ * yet. They therefore use `platformDb` (explicit RLS bypass) rather than the
  * tenant-aware helpers. They read only the caller's own memberships, keyed by
  * the trusted session user id, and expose no other tenant's data.
  */
@@ -35,7 +35,7 @@ export interface UserMembership {
  * organisation, never appear as a selectable option.
  */
 export async function listMembershipsForUser(userId: string): Promise<UserMembership[]> {
-  const rows = await db
+  const rows = await platformDb
     .select({
       organisationId: memberships.organisationId,
       // Prefer the trading name; fall back to the legal name.
@@ -76,7 +76,7 @@ export async function organisationAccessForUser(
   userId: string,
   organisationId: string,
 ): Promise<OrganisationAccess> {
-  const rows = await db
+  const rows = await platformDb
     .select({ status: organisations.status })
     .from(memberships)
     .innerJoin(organisations, eq(memberships.organisationId, organisations.id))
@@ -100,7 +100,7 @@ export async function organisationAccessForUser(
 export async function hasUnavailableOrganisationMembership(
   userId: string,
 ): Promise<boolean> {
-  const rows = await db
+  const rows = await platformDb
     .select({ id: memberships.id })
     .from(memberships)
     .innerJoin(organisations, eq(memberships.organisationId, organisations.id))

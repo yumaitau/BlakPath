@@ -10,7 +10,7 @@ import {
 import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { customAlphabet } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import {
   applications,
   certificates,
@@ -18,7 +18,7 @@ import {
   organisations,
   organisationSettings,
 } from '@/db/schema';
-import { currentScope } from '@/db/tenant-db';
+import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
@@ -232,7 +232,7 @@ export async function generateCertificate(
     dateOfBirth: dateOfBirthFromIntake(application.intake),
   });
 
-  const orgRows = await db
+  const orgRows = await scope.db
     .select({
       legalName: organisations.legalName,
       tradingName: organisations.tradingName,
@@ -719,8 +719,8 @@ export async function findDecisionOutcome(
   organisationId: string,
   decisionId: string,
 ): Promise<string | null> {
-  const rows = await db
-    .select({ outcome: decisions.finalOutcome })
+  const rows = await scopeFor(organisationId)
+    .db.select({ outcome: decisions.finalOutcome })
     .from(decisions)
     .where(
       and(eq(decisions.id, decisionId), eq(decisions.organisationId, organisationId)),
@@ -748,14 +748,14 @@ export interface SealedCertificateFields {
 /**
  * Rebuild the canonical bytes a sealed certificate attests, from the stored
  * row and its decision's recorded outcome, or null when the row cannot.
- * Root client: used by the public verifier and the operator signing-key
+ * Scoped to the certificate's organisation. Used by the public verifier and the operator signing-key
  * backfill, both outside a tenant scope.
  */
 export async function rebuildCanonicalPayload(
   cert: SealedCertificateFields,
 ): Promise<string | null> {
-  const decisionRows = await db
-    .select({ outcome: decisions.finalOutcome })
+  const decisionRows = await scopeFor(cert.organisationId)
+    .db.select({ outcome: decisions.finalOutcome })
     .from(decisions)
     .where(eq(decisions.id, cert.decisionId))
     .limit(1);
@@ -821,7 +821,7 @@ interface CertificateByCode {
 }
 
 async function findCertificateByCode(code: string): Promise<CertificateByCode | null> {
-  const rows = await db
+  const rows = await platformDb
     .select({
       id: certificates.id,
       reference: certificates.reference,
@@ -950,7 +950,7 @@ export async function verifyCertificate(
     return { status: 'not_found' };
   }
 
-  const orgRows = await db
+  const orgRows = await platformDb
     .select({
       legalName: organisations.legalName,
       tradingName: organisations.tradingName,

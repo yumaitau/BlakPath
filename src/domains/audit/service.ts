@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
-import { db, type Database } from '@/db/client';
+import { withRlsContextOn } from '@/db/bound-db';
+import type { Database } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { PLATFORM_CONTEXT, tenantContext } from '@/db/rls';
+import { scopeFor } from '@/db/tenant-db';
 import { auditEvents } from '@/db/schema';
 import { getTenantContext } from '@/lib/tenancy/context';
 import type { AuditAction, AuditResult, ResourceType } from './events';
@@ -241,8 +245,15 @@ export async function recordAudit(
     return { id, organisationId, hash, prevHash, timestamp };
   };
 
-  if (tx) return append(tx);
-  return db.transaction(append);
+  // A tenant chain is written under that tenant's RLS context; the platform
+  // chain (null organisation) needs the explicit bypass, because tenant
+  // contexts can neither see nor insert null-organisation audit rows.
+  if (tx) {
+    const context = organisationId ? tenantContext(organisationId) : PLATFORM_CONTEXT;
+    return withRlsContextOn(tx, context, append);
+  }
+  const database = organisationId ? scopeFor(organisationId).db : platformDb;
+  return database.transaction(append);
 }
 
 /**

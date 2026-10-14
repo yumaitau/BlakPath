@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import {
   membershipRoles,
   memberships,
@@ -177,8 +178,8 @@ export async function membershipRequiresStaffMfa(
   userId: string,
   organisationId: string,
 ): Promise<boolean> {
-  const roleRows = await db
-    .select({ slug: roles.slug })
+  const roleRows = await scopeFor(organisationId)
+    .db.select({ slug: roles.slug })
     .from(membershipRoles)
     .innerJoin(roles, eq(membershipRoles.roleId, roles.id))
     .innerJoin(memberships, eq(membershipRoles.membershipId, memberships.id))

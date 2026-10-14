@@ -1,5 +1,5 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import { auditEvents, users } from '@/db/schema';
 import { recordAudit } from '@/domains/audit';
 import { parseKeyArn } from '@/lib/encryption/key-provider';
@@ -71,7 +71,7 @@ async function recordDeniedView(error: unknown): Promise<void> {
 }
 
 async function keyEvents(keyRowId: string, action?: 'key.health_checked') {
-  return db
+  return platformDb
     .select({
       id: auditEvents.id,
       action: auditEvents.action,

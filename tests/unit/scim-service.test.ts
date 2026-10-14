@@ -9,6 +9,13 @@ const audit = vi.hoisted(() => ({
   recordAudit: vi.fn(async (_input: unknown, _tx?: unknown) => undefined),
 }));
 
+// Bound handles (scopeFor / platformDb) reach the mocked client below.
+vi.mock('@/db/platform-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.platformDbModule()),
+);
+vi.mock('@/db/tenant-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.tenantDbModule()),
+);
 vi.mock('@/db/client', async () => {
   const { scriptedDatabase } = await import('./helpers/scripted-db');
   return { db: scriptedDatabase() };

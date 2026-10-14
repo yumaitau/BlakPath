@@ -101,7 +101,7 @@ export async function applyAuditAppendOnlyGuard(
 
 export async function applyAuditAppPrivileges(
   sql: postgres.Sql,
-  options: { role: string; required: boolean },
+  options: { role: string; required: boolean; createIfMissing?: boolean },
 ): Promise<'applied' | 'skipped'> {
   const role = assertAuditRoleName(options.role);
   for (const statement of AUDIT_PUBLIC_REVOKE_STATEMENTS) {
@@ -110,7 +110,12 @@ export async function applyAuditAppPrivileges(
   const found = await sql<{ exists: boolean }[]>`
     select exists(select 1 from pg_roles where rolname = ${role}) as exists
   `;
-  if (!found[0]?.exists) {
+  if (!found[0]?.exists && options.createIfMissing && !options.required) {
+    // Local and CI connect as a superuser. Bound transactions SET LOCAL ROLE
+    // to the app role so RLS applies (src/db/rls.ts); it never logs in here.
+    await sql.unsafe(`CREATE ROLE ${role} NOLOGIN`);
+    console.log(`[migrate] created role ${role} (NOLOGIN) for local RLS`);
+  } else if (!found[0]?.exists) {
     if (options.required) {
       throw new Error(
         `Database role ${role} does not exist; create it before migrating production`,

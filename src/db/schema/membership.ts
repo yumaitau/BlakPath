@@ -18,6 +18,7 @@ import { users } from './auth';
 import { organisations } from './tenancy';
 import { consentRecords } from './consent';
 import { teams } from './teams';
+import { tenantIsolationPolicy, tenantSharedReadPolicy } from './_rls';
 
 /**
  * Membership & RBAC tables.
@@ -47,8 +48,12 @@ export const roles = pgTable(
     isSystem: boolean('is_system').notNull().default(false),
     ...timestamps,
   },
-  (table) => [uniqueIndex('roles_org_slug_unique').on(table.organisationId, table.slug)],
-);
+  (table) => [
+    uniqueIndex('roles_org_slug_unique').on(table.organisationId, table.slug),
+    tenantIsolationPolicy(),
+    tenantSharedReadPolicy(),
+  ],
+).enableRLS();
 
 /**
  * The permission catalogue. Rows are seeded by the permissions module; this
@@ -108,8 +113,9 @@ export const memberships = pgTable(
     uniqueIndex('memberships_org_user_unique').on(table.organisationId, table.userId),
     // Tenant-leading composite index for scoped listings.
     index('memberships_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** Assignment of a role to a membership. */
 export const membershipRoles = pgTable(
@@ -178,8 +184,9 @@ export const membershipInvitations = pgTable(
     uniqueIndex('membership_invitations_token_hash_unique').on(table.tokenHash),
     index('membership_invitations_org_status_idx').on(table.organisationId, table.status),
     index('membership_invitations_org_email_idx').on(table.organisationId, table.email),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Phase-1 stub for applicant-representative access (e.g. a parent acting for a
@@ -223,8 +230,9 @@ export const representativeAuthorisations = pgTable(
       table.organisationId,
       table.representativeUserId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const rolesRelations = relations(roles, ({ one, many }) => ({
   organisation: one(organisations, {

@@ -8,6 +8,7 @@ import {
 } from './_helpers';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * In-app notifications.
@@ -47,8 +48,9 @@ export const notifications = pgTable(
       table.userId,
       table.readAt,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
   organisation: one(organisations, {

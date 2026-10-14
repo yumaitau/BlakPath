@@ -10,6 +10,7 @@ import {
 import { users } from './auth';
 import { retentionAction } from './enums';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Retention tables (Phase 7, disposal controls in issue #44).
@@ -63,8 +64,9 @@ export const retentionPolicies = pgTable(
   },
   (table) => [
     index('retention_policies_org_idx').on(table.organisationId, table.resourceType),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * A records manager's sign-off that a disposal class, in one jurisdiction, is
@@ -107,8 +109,9 @@ export const disposalAuthoritySignoffs = pgTable(
       table.jurisdiction,
       table.disposalClass,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Destruction register. One row per record a purge commit removed.
@@ -138,8 +141,9 @@ export const destructionRegister = pgTable(
       table.organisationId,
       table.destroyedAt,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** A legal hold that shields one record from retention until released. */
 export const legalHolds = pgTable(
@@ -167,8 +171,9 @@ export const legalHolds = pgTable(
       table.resourceType,
       table.resourceId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const retentionPoliciesRelations = relations(retentionPolicies, ({ one }) => ({
   organisation: one(organisations, {

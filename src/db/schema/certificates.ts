@@ -13,6 +13,7 @@ import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
 import { decisions } from './decisions';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Certificate tables (Phase 6).
@@ -101,8 +102,9 @@ export const certificates = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Public halves of the keys that have sealed certificates.

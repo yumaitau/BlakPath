@@ -1,5 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import { organisations } from '@/db/schema';
 import { recordAudit } from '@/domains/audit';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -30,7 +31,7 @@ export function keyAllowsActivation(
 
 export async function activateOrganisation(
   organisationId: string,
-  database: Database = db,
+  database: Database = scopeFor(organisationId).db,
 ): Promise<{ id: string; status: 'active' }> {
   const key = await getOrganisationKey(organisationId, database);
   if (!keyAllowsActivation(key)) throw new OrganisationActivationError();

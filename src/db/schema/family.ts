@@ -12,6 +12,7 @@ import { familyLinkStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Family-link tables (Phase 4).
@@ -72,8 +73,9 @@ export const familyLinks = pgTable(
       table.applicationId,
     ),
     index('family_links_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const familyLinksRelations = relations(familyLinks, ({ one }) => ({
   organisation: one(organisations, {

@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import { organisationKeyRewraps, organisationKeys } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit';
 import type { KeyProvider } from '@/lib/encryption/key-provider';
@@ -187,7 +188,11 @@ export async function processOrganisationKeyRewrap(input: {
   database?: Database;
 }): Promise<RewrapState | null> {
   const deps =
-    input.deps ?? (await defaultDeps(input.organisationId, input.database ?? db));
+    input.deps ??
+    (await defaultDeps(
+      input.organisationId,
+      input.database ?? scopeFor(input.organisationId).db,
+    ));
   const loaded = await deps.load(input.rewrapId);
   if (!loaded) return null;
   if (loaded.organisationId !== input.organisationId) {

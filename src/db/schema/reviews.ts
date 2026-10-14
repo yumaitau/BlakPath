@@ -12,6 +12,7 @@ import { reviewStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Review tables (Phase 4).
@@ -59,8 +60,9 @@ export const reviews = pgTable(
       table.reviewerUserId,
       table.status,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** A comment thread entry on a review, before it is finalised. */
 export const reviewComments = pgTable(
@@ -82,8 +84,9 @@ export const reviewComments = pgTable(
   },
   (table) => [
     index('review_comments_org_review_idx').on(table.organisationId, table.reviewId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const reviewsRelations = relations(reviews, ({ one, many }) => ({
   organisation: one(organisations, {

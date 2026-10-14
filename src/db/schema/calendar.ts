@@ -10,6 +10,7 @@ import {
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { meetings } from './meetings';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * RangerOS-parity calendar events. Tenant-owned, org-leading indexes.
@@ -56,8 +57,9 @@ export const calendarEvents = pgTable(
     index('calendar_events_org_status_idx').on(table.organisationId, table.status),
     index('calendar_events_org_resource_idx').on(table.organisationId, table.resource),
     index('calendar_events_org_meeting_idx').on(table.organisationId, table.meetingId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const calendarEventAttendees = pgTable(
   'calendar_event_attendees',
@@ -80,8 +82,9 @@ export const calendarEventAttendees = pgTable(
     index('calendar_attendees_org_event_idx').on(table.organisationId, table.eventId),
     index('calendar_attendees_org_user_idx').on(table.organisationId, table.userId),
     index('calendar_attendees_org_email_idx').on(table.organisationId, table.email),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const calendarEventReminders = pgTable(
   'calendar_event_reminders',
@@ -102,8 +105,9 @@ export const calendarEventReminders = pgTable(
   },
   (table) => [
     index('calendar_reminders_org_event_idx').on(table.organisationId, table.eventId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const calendarEventsRelations = relations(calendarEvents, ({ one, many }) => ({
   organisation: one(organisations, {

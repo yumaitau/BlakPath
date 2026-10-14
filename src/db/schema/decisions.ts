@@ -13,6 +13,7 @@ import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
 import { meetings } from './meetings';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Decision tables (Phase 5).
@@ -59,8 +60,9 @@ export const decisions = pgTable(
   (table) => [
     index('decisions_org_application_idx').on(table.organisationId, table.applicationId),
     index('decisions_org_meeting_idx').on(table.organisationId, table.meetingId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** A committee member's vote on a proposed decision. One vote per member. */
 export const decisionVotes = pgTable(
@@ -86,8 +88,9 @@ export const decisionVotes = pgTable(
       table.voterUserId,
     ),
     index('decision_votes_org_decision_idx').on(table.organisationId, table.decisionId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const decisionsRelations = relations(decisions, ({ one, many }) => ({
   organisation: one(organisations, {

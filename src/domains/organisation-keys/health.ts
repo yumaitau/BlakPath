@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import { recordPlatformAudit } from '@/domains/audit';
 import { membershipRoles, memberships, organisationKeys, roles } from '@/db/schema';
 import { createNotification } from '@/domains/notifications';
@@ -192,8 +194,8 @@ async function canaryFailure(
 }
 
 async function listOrganisationAdminUserIds(organisationId: string): Promise<string[]> {
-  const rows = await db
-    .select({ userId: memberships.userId })
+  const rows = await scopeFor(organisationId)
+    .db.select({ userId: memberships.userId })
     .from(memberships)
     .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
     .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
@@ -268,8 +270,8 @@ export async function checkTenantKeyHealth(input: {
   return runKeyHealthCheck(
     {
       async load(organisationId) {
-        const rows = await db
-          .select({
+        const rows = await scopeFor(organisationId)
+          .db.select({
             organisationId: organisationKeys.organisationId,
             kmsKeyArn: organisationKeys.kmsKeyArn,
             status: organisationKeys.status,
@@ -305,7 +307,8 @@ export async function sweepOrganisationKeyHealth(
     resume?: (organisationId: string) => Promise<void>;
   } = {},
 ): Promise<KeyHealthResult[]> {
-  const database = options.database ?? db;
+  // Cross-tenant sweep: every tenant's key row, and platform-chain status writes.
+  const database = options.database ?? platformDb;
   const provider = options.provider ?? createKeyProvider();
   const cache = options.cache ?? sharedDekCache();
   const rows = await database.select().from(organisationKeys);
@@ -358,8 +361,10 @@ export async function checkOrganisationKeyHealth(
   organisationId: string,
   options: OrganisationKeyHealthOptions = {},
 ): Promise<OrganisationKeyHealthResult> {
-  const database = options.database ?? db;
-  const row = await getOrganisationKey(organisationId, database);
+  const row = await getOrganisationKey(
+    organisationId,
+    options.database ?? scopeFor(organisationId).db,
+  );
   if (!row) return { ok: false, checkedAt: new Date(), failure: 'no_key' };
 
   const provider = options.provider ?? createKeyProvider();
@@ -389,7 +394,12 @@ export async function checkOrganisationKeyHealth(
     const access = asKmsKeyAccessError(error);
     failure = access?.kmsError ?? 'error';
     if (access) {
-      await markOrganisationKeyUnavailable(organisationId, access.kmsError, database);
+      // Platform-chain audit with the key row, so the platform handle.
+      await markOrganisationKeyUnavailable(
+        organisationId,
+        access.kmsError,
+        options.database ?? platformDb,
+      );
     } else {
       logger.warn({ err: error }, 'tenant key health check failed');
     }

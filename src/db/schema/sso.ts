@@ -2,6 +2,7 @@ import { relations } from 'drizzle-orm';
 import { boolean, index, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
 import { organisationId as organisationIdCol, primaryId, timestamps } from './_helpers';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Tenant SSO / IdP bindings.
@@ -37,8 +38,9 @@ export const organisationSsoProviders = pgTable(
       table.providerKey,
     ),
     index('org_sso_org_domain_idx').on(table.organisationId, table.domain),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const organisationSsoProvidersRelations = relations(
   organisationSsoProviders,

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq, like } from 'drizzle-orm';
 import { db, sqlClient } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import { applications, evidence, formResponses, organisations, users } from '@/db/schema';
 import { verifyChain } from '@/domains/audit';
 import { EVIDENCE_BUCKET, getObjectBytes, s3 } from '@/lib/storage/s3';
@@ -20,8 +21,8 @@ async function main(): Promise<void> {
     .limit(1);
   if (!administrator) throw new Error('restored administrator is missing');
 
-  const [application] = await db
-    .select({ id: applications.id })
+  const [application] = await scopeFor(organisation.id)
+    .db.select({ id: applications.id })
     .from(applications)
     .where(
       and(
@@ -32,8 +33,8 @@ async function main(): Promise<void> {
     .limit(1);
   if (!application) throw new Error('restored live-stack application is missing');
 
-  const [cleanEvidence] = await db
-    .select({ key: evidence.evidenceKey, sha256: evidence.sha256 })
+  const [cleanEvidence] = await scopeFor(organisation.id)
+    .db.select({ key: evidence.evidenceKey, sha256: evidence.sha256 })
     .from(evidence)
     .where(
       and(
@@ -53,8 +54,8 @@ async function main(): Promise<void> {
     throw new Error('restored evidence checksum does not match its database record');
   }
 
-  const [response] = await db
-    .select({ id: formResponses.id })
+  const [response] = await scopeFor(organisation.id)
+    .db.select({ id: formResponses.id })
     .from(formResponses)
     .where(eq(formResponses.organisationId, organisation.id))
     .limit(1);

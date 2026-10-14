@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import { organisationSettings, sessions } from '@/db/schema';
 import { logger } from '@/lib/observability/logger';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -25,8 +26,8 @@ export async function readStaffIdleTimeoutSeconds(
   organisationId: string,
 ): Promise<number> {
   try {
-    const rows = await db
-      .select({ seconds: organisationSettings.staffIdleTimeoutSeconds })
+    const rows = await scopeFor(organisationId)
+      .db.select({ seconds: organisationSettings.staffIdleTimeoutSeconds })
       .from(organisationSettings)
       .where(eq(organisationSettings.organisationId, organisationId))
       .limit(1);
@@ -91,8 +92,8 @@ export async function setOrganisationSessionPolicy(
   ) {
     throw new Error('Staff idle timeout must be between 30 and 60 minutes.');
   }
-  await db
-    .insert(organisationSettings)
+  await scopeFor(ctx.organisationId)
+    .db.insert(organisationSettings)
     .values({
       organisationId: ctx.organisationId,
       staffIdleTimeoutSeconds: idleTimeoutSeconds,

@@ -9,6 +9,7 @@ import {
 import { exportStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Export request tables (Phase 7).
@@ -44,8 +45,9 @@ export const exportRequests = pgTable(
   },
   (table) => [
     index('export_requests_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const exportRequestsRelations = relations(exportRequests, ({ one }) => ({
   organisation: one(organisations, {

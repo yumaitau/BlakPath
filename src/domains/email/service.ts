@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import { emailSuppressions } from '@/db/schema';
 import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 
@@ -20,7 +20,7 @@ export function hashAddress(address: string): string {
 }
 
 export async function isSuppressed(address: string): Promise<boolean> {
-  const rows = await db
+  const rows = await platformDb
     .select({ id: emailSuppressions.id })
     .from(emailSuppressions)
     .where(
@@ -47,7 +47,7 @@ export async function recordSuppression(raw: {
 }): Promise<{ suppressed: boolean }> {
   const input = recordSchema.parse(raw);
   const addressHash = hashAddress(input.address);
-  const existing = await db
+  const existing = await platformDb
     .select({ id: emailSuppressions.id })
     .from(emailSuppressions)
     .where(
@@ -58,7 +58,7 @@ export async function recordSuppression(raw: {
     )
     .limit(1);
   if (existing.length > 0) return { suppressed: true };
-  await db.transaction(async (tx) => {
+  await platformDb.transaction(async (tx) => {
     const inserted = await tx
       .insert(emailSuppressions)
       .values({
@@ -97,7 +97,7 @@ export async function clearSuppression(raw: {
   reason?: string;
 }): Promise<{ cleared: boolean }> {
   const input = clearSchema.parse(raw);
-  return db.transaction(async (tx) => {
+  return platformDb.transaction(async (tx) => {
     const updated = await tx
       .update(emailSuppressions)
       .set({ clearedAt: new Date(), clearedReason: input.reason ?? null })

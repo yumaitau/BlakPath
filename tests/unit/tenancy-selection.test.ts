@@ -7,6 +7,13 @@ vi.mock('@/lib/tenancy/resolve', () => ({
   resolveTenantContext: resolve.resolveTenantContext,
 }));
 
+// Bound handles (scopeFor / platformDb) reach the mocked client below.
+vi.mock('@/db/platform-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.platformDbModule()),
+);
+vi.mock('@/db/tenant-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.tenantDbModule()),
+);
 vi.mock('@/db/client', async () => {
   const { scriptedDatabase } = await import('./helpers/scripted-db');
   return { db: scriptedDatabase() };

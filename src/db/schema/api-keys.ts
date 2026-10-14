@@ -8,6 +8,7 @@ import {
 } from './_helpers';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * API keys for the public REST API.
@@ -57,8 +58,9 @@ export const apiKeys = pgTable(
   (table) => [
     uniqueIndex('api_keys_key_hash_unique').on(table.keyHash),
     index('api_keys_org_idx').on(table.organisationId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
   organisation: one(organisations, {

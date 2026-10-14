@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { z } from 'zod';
 
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import {
   accounts,
   membershipInvitations,
@@ -18,7 +18,7 @@ import {
   teams,
   users,
 } from '@/db/schema';
-import { currentScope } from '@/db/tenant-db';
+import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { queueInvitationEmail } from '@/lib/email/queue';
 import { sealInvitationToken } from '@/lib/encryption/tenant-fields';
@@ -59,8 +59,8 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
   const invitation = await resolvePendingInvitation(input.token);
 
   const email = invitation.email.toLowerCase();
-  const [existing] = await db
-    .select({ id: users.id })
+  const [existing] = await scopeFor(invitation.organisationId)
+    .db.select({ id: users.id })
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
@@ -78,7 +78,7 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
 
   const userId = uuidv7();
   const passwordHash = await argon2Hash(input.password, ARGON2_OPTIONS);
-  await db.transaction(async (tx) => {
+  await scopeFor(invitation.organisationId).db.transaction(async (tx) => {
     await tx.insert(users).values({
       id: userId,
       name: input.name,
@@ -183,8 +183,8 @@ function maskEmail(email: string): string {
 }
 
 async function activeAdministratorCount(organisationId: string): Promise<number> {
-  const rows = await db
-    .select({ membershipId: memberships.id })
+  const rows = await scopeFor(organisationId)
+    .db.select({ membershipId: memberships.id })
     .from(memberships)
     .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
     .innerJoin(roles, eq(membershipRoles.roleId, roles.id))
@@ -202,7 +202,7 @@ async function loadAssignableRole(
   roleId: string,
 ): Promise<AssignableRole & { slug: string }> {
   const scope = currentScope();
-  const [role] = await db
+  const [role] = await scope.db
     .select({
       id: roles.id,
       name: roles.name,
@@ -249,7 +249,7 @@ async function queueMembershipInvitationEmail(input: {
 export async function listManagedMembers(): Promise<ManagedMember[]> {
   assertManage();
   const scope = currentScope();
-  const rows = await db
+  const rows = await scope.db
     .select({
       id: memberships.id,
       name: users.name,
@@ -291,7 +291,7 @@ export async function listAssignableRoles(): Promise<AssignableRole[]> {
     description: roles.description,
     slug: roles.slug,
   };
-  const tenantRoles = await db
+  const tenantRoles = await scope.db
     .select(columns)
     .from(roles)
     .where(eq(roles.organisationId, scope.organisationId))
@@ -299,7 +299,7 @@ export async function listAssignableRoles(): Promise<AssignableRole[]> {
   const source =
     tenantRoles.length > 0
       ? tenantRoles
-      : await db
+      : await scope.db
           .select(columns)
           .from(roles)
           .where(
@@ -320,7 +320,7 @@ export async function listMembershipInvitations(): Promise<
 > {
   assertManage();
   const scope = currentScope();
-  const rows = await db
+  const rows = await scope.db
     .select({
       id: membershipInvitations.id,
       email: membershipInvitations.email,
@@ -350,11 +350,15 @@ export async function addMember(input: {
     requirePermission(subjectFromContext(ctx), 'membership:manage');
     const scope = currentScope();
     const email = input.email.trim().toLowerCase();
-    const [person] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    const [person] = await scope.db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
     if (!person) throw new AuthorizationError('POLICY_DENIED');
     const role = await loadAssignableRole(input.roleId);
 
-    const existingRows = await db
+    const existingRows = await scope.db
       .select({
         id: memberships.id,
         status: memberships.status,
@@ -384,7 +388,7 @@ export async function addMember(input: {
       throw new AuthorizationError('POLICY_DENIED');
     }
     const membershipId = existing?.id ?? uuidv7();
-    await db.transaction(async (tx) => {
+    await scope.db.transaction(async (tx) => {
       if (!existing) {
         await tx.insert(memberships).values({
           id: membershipId,
@@ -446,7 +450,7 @@ export async function createMembershipInvitation(input: {
     const email = input.email.trim().toLowerCase();
     const role = await loadAssignableRole(input.roleId);
 
-    const [existingMember] = await db
+    const [existingMember] = await scope.db
       .select({ status: memberships.status })
       .from(memberships)
       .innerJoin(users, eq(memberships.userId, users.id))
@@ -463,7 +467,7 @@ export async function createMembershipInvitation(input: {
     const expiresAt = new Date(now.getTime() + INVITATION_LIFETIME_MS);
     const invitationId = uuidv7();
     const invitedByUserId = ctx.userId;
-    const [organisation] = await db
+    const [organisation] = await scope.db
       .select({ name: organisations.legalName })
       .from(organisations)
       .where(eq(organisations.id, scope.organisationId))
@@ -474,7 +478,7 @@ export async function createMembershipInvitation(input: {
     // otherwise the invitation carries no team.
     let teamId: string | null = null;
     if (input.teamId) {
-      const [team] = await db
+      const [team] = await scope.db
         .select({ id: teams.id })
         .from(teams)
         .where(
@@ -491,7 +495,7 @@ export async function createMembershipInvitation(input: {
       invitationId,
       token,
     );
-    await db.transaction(async (tx) => {
+    await scope.db.transaction(async (tx) => {
       await tx
         .update(membershipInvitations)
         .set({ status: 'revoked', revokedAt: now })
@@ -561,7 +565,7 @@ export async function resendMembershipInvitation(id: string): Promise<{
   try {
     requirePermission(subjectFromContext(ctx), 'membership:manage');
     const scope = currentScope();
-    const [current] = await db
+    const [current] = await scope.db
       .select({
         id: membershipInvitations.id,
         email: membershipInvitations.email,
@@ -595,7 +599,7 @@ export async function resendMembershipInvitation(id: string): Promise<{
       id,
       token,
     );
-    await db.transaction(async (tx) => {
+    await scope.db.transaction(async (tx) => {
       await tx
         .update(membershipInvitations)
         .set({
@@ -652,7 +656,7 @@ export async function revokeMembershipInvitation(id: string): Promise<void> {
   try {
     requirePermission(subjectFromContext(ctx), 'membership:manage');
     const scope = currentScope();
-    await db.transaction(async (tx) => {
+    await scope.db.transaction(async (tx) => {
       const updated = await tx
         .update(membershipInvitations)
         .set({ status: 'revoked', revokedAt: new Date() })
@@ -682,7 +686,7 @@ export async function revokeMembershipInvitation(id: string): Promise<void> {
 }
 
 async function resolvePendingInvitation(token: string) {
-  const [invitation] = await db
+  const [invitation] = await platformDb
     .select({
       id: membershipInvitations.id,
       organisationId: membershipInvitations.organisationId,
@@ -703,8 +707,8 @@ async function resolvePendingInvitation(token: string) {
     throw new AuthorizationError('POLICY_DENIED');
   }
   if (invitation.expiresAt.getTime() < Date.now()) {
-    await db
-      .update(membershipInvitations)
+    await scopeFor(invitation.organisationId)
+      .db.update(membershipInvitations)
       .set({ status: 'expired' })
       .where(eq(membershipInvitations.id, invitation.id));
     throw new AuthorizationError('POLICY_DENIED');
@@ -750,7 +754,7 @@ export async function acceptMembershipInvitation(input: {
 
   let membershipId = '';
   try {
-    await db.transaction(async (tx) => {
+    await scopeFor(invitation.organisationId).db.transaction(async (tx) => {
       const accepted = await tx
         .update(membershipInvitations)
         .set({
@@ -874,7 +878,7 @@ export async function changeMemberRole(id: string, roleId: string): Promise<void
     requirePermission(subjectFromContext(ctx), 'membership:manage');
     const scope = currentScope();
     const role = await loadAssignableRole(roleId);
-    const rows = await db
+    const rows = await scope.db
       .select({
         userId: memberships.userId,
         status: memberships.status,
@@ -904,7 +908,7 @@ export async function changeMemberRole(id: string, roleId: string): Promise<void
     const beforeRoles = rows
       .map((row) => row.roleName)
       .filter((name): name is string => Boolean(name));
-    await db.transaction(async (tx) => {
+    await scope.db.transaction(async (tx) => {
       await tx.delete(membershipRoles).where(eq(membershipRoles.membershipId, id));
       await tx
         .insert(membershipRoles)
@@ -941,7 +945,7 @@ export async function changeMemberStatus(
   try {
     requirePermission(subjectFromContext(ctx), 'membership:manage');
     const scope = currentScope();
-    const rows = await db
+    const rows = await scope.db
       .select({
         userId: memberships.userId,
         status: memberships.status,
@@ -967,7 +971,7 @@ export async function changeMemberStatus(
     ) {
       throw new AuthorizationError('POLICY_DENIED');
     }
-    await db.transaction(async (tx) => {
+    await scope.db.transaction(async (tx) => {
       await tx
         .update(memberships)
         .set({ status })

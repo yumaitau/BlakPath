@@ -8,6 +8,7 @@ import {
 } from './_helpers';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Per-user, per-tenant UI preferences.
@@ -35,8 +36,9 @@ export const userDashboardLayouts = pgTable(
       table.organisationId,
       table.userId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const userDashboardLayoutsRelations = relations(
   userDashboardLayouts,

@@ -12,6 +12,7 @@ import { formInvitationStatus, formStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Custom form tables.
@@ -53,8 +54,11 @@ export const forms = pgTable(
     ...rowVersion,
     ...softDelete,
   },
-  (table) => [index('forms_org_status_idx').on(table.organisationId, table.status)],
-);
+  (table) => [
+    index('forms_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
+  ],
+).enableRLS();
 
 /** A tokenised, per-recipient invitation to complete a form. */
 export const formInvitations = pgTable(
@@ -96,8 +100,9 @@ export const formInvitations = pgTable(
   (table) => [
     uniqueIndex('form_invitations_token_hash_unique').on(table.tokenHash),
     index('form_invitations_org_form_idx').on(table.organisationId, table.formId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /** A submitted response to a form. */
 export const formResponses = pgTable(
@@ -138,8 +143,9 @@ export const formResponses = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const formsRelations = relations(forms, ({ one, many }) => ({
   organisation: one(organisations, {

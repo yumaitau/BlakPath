@@ -53,6 +53,7 @@ async function main(): Promise<void> {
     await applyAuditAppPrivileges(sql, {
       role,
       required: process.env.NODE_ENV === 'production',
+      createIfMissing: process.env.NODE_ENV !== 'production',
     });
     console.log('[migrate] done');
   } finally {

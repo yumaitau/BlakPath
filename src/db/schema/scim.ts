@@ -15,6 +15,7 @@ import {
 } from './_helpers';
 import { users } from './auth';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Per-organisation SCIM bearer credentials.
@@ -52,8 +53,9 @@ export const scimCredentials = pgTable(
   (table) => [
     uniqueIndex('scim_credentials_token_hash_unique').on(table.tokenHash),
     index('scim_credentials_org_idx').on(table.organisationId),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const scimCredentialsRelations = relations(scimCredentials, ({ one }) => ({
   organisation: one(organisations, {

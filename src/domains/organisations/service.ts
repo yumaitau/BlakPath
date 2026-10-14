@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import { organisations } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit/service';
 import {
@@ -50,7 +50,7 @@ export interface SetOrganisationStatusInput {
 export async function setOrganisationStatus(
   input: SetOrganisationStatusInput,
 ): Promise<{ id: string; status: OrganisationStatus }> {
-  const [current] = await db
+  const [current] = await platformDb
     .select({
       id: organisations.id,
       status: organisations.status,
@@ -72,7 +72,7 @@ export async function setOrganisationStatus(
     throw new OrganisationActivationError();
   }
 
-  await db.transaction(async (tx) => {
+  await platformDb.transaction(async (tx) => {
     await tx
       .update(organisations)
       .set({ status: input.status, statusReason: input.reason ?? null })

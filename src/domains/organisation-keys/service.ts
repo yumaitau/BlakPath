@@ -1,5 +1,7 @@
 import { and, eq, ne } from 'drizzle-orm';
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import { organisationKeyRewraps, organisationKeys } from '@/db/schema';
 import { recordPlatformAudit, type AuditTransaction } from '@/domains/audit';
 import { assertCodedAuditReason } from '@/domains/audit/hash';
@@ -102,7 +104,7 @@ export function assertTenantKeyArn(kmsKeyArn: string): void {
 
 export async function getOrganisationKey(
   organisationId: string,
-  database: Database = db,
+  database: Database = scopeFor(organisationId).db,
 ): Promise<OrganisationKeyRow | null> {
   const rows = await database
     .select()
@@ -124,7 +126,7 @@ export async function getOrganisationKey(
  */
 export async function ensureOrganisationKey(
   organisationId: string,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<void> {
   const existing = await getOrganisationKey(organisationId, database);
   if (existing) return;
@@ -144,7 +146,7 @@ export async function ensureOrganisationKey(
 export async function validateOrganisationKey(
   organisationId: string,
   kmsKeyArn: string,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   const handshake = await runKeyHandshake(handshakeProvider(organisationId), {
     keyArn: kmsKeyArn,
@@ -177,7 +179,7 @@ export function handshakeProvider(organisationId: string): KeyProvider {
 /** Insert the organisation's current key and append a platform-chain event. */
 export async function registerOrganisationKey(
   input: RegisterOrganisationKeyInput,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   assertTenantKeyArn(input.kmsKeyArn);
   return database.transaction(async (tx) => {
@@ -225,7 +227,7 @@ export interface KeyReplacement {
 export async function rotateOrganisationKey(
   organisationId: string,
   kmsKeyArn: string,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<KeyReplacement> {
   assertTenantKeyArn(kmsKeyArn);
   const current = await getOrganisationKey(organisationId, database);
@@ -327,7 +329,7 @@ export async function applyOrganisationKeyStatus(
 export async function setOrganisationKeyStatus(
   organisationId: string,
   status: OrganisationKeyStatus,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   const row = await database.transaction((tx) =>
     applyOrganisationKeyStatus(tx, organisationId, status),
@@ -344,7 +346,7 @@ export async function setOrganisationKeyStatus(
 export async function markOrganisationKeyUnavailable(
   organisationId: string,
   kmsError: string,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<void> {
   await database.transaction(async (tx) => {
     const updated = await tx
@@ -384,7 +386,7 @@ export type { KeyValidationFailureCode } from '@/lib/encryption/key-handshake';
  */
 export async function resetOrganisationKeyForValidation(
   input: RegisterOrganisationKeyInput,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   assertTenantKeyArn(input.kmsKeyArn);
   const current = await getOrganisationKey(input.organisationId, database);
@@ -429,7 +431,7 @@ export async function completeOrganisationKeyValidation(
     readonly failureCode: KeyValidationFailureCode | null;
     readonly canaryCiphertext: string | null;
   },
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   const passed = input.failureCode === null;
   return database.transaction(async (tx) => {
@@ -498,7 +500,7 @@ export async function saveKeyHealthObservation(
     readonly healthState: string;
     readonly previousStatus: OrganisationKeyStatus;
   },
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<void> {
   await database.transaction(async (tx) => {
     const updated = await tx
@@ -555,7 +557,7 @@ export interface RecordEscrowOptInInput {
  */
 export async function recordEscrowOptIn(
   input: RecordEscrowOptInInput,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   const consentReference = input.consentReference.trim();
   if (!consentReference) throw new Error('Escrow opt-in requires a consent reference');
@@ -612,7 +614,7 @@ export async function withdrawEscrow(
   organisationId: string,
   recordedByUserId: string,
   reason: string,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   // Reject free text before the write, so a bad reason cannot leave escrow
   // withdrawn without its audit event.

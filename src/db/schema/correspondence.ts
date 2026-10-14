@@ -20,6 +20,7 @@ import { applications } from './applications';
 import { decisions } from './decisions';
 import { evidenceRequests } from './evidence';
 import { certificates } from './certificates';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Outbound tenant email stored so the queue payload can stay an id.
@@ -42,8 +43,11 @@ export const correspondenceMessages = pgTable(
     htmlBody: text('html_body'),
     ...timestamps,
   },
-  (table) => [index('correspondence_messages_org_idx').on(table.organisationId)],
-);
+  (table) => [
+    index('correspondence_messages_org_idx').on(table.organisationId),
+    tenantIsolationPolicy(),
+  ],
+).enableRLS();
 
 /**
  * Correspondence product tables.
@@ -86,8 +90,9 @@ export const correspondenceTemplates = pgTable(
       table.name,
     ),
     index('correspondence_templates_org_kind_idx').on(table.organisationId, table.kind),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * One outbound letter or email on an application. A row is created as a draft
@@ -156,8 +161,9 @@ export const correspondenceItems = pgTable(
       table.applicationId,
     ),
     uniqueIndex('correspondence_items_token_hash_uidx').on(table.portalTokenHash),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const correspondenceMessagesRelations = relations(
   correspondenceMessages,

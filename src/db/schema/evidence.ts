@@ -13,6 +13,7 @@ import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
 import { formInvitations } from './forms';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Evidence tables (Phase 3).
@@ -60,8 +61,9 @@ export const evidenceRequests = pgTable(
       table.organisationId,
       table.applicationId,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * A single uploaded file. `status` drives the fail-secure lifecycle:
@@ -137,8 +139,9 @@ export const evidence = pgTable(
       table.formInvitationId,
     ),
     index('evidence_org_status_idx').on(table.organisationId, table.status),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const evidenceRequestsRelations = relations(evidenceRequests, ({ one, many }) => ({
   organisation: one(organisations, {

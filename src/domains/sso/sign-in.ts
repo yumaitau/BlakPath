@@ -1,5 +1,6 @@
 import { and, eq, type SQL } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import { memberships, organisationDomains, organisationSsoProviders } from '@/db/schema';
 import { recordAudit } from '@/domains/audit/service';
 import { auditReason } from '@/domains/audit/hash';
@@ -94,7 +95,7 @@ export function selectSsoBinding(
 }
 
 async function loadCandidates(where: SQL): Promise<SsoBindingCandidate[]> {
-  const rows = await db
+  const rows = await platformDb
     .select({
       id: organisationSsoProviders.id,
       organisationId: organisationSsoProviders.organisationId,
@@ -152,8 +153,8 @@ export async function hasActiveMembership(
   userId: string,
   organisationId: string,
 ): Promise<boolean> {
-  const rows = await db
-    .select({ id: memberships.id })
+  const rows = await scopeFor(organisationId)
+    .db.select({ id: memberships.id })
     .from(memberships)
     .where(
       and(

@@ -21,7 +21,8 @@ export const refId = (name: string) => uuid(name);
 /**
  * Every tenant-owned table MUST include this column. Isolation is enforced in
  * the data-access layer (see src/db/tenant-db.ts) and, defence-in-depth, by
- * row-level security policies. A composite index leading with this column is
+ * row-level security: ENABLE + FORCE, policy `tenant_isolation`
+ * (`src/db/schema/_rls.ts`). A composite index leading with this column is
  * expected on every tenant table.
  */
 export const organisationId = () => uuid('organisation_id').notNull();

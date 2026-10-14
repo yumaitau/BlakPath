@@ -19,6 +19,7 @@ import {
   organisationKeyValidationStatus,
 } from './enums';
 import { organisations } from './tenancy';
+import { tenantIsolationPolicy } from './_rls';
 
 /**
  * Current key-encryption key for one organisation.
@@ -95,8 +96,9 @@ export const organisationKeys = pgTable(
       'organisation_keys_escrow_consent',
       sql`${table.escrow} = false OR (${table.escrowConsentReference} IS NOT NULL AND ${table.escrowConsentedAt} IS NOT NULL AND ${table.escrowPackageDigest} IS NOT NULL)`,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 export const organisationKeysRelations = relations(organisationKeys, ({ one }) => ({
   organisation: one(organisations, {
@@ -139,8 +141,9 @@ export const organisationKeyRewraps = pgTable(
       table.organisationId,
       table.status,
     ),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Version-2 envelopes the re-wrap job can find. Writers (field encryption)
@@ -168,8 +171,9 @@ export const tenantEncryptedFields = pgTable(
       table.rowId,
     ),
     index('tenant_encrypted_fields_org_id_idx').on(table.organisationId, table.id),
+    tenantIsolationPolicy(),
   ],
-);
+).enableRLS();
 
 /**
  * Destruction certificate. No foreign key: it has to outlive the tenant key
@@ -186,8 +190,11 @@ export const destructionCertificates = pgTable(
     certificate: jsonb('certificate').notNull(),
     ...timestamps,
   },
-  (table) => [index('destruction_certificates_org_idx').on(table.organisationId)],
-);
+  (table) => [
+    index('destruction_certificates_org_idx').on(table.organisationId),
+    tenantIsolationPolicy(),
+  ],
+).enableRLS();
 
 export const organisationKeyRewrapsRelations = relations(
   organisationKeyRewraps,

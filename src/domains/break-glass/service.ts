@@ -1,7 +1,7 @@
 import { and, desc, eq } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import { breakGlassRequests } from '@/db/schema';
-import { currentScope } from '@/db/tenant-db';
+import { currentScope, scopeFor } from '@/db/tenant-db';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
@@ -72,7 +72,7 @@ export async function requestBreakGlass(params: {
   const input = requestBreakGlassSchema.parse(params.input);
   const expiresAt = new Date(Date.now() + input.expiresInMinutes * 60 * 1000);
 
-  return db.transaction(async (tx) => {
+  return scopeFor(input.organisationId).db.transaction(async (tx) => {
     const inserted = await tx
       .insert(breakGlassRequests)
       .values({
@@ -115,7 +115,7 @@ export async function activateBreakGlass(params: {
   activatingUserId: string;
   correlationId: string;
 }): Promise<BreakGlassRow> {
-  const rows = await db
+  const rows = await platformDb
     .select()
     .from(breakGlassRequests)
     .where(eq(breakGlassRequests.id, params.requestId))
@@ -131,7 +131,7 @@ export async function activateBreakGlass(params: {
   }
 
   const now = new Date();
-  return db.transaction(async (tx) => {
+  return scopeFor(request.organisationId).db.transaction(async (tx) => {
     const updated = await tx
       .update(breakGlassRequests)
       .set({ status: 'active', activatedAt: now, tenantNotifiedAt: now })
@@ -322,7 +322,7 @@ export async function resolveBreakGlassContext(params: {
   ipAddress?: string | undefined;
   userAgent?: string | undefined;
 }): Promise<TenantContext> {
-  const rows = await db
+  const rows = await platformDb
     .select()
     .from(breakGlassRequests)
     .where(
