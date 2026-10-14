@@ -1,6 +1,7 @@
 import { getPublicForm } from '@/domains/forms';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PublicFormRenderer } from '@/components/forms/public-form-renderer';
+import { publicKeyDegradation } from '@/lib/encryption/public-degradation';
 
 /**
  * Public, tokenised form completion page (RSC).
@@ -25,14 +26,29 @@ export default async function PublicFormPage({
 }) {
   const { token } = await params;
 
-  // Resolve the form OUTSIDE the JSX return. Any failure is a bad token; we
-  // never distinguish "expired" from "revoked" from "never existed" — the
-  // message stays deliberately uniform.
+  // Resolve the form OUTSIDE the JSX return. A bad token stays a single
+  // message — expired, revoked and unknown are not distinguished. A tenant
+  // key failure is different: the link may be fine, the key is not.
   let form: Awaited<ReturnType<typeof getPublicForm>> | null = null;
+  let keyMessage: string | null = null;
   try {
     form = await getPublicForm(token);
-  } catch {
+  } catch (error) {
+    keyMessage = publicKeyDegradation(error);
     form = null;
+  }
+
+  if (keyMessage) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>This form is unavailable</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground text-sm">{keyMessage}</p>
+        </CardContent>
+      </Card>
+    );
   }
 
   if (!form) {

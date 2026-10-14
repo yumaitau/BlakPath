@@ -64,6 +64,13 @@ database. These are protected with **envelope encryption**:
   most five minutes and are zeroed when dropped.
 - Local development and CI use a deterministic local provider. Production
   refuses `ENCRYPTION_LOCAL_KEY` and `KMS_ENDPOINT`.
+- Revocation fails closed inside the data-key cache TTL. KMS automatic rotation
+  keeps the same CMK ARN. A replacement CMK re-wraps envelopes and copies
+  objects under the new SSE-KMS key. Crypto-shredding verifies the key no
+  longer opens a sample, then purges ciphertext. The destruction certificate
+  keeps residual counts and timestamps only. AWS Backup copies of that
+  ciphertext become unreadable when the tenant key is deleted. Detail is in
+  [`key-lifecycle.md`](key-lifecycle.md).
 - Plaintext exists only transiently in memory during a single operation; it is
   never logged (pino) and never persisted.
 

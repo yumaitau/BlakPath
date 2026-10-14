@@ -1,11 +1,13 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
 import {
   canonicalContext,
+  KmsKeyAccessError,
   parseKeyArn,
   type DecryptDataKeyInput,
   type GeneratedDataKey,
   type GenerateDataKeyInput,
   type KeyProvider,
+  type WrapDataKeyInput,
 } from './key-provider';
 
 const ALGO = 'aes-256-gcm';
@@ -22,6 +24,8 @@ const TAG_BYTES = 16;
  */
 export class LocalKeyProvider implements KeyProvider {
   private readonly root: Buffer;
+  /** ARN → KMS-shaped refusal. Memory only. Production never constructs this class. */
+  private readonly blocked = new Map<string, 'disabled' | 'deleted'>();
 
   constructor(root: Buffer) {
     if (root.length !== 32) {
@@ -30,8 +34,22 @@ export class LocalKeyProvider implements KeyProvider {
     this.root = Buffer.from(root);
   }
 
+  /**
+   * Stand-in for `DisableKey` or a key pending deletion. The next generate,
+   * wrap or decrypt for this ARN fails closed the way KMS would.
+   */
+  disableKey(keyArn: string, reason: 'disabled' | 'deleted' = 'disabled'): void {
+    parseKeyArn(keyArn);
+    this.blocked.set(keyArn, reason);
+  }
+
+  /** Stand-in for re-enabling a CMK or restoring a grant. */
+  enableKey(keyArn: string): void {
+    this.blocked.delete(keyArn);
+  }
+
   async generateDataKey(input: GenerateDataKeyInput): Promise<GeneratedDataKey> {
-    parseKeyArn(input.keyArn);
+    this.assertUsable(input.keyArn);
     const dek = randomBytes(32);
     const kek = this.kekFor(input.keyArn);
     try {
@@ -46,13 +64,33 @@ export class LocalKeyProvider implements KeyProvider {
   }
 
   async decrypt(input: DecryptDataKeyInput): Promise<Buffer> {
-    parseKeyArn(input.keyArn);
+    this.assertUsable(input.keyArn);
     const kek = this.kekFor(input.keyArn);
     try {
       return unwrap(kek, input.ciphertextBlob, canonicalContext(input.encryptionContext));
     } finally {
       kek.fill(0);
     }
+  }
+
+  async wrap(input: WrapDataKeyInput): Promise<Buffer> {
+    this.assertUsable(input.keyArn);
+    if (input.plaintext.length !== 32) {
+      throw new Error('Data key must be 32 bytes');
+    }
+    const kek = this.kekFor(input.keyArn);
+    try {
+      return wrap(kek, input.plaintext, canonicalContext(input.encryptionContext));
+    } finally {
+      kek.fill(0);
+    }
+  }
+
+  private assertUsable(keyArn: string): void {
+    parseKeyArn(keyArn);
+    const reason = this.blocked.get(keyArn);
+    if (reason === 'disabled') throw new KmsKeyAccessError('DisabledException');
+    if (reason === 'deleted') throw new KmsKeyAccessError('KMSInvalidStateException');
   }
 
   private kekFor(keyArn: string): Buffer {

@@ -231,8 +231,11 @@ Version 1 seals continue to verify.
 1. Snapshot RDS + S3 point-in-time into isolated namespace with separate
    secret copy. Never restore into live namespace.
 2. Run migrations, sign in as seeded admin, confirm records present.
+   Re-establish the client CMK grant before expecting tenant plaintext. A
+   restored backup does not recreate a deleted key.
 3. Download clean evidence through normal authorised path (quarantine blocks
-   bypass). Run audit-verify, expect clean chain.
+   bypass). Run audit-verify, expect clean chain. Confirm a tenant whose grant
+   is missing fails closed and that another tenant still reads.
 4. Record date, operator, source, target, elapsed RTO, verification result
    outside restored environment.
 

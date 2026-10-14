@@ -110,7 +110,8 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
   - `NOT NULL` FKs + composite indexes + **RLS backstop**); per-tenant
     object-storage namespaces and short-lived presigned URLs; **per-tenant
     envelope encryption (AES-256-GCM)** under that organisation's KMS key,
-    failing closed when the key is unavailable; TLS in transit
+    failing closed when the key is unavailable, including after the key is
+    deleted so backup ciphertext under that CMK cannot be opened; TLS in transit
     (Cloudflare Full (strict) to an HTTPS origin listener; HTTP only redirects);
     audit redaction (secrets/payloads never written to audit); least-privilege
     RBAC; **no standing operator access** (break-glass only); runtime secrets
@@ -126,7 +127,9 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
   address, including public certificate lookups and holder-name checks;
   regional WAFv2 managed rules on the origin load balancer; bounded upload
   sizes/types; presigned uploads keep large transfers off the app tier; BullMQ
-  retries with backoff and dead-lettering; a stalled scanner **holds** files in
+  retries with backoff and dead-lettering; a tenant whose key is unavailable has
+  its jobs delayed rather than retried to exhaustion, and other tenants are not
+  paused; a stalled scanner **holds** files in
   quarantine rather than failing open (fail-secure, below).
 
 ### Elevation of privilege

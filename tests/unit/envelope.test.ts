@@ -32,6 +32,8 @@ interface KeyRow {
   createdAt: Date;
   updatedAt: Date;
   rotatedAt: Date | null;
+  previousKmsKeyArn: string | null;
+  previousKeyVersion: number | null;
 }
 
 const { rows, mark } = vi.hoisted(() => {
@@ -74,6 +76,8 @@ function put(
     createdAt: new Date(),
     updatedAt: new Date(),
     rotatedAt: null,
+    previousKmsKeyArn: null,
+    previousKeyVersion: null,
   });
 }
 
@@ -186,7 +190,11 @@ describe('tenant envelope', () => {
     const response = tenantKeyErrorResponse(error);
     expect(response?.status).toBe(423);
     const body = await response?.json();
-    expect(body).toMatchObject({ code: 'TENANT_KEY_UNAVAILABLE' });
+    expect(body).toMatchObject({
+      code: 'TENANT_KEY_UNAVAILABLE',
+      error:
+        "Your organisation's encryption key is unavailable. Contact your key administrator.",
+    });
     expect(JSON.stringify(body)).not.toContain('hidden');
     expect(mark).not.toHaveBeenCalled();
   });
@@ -233,6 +241,9 @@ describe('tenant envelope', () => {
           error.name = name;
           throw error;
         },
+        async wrap() {
+          throw new Error('unused');
+        },
       };
       const reader = await scopeFor(ORG_A, {
         provider: failing,
@@ -252,6 +263,25 @@ describe('tenant envelope', () => {
       });
     },
   );
+
+  it('still opens ciphertext wrapped by the previous CMK during replacement', async () => {
+    put(ORG_A, ARN_A);
+    const writer = await scopeFor(ORG_A, { provider, cache: cache() });
+    const field = await writer.encrypt('still-here', binding);
+    const current = rows.get(ORG_A);
+    if (!current) throw new Error('missing key');
+    rows.set(ORG_A, {
+      ...current,
+      kmsKeyArn: ARN_B,
+      keyVersion: 2,
+      previousKmsKeyArn: ARN_A,
+      previousKeyVersion: 1,
+    });
+    const reader = await scopeFor(ORG_A, { provider, cache: cache() });
+    expect(await reader.decrypt(field, binding)).toBe('still-here');
+    const fresh = await reader.encrypt('new-write', binding);
+    expect(fresh.kid.startsWith(ARN_B)).toBe(true);
+  });
 
   it('round-trips platform data under the platform key', async () => {
     const scope = platformScope({ provider, cache: cache() });

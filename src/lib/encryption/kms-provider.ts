@@ -1,6 +1,7 @@
 import {
   DecryptCommand,
   DescribeKeyCommand,
+  EncryptCommand,
   GenerateDataKeyCommand,
   KMSClient,
 } from '@aws-sdk/client-kms';
@@ -12,6 +13,7 @@ import {
   type GeneratedDataKey,
   type GenerateDataKeyInput,
   type KeyProvider,
+  type WrapDataKeyInput,
 } from './key-provider';
 
 /**
@@ -43,6 +45,28 @@ export class KmsKeyProvider implements KeyProvider {
         ciphertextBlob,
         keyId: out.KeyId ?? input.keyArn,
       };
+    } catch (error) {
+      const access = asKmsKeyAccessError(error);
+      if (access) throw access;
+      throw error;
+    }
+  }
+
+  async wrap(input: WrapDataKeyInput): Promise<Buffer> {
+    this.assertRegion(input.keyArn);
+    if (input.plaintext.length !== 32) {
+      throw new Error('Data key must be 32 bytes');
+    }
+    try {
+      const out = await this.client.send(
+        new EncryptCommand({
+          KeyId: input.keyArn,
+          Plaintext: input.plaintext,
+          EncryptionContext: { ...input.encryptionContext },
+        }),
+      );
+      if (!out.CiphertextBlob) throw new Error('KMS Encrypt returned no ciphertext');
+      return Buffer.from(out.CiphertextBlob);
     } catch (error) {
       const access = asKmsKeyAccessError(error);
       if (access) throw access;

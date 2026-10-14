@@ -28,6 +28,7 @@ export enum QueueName {
   Reminder = 'reminder',
   EncryptionBackfill = 'encryption-backfill',
   KeyHealth = 'key-health',
+  KeyRewrap = 'key-rewrap',
 }
 
 /** Base shape every job payload must satisfy: it is bound to one tenant. */
