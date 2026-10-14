@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -62,6 +63,7 @@ interface WorkspacePermissions {
   downloadEvidence: boolean;
   addNote: boolean;
   uploadEvidence: boolean;
+  classifyEvidence: boolean;
 }
 
 export interface ApplicationCaseWorkspaceProps {
@@ -153,6 +155,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const [fileProblems, setFileProblems] = useState<string[]>([]);
   const [uploads, setUploads] = useState<UploadProgress[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [classifications, setClassifications] = useState<Record<string, string>>({});
 
   function chooseFiles(files: FileList | null) {
     const chosen = Array.from(files ?? []);
@@ -269,10 +272,12 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
+        const conflict = await readConflictMessage(response);
         setError(
-          response.status === 403
-            ? 'You do not have permission to make that change.'
-            : 'That change could not be saved. Refresh the case and try again.',
+          conflict ??
+            (response.status === 403
+              ? 'You do not have permission to make that change.'
+              : 'That change could not be saved. Refresh the case and try again.'),
         );
         return false;
       }
@@ -441,6 +446,9 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
           </h2>
           <p className="text-muted-foreground mt-1 text-sm">
             Files stay quarantined and unavailable until a clean malware scan is recorded.
+            {props.permissions.classifyEvidence
+              ? ' Classification is an administrative label your organisation records. It is not a decision about a person’s identity.'
+              : ''}
           </p>
 
           {props.evidence.length === 0 ? (
@@ -453,40 +461,114 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
                 const downloadable =
                   item.status === 'clean' && props.permissions.downloadEvidence;
                 return (
-                  <li
-                    key={item.id}
-                    className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">
-                        {item.fileName}
+                  <li key={item.id} className="flex flex-col gap-3 py-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">
+                          {item.fileName}
+                        </span>
+                        <span className="text-muted-foreground text-xs">
+                          {item.classification ?? 'Not classified'} ·{' '}
+                          {Math.ceil(item.sizeBytes / 1024)} KB
+                        </span>
                       </span>
-                      <span className="text-muted-foreground text-xs">
-                        {item.classification ?? 'Not classified'} ·{' '}
-                        {Math.ceil(item.sizeBytes / 1024)} KB
-                      </span>
-                    </span>
-                    <span className="flex items-center gap-3">
-                      <Badge
-                        tone={evidenceTone(item.status)}
-                        icon={evidenceIcon(item.status)}
-                      >
-                        {item.status === 'clean'
-                          ? 'Scan clean'
-                          : displayLabel(item.status)}
-                      </Badge>
-                      {downloadable ? (
-                        <button
-                          type="button"
-                          className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline disabled:opacity-60"
-                          disabled={busy !== null}
-                          onClick={() => void downloadEvidence(item.id)}
+                      <span className="flex items-center gap-3">
+                        <Badge
+                          tone={evidenceTone(item.status)}
+                          icon={evidenceIcon(item.status)}
                         >
-                          <Download className="size-4" aria-hidden="true" />
-                          {busy === `download:${item.id}` ? 'Checking…' : 'Download'}
-                        </button>
-                      ) : null}
-                    </span>
+                          {item.status === 'clean'
+                            ? 'Scan clean'
+                            : displayLabel(item.status)}
+                        </Badge>
+                        {downloadable ? (
+                          <button
+                            type="button"
+                            className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline disabled:opacity-60"
+                            disabled={busy !== null}
+                            onClick={() => void downloadEvidence(item.id)}
+                          >
+                            <Download className="size-4" aria-hidden="true" />
+                            {busy === `download:${item.id}` ? 'Checking…' : 'Download'}
+                          </button>
+                        ) : null}
+                      </span>
+                    </div>
+                    {props.permissions.classifyEvidence ? (
+                      <form
+                        className="flex flex-col gap-2 sm:flex-row sm:items-end"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void (async () => {
+                            const classification = (
+                              classifications[item.id] ?? ''
+                            ).trim();
+                            if (!classification) return;
+                            setBusy(`classify:${item.id}`);
+                            setError(null);
+                            setMessage(null);
+                            try {
+                              const response = await fetch(
+                                `/api/evidence/${item.id}/classification`,
+                                {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ classification }),
+                                },
+                              );
+                              if (!response.ok) {
+                                setError(
+                                  response.status === 403
+                                    ? 'You do not have permission to classify this file.'
+                                    : 'That classification could not be saved. Refresh the case and try again.',
+                                );
+                                return;
+                              }
+                              setClassifications((current) => ({
+                                ...current,
+                                [item.id]: '',
+                              }));
+                              setMessage(`Classification recorded for ${item.fileName}.`);
+                              router.refresh();
+                            } catch {
+                              setError(
+                                'That classification could not be saved. Check your connection and try again.',
+                              );
+                            } finally {
+                              setBusy(null);
+                            }
+                          })();
+                        }}
+                      >
+                        <div className="grid min-w-0 flex-1 gap-2">
+                          <Label htmlFor={`classify-${item.id}`}>
+                            Classification for {item.fileName}
+                          </Label>
+                          <Input
+                            id={`classify-${item.id}`}
+                            value={classifications[item.id] ?? ''}
+                            maxLength={120}
+                            required
+                            onChange={(event) =>
+                              setClassifications((current) => ({
+                                ...current,
+                                [item.id]: event.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                        <Button
+                          type="submit"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy !== null}
+                        >
+                          {busy === `classify:${item.id}`
+                            ? 'Saving…'
+                            : 'Save classification'}
+                        </Button>
+                      </form>
+                    ) : null}
                   </li>
                 );
               })}
