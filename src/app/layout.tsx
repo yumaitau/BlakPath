@@ -35,6 +35,12 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
+/**
+ * The CSP nonce in `src/proxy.ts` is unique per request. Pages must render on
+ * that request so Next can copy the nonce onto its scripts.
+ */
+export const dynamic = 'force-dynamic';
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en-AU">

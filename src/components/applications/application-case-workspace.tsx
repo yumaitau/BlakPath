@@ -9,12 +9,19 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  inferUploadContentType,
+  UPLOAD_ACCEPT,
+  uploadProblem,
+} from '@/domains/evidence/status';
+import { withStepUp } from '@/lib/auth/step-up-flow';
 
 interface CaseEvidence {
   id: string;
@@ -88,6 +95,40 @@ function evidenceTone(status: string): 'success' | 'warning' | 'destructive' {
   return 'warning';
 }
 
+interface UploadProgress {
+  name: string;
+  percent: number;
+  state: 'waiting' | 'uploading' | 'done' | 'failed';
+}
+
+/**
+ * PUT a file to a presigned URL, reporting progress. `fetch` cannot report
+ * upload progress, so this uses XMLHttpRequest. Resolves true on a 2xx reply.
+ */
+function putWithProgress(
+  url: string,
+  headers: Record<string, string>,
+  file: File,
+  onProgress: (percent: number) => void,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    for (const [name, value] of Object.entries(headers)) {
+      xhr.setRequestHeader(name, value);
+    }
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300);
+    xhr.onerror = () => resolve(false);
+    xhr.onabort = () => resolve(false);
+    xhr.send(file);
+  });
+}
+
 function evidenceIcon(status: string) {
   if (status === 'clean') return ShieldCheck;
   if (status === 'infected' || status === 'rejected') return FileWarning;
@@ -96,6 +137,7 @@ function evidenceIcon(status: string) {
 
 export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,61 +149,109 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const [requestDue, setRequestDue] = useState('');
   const [noteBody, setNoteBody] = useState('');
   const [noteVisibility, setNoteVisibility] = useState('staff');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [fileProblems, setFileProblems] = useState<string[]>([]);
+  const [uploads, setUploads] = useState<UploadProgress[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
 
-  async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedFile) return;
-    setBusy('upload-evidence');
-    setError(null);
-    setMessage(null);
+  function chooseFiles(files: FileList | null) {
+    const chosen = Array.from(files ?? []);
+    const problems: string[] = [];
+    const accepted: File[] = [];
+    for (const file of chosen) {
+      const problem = uploadProblem(file);
+      if (problem) problems.push(problem);
+      else accepted.push(file);
+    }
+    setFileProblems(problems);
+    setSelectedFiles(accepted);
+    setUploads([]);
+  }
+
+  function updateUpload(index: number, patch: Partial<UploadProgress>) {
+    setUploads((current) =>
+      current.map((item, i) => (i === index ? { ...item, ...patch } : item)),
+    );
+  }
+
+  /** Upload one file; resolves with a plain-language problem, or null. */
+  async function uploadOne(file: File, index: number): Promise<string | null> {
+    const contentType = inferUploadContentType(file.name, file.type);
+    if (!contentType) return 'this file type is not accepted.';
     try {
       const request = await fetch(`/api/applications/${props.applicationId}/evidence`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fileName: selectedFile.name,
-          contentType: selectedFile.type,
-          sizeBytes: selectedFile.size,
+          fileName: file.name,
+          contentType,
+          sizeBytes: file.size,
         }),
       });
       if (!request.ok) {
-        setError('This file could not be prepared for upload. Check its type and size.');
-        return;
+        return 'it could not be prepared for upload. Check its type and size.';
       }
       const prepared = (await request.json()) as {
         evidence: { id: string };
         upload: { url: string; headers: Record<string, string> };
       };
-      const uploaded = await fetch(prepared.upload.url, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': selectedFile.type,
-          ...prepared.upload.headers,
-        },
-        body: selectedFile,
-      });
-      if (!uploaded.ok) {
-        setError('The file upload did not complete. Please try again.');
-        return;
-      }
+      updateUpload(index, { state: 'uploading' });
+      const uploaded = await putWithProgress(
+        prepared.upload.url,
+        prepared.upload.headers,
+        file,
+        (percent) => updateUpload(index, { percent }),
+      );
+      if (!uploaded) return 'the upload did not complete. Please try again.';
       const completed = await fetch(`/api/evidence/${prepared.evidence.id}/complete`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!completed.ok) {
-        setError('The file arrived, but its security scan could not be started.');
-        return;
+        return 'the file arrived, but its security scan could not be started.';
       }
-      setSelectedFile(null);
+      return null;
+    } catch {
+      return 'the upload could not be completed. Check your connection.';
+    }
+  }
+
+  async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (selectedFiles.length === 0) return;
+    setBusy('upload-evidence');
+    setError(null);
+    setMessage(null);
+    setUploads(
+      selectedFiles.map((file) => ({ name: file.name, percent: 0, state: 'waiting' })),
+    );
+    const failures: string[] = [];
+    let succeeded = 0;
+    // One at a time, so progress is easy to follow and bandwidth is not split.
+    for (const [index, file] of selectedFiles.entries()) {
+      const problem = await uploadOne(file, index);
+      if (problem) {
+        failures.push(`${file.name}: ${problem}`);
+        updateUpload(index, { state: 'failed' });
+      } else {
+        succeeded += 1;
+        updateUpload(index, { state: 'done', percent: 100 });
+      }
+    }
+    setBusy(null);
+    setSelectedFiles([]);
+    if (fileInput.current) fileInput.current.value = '';
+    if (failures.length > 0) setError(failures.join(' '));
+    if (succeeded === 1) {
       setMessage(
         'Evidence uploaded to quarantine. It cannot be opened until the scan is clean.',
       );
-      router.refresh();
-    } catch {
-      setError('The evidence upload could not be completed. Check your connection.');
-    } finally {
-      setBusy(null);
+    } else if (succeeded > 1) {
+      setMessage(
+        `${succeeded} files uploaded to quarantine. They cannot be opened until each scan is clean.`,
+      );
     }
+    if (succeeded > 0) router.refresh();
   }
 
   async function mutate(
@@ -235,8 +325,42 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
     }
   }
 
+  async function downloadEvidence(id: string) {
+    setBusy(`download:${id}`);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await withStepUp(
+        () =>
+          fetch(`/api/evidence/${id}/download`, {
+            headers: { Accept: 'application/json' },
+          }),
+        () => stepUp.request(),
+      );
+      if (!response.ok) {
+        setError(
+          response.status === 401
+            ? 'Confirm it is you to download this file. You stay signed in.'
+            : 'That file could not be downloaded.',
+        );
+        return;
+      }
+      const data = (await response.json()) as { url?: string };
+      if (!data.url) {
+        setError('That file could not be downloaded.');
+        return;
+      }
+      window.location.assign(data.url);
+    } catch {
+      setError('That file could not be downloaded. Check your connection.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <div className="flex min-w-0 flex-col gap-8">
         {error ? (
           <Alert role="alert" tone="destructive" title="Change not saved">
@@ -352,12 +476,15 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
                           : displayLabel(item.status)}
                       </Badge>
                       {downloadable ? (
-                        <a
-                          className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline"
-                          href={`/api/evidence/${item.id}/download`}
+                        <button
+                          type="button"
+                          className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline disabled:opacity-60"
+                          disabled={busy !== null}
+                          onClick={() => void downloadEvidence(item.id)}
                         >
-                          <Download className="size-4" aria-hidden="true" /> Download
-                        </a>
+                          <Download className="size-4" aria-hidden="true" />
+                          {busy === `download:${item.id}` ? 'Checking…' : 'Download'}
+                        </button>
                       ) : null}
                     </span>
                   </li>
@@ -370,21 +497,65 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
             <form className="border-border mt-6 border-t pt-5" onSubmit={uploadEvidence}>
               <Label htmlFor="evidence-file">Upload supporting evidence</Label>
               <Input
+                ref={fileInput}
                 id="evidence-file"
                 className="mt-2"
                 type="file"
-                accept="application/pdf,image/jpeg,image/png"
+                accept={UPLOAD_ACCEPT}
+                multiple
                 required
-                onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                aria-describedby="evidence-file-hint"
+                onChange={(event) => chooseFiles(event.target.files)}
               />
-              <p className="text-muted-foreground mt-2 text-xs">
-                PDF, JPEG or PNG, up to 25 MB. The file is quarantined until its malware
+              <p id="evidence-file-hint" className="text-muted-foreground mt-2 text-xs">
+                PDF, photos (JPEG, PNG, TIFF or HEIC) or Word documents, up to 25 MB each.
+                You can choose several files. Each file is quarantined until its malware
                 scan is clean.
               </p>
+              {fileProblems.length > 0 ? (
+                <Alert
+                  className="mt-3"
+                  role="alert"
+                  tone="destructive"
+                  title="Some files cannot be uploaded"
+                >
+                  <ul className="list-disc pl-5">
+                    {fileProblems.map((problem) => (
+                      <li key={problem}>{problem}</li>
+                    ))}
+                  </ul>
+                </Alert>
+              ) : null}
+              {uploads.length > 0 ? (
+                <ul className="mt-3 space-y-2 text-sm" aria-label="Upload progress">
+                  {uploads.map((item, index) => (
+                    <li key={`${index}-${item.name}`} className="grid gap-1">
+                      <span className="flex justify-between gap-3">
+                        <span className="truncate">{item.name}</span>
+                        <span className="text-muted-foreground shrink-0 text-xs">
+                          {item.state === 'done'
+                            ? 'Uploaded'
+                            : item.state === 'failed'
+                              ? 'Not uploaded'
+                              : item.state === 'waiting'
+                                ? 'Waiting'
+                                : `${item.percent}%`}
+                        </span>
+                      </span>
+                      <progress
+                        className="h-1.5 w-full"
+                        max={100}
+                        value={item.percent}
+                        aria-label={`Upload progress for ${item.name}`}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               <Button
                 className="mt-3"
                 type="submit"
-                disabled={!selectedFile || busy !== null}
+                disabled={selectedFiles.length === 0 || busy !== null}
               >
                 {busy === 'upload-evidence' ? 'Uploading…' : 'Upload evidence'}
               </Button>

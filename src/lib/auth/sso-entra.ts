@@ -1,13 +1,17 @@
 import {
-  createHmac,
+  createCipheriv,
+  createDecipheriv,
+  createHash,
   createPublicKey,
   createVerify,
-  randomUUID,
+  hkdfSync,
+  randomBytes,
   timingSafeEqual,
 } from 'node:crypto';
 import { env } from '@/lib/env';
 import {
   registerSsoProvider,
+  resolveSsoProvider,
   type FederatedIdentity,
   type SsoAuthorizationRequest,
   type SsoCallbackContext,
@@ -20,14 +24,22 @@ import {
  *
  * Implements the `SsoProvider` contract with zero new dependencies: discovery
  * over HTTPS, RS256 id_token verification with node:crypto (JWKS cached
- * in-memory for 10 minutes), HMAC-signed short-lived state. Secrets come from
- * `SSO_ENTRA_CLIENT_ID` / `SSO_ENTRA_CLIENT_SECRET`; the issuer allow-list is
- * the tenant binding table (`organisation_sso_providers`), enforced by the
- * caller before `start`/`complete` run.
+ * in-memory for 10 minutes), authorization code flow with PKCE (S256) and a
+ * nonce. The flow transaction (state, nonce, PKCE verifier, tenant, issuer) is
+ * sealed with AES-256-GCM under a dedicated `SSO_STATE_SECRET` and kept in an
+ * httpOnly cookie by the caller, so a callback only completes in the browser
+ * that started it. Client credentials come from `SSO_ENTRA_CLIENT_ID` /
+ * `SSO_ENTRA_CLIENT_SECRET` (Secrets Manager via the runtime secret). The
+ * issuer is per tenant — taken from the binding (`organisation_sso_providers`),
+ * never a multi-tenant `common` endpoint — and is checked against the discovery
+ * document and the id_token `iss`.
  */
 
-const STATE_TTL_MS = 10 * 60_000;
+const TRANSACTION_TTL_MS = 10 * 60_000;
+const DISCOVERY_TTL_MS = 10 * 60_000;
 const JWKS_TTL_MS = 10 * 60_000;
+/** Tolerated clock skew between us and the IdP, in seconds. */
+const CLOCK_SKEW_S = 60;
 
 interface Discovery {
   authorization_endpoint: string;
@@ -51,85 +63,137 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
   return res.json() as Promise<unknown>;
 }
 
+/** HTTPS only; plain HTTP is tolerated for loopback mock IdPs in tests. */
+function assertSecureIssuer(issuer: string): void {
+  const url = new URL(issuer);
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('SSO issuer must use HTTPS.');
+  }
+}
+
+/**
+ * OIDC discovery for a tenant issuer. The document's `issuer` MUST be
+ * identical to the issuer it was fetched for (OIDC Discovery §4.3), which also
+ * rejects Entra's multi-tenant endpoints (their issuer is a `{tenantid}`
+ * template that matches no real token).
+ */
 export async function discover(issuer: string): Promise<Discovery> {
   const cached = discoveryCache.get(issuer);
-  if (cached && Date.now() - cached.at < JWKS_TTL_MS) return cached.doc;
+  if (cached && Date.now() - cached.at < DISCOVERY_TTL_MS) return cached.doc;
+  assertSecureIssuer(issuer);
   const base = issuer.replace(/\/$/, '');
   const doc = (await fetchJson(`${base}/.well-known/openid-configuration`)) as Discovery;
   if (!doc.authorization_endpoint || !doc.token_endpoint || !doc.jwks_uri) {
     throw new Error('SSO discovery document incomplete.');
   }
+  if (doc.issuer !== issuer) throw new Error('SSO discovery issuer mismatch.');
   discoveryCache.set(issuer, { at: Date.now(), doc });
   return doc;
 }
 
-async function jwks(uri: string): Promise<Jwk[]> {
+async function jwks(uri: string, refresh = false): Promise<Jwk[]> {
   const cached = jwksCache.get(uri);
-  if (cached && Date.now() - cached.at < JWKS_TTL_MS) return cached.keys;
+  if (!refresh && cached && Date.now() - cached.at < JWKS_TTL_MS) return cached.keys;
   const doc = (await fetchJson(uri)) as { keys?: Jwk[] };
   if (!Array.isArray(doc.keys)) throw new Error('SSO JWKS malformed.');
   jwksCache.set(uri, { at: Date.now(), keys: doc.keys });
   return doc.keys;
 }
 
-function b64url(input: Buffer | string): string {
-  return Buffer.from(input).toString('base64url');
+function randomToken(): string {
+  return randomBytes(32).toString('base64url');
 }
 
-function b64urlJson<T>(value: T): string {
-  return b64url(JSON.stringify(value));
+function sameString(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
-/** Sign opaque state binding organisation + nonce, 10-minute expiry. */
-export function signState(organisationId: string, secret: string): string {
-  const payload = b64urlJson({
-    org: organisationId,
-    nonce: randomUUID(),
-    exp: Date.now() + STATE_TTL_MS,
-  });
-  const sig = createHmac('sha256', secret).update(payload).digest('base64url');
-  return `${payload}.${sig}`;
+/** Everything the callback needs, sealed so the browser can hold but not read it. */
+export interface SsoTransaction {
+  org: string;
+  iss: string;
+  state: string;
+  nonce: string;
+  /** PKCE code_verifier. */
+  cv: string;
+  exp: number;
 }
 
-/** Verify state, returning the organisation it was issued for. Throws on any failure. */
-export function verifyState(state: string, secret: string): string {
-  const [payload, sig] = state.split('.');
-  if (!payload || !sig) throw new Error('SSO state malformed.');
-  const expected = createHmac('sha256', secret).update(payload).digest();
-  const actual = Buffer.from(sig, 'base64url');
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-    throw new Error('SSO state signature invalid.');
+function transactionKey(secret: string): Buffer {
+  return Buffer.from(hkdfSync('sha256', secret, '', 'blakpath.sso.transaction.v1', 32));
+}
+
+/** Seal a transaction with AES-256-GCM (confidential + tamper-evident). */
+export function sealTransaction(tx: SsoTransaction, secret: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', transactionKey(secret), iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify(tx), 'utf8'), cipher.final()]);
+  return [iv, body, cipher.getAuthTag()]
+    .map((part) => part.toString('base64url'))
+    .join('.');
+}
+
+/** Open a sealed transaction. Throws on tampering, wrong key or expiry. */
+export function openTransaction(sealed: string, secret: string): SsoTransaction {
+  const [iv, body, tag] = sealed.split('.');
+  if (!iv || !body || !tag) throw new Error('SSO transaction malformed.');
+  let tx: Partial<SsoTransaction>;
+  try {
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      transactionKey(secret),
+      Buffer.from(iv, 'base64url'),
+    );
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    const plain = Buffer.concat([
+      decipher.update(Buffer.from(body, 'base64url')),
+      decipher.final(),
+    ]);
+    tx = JSON.parse(plain.toString('utf8')) as Partial<SsoTransaction>;
+  } catch {
+    throw new Error('SSO transaction invalid.');
   }
-  const data = JSON.parse(Buffer.from(payload, 'base64url').toString()) as {
-    org?: string;
-    exp?: number;
-  };
-  if (!data.org || typeof data.exp !== 'number' || data.exp < Date.now()) {
-    throw new Error('SSO state expired or invalid.');
+  if (
+    !tx.org ||
+    !tx.iss ||
+    !tx.state ||
+    !tx.nonce ||
+    !tx.cv ||
+    typeof tx.exp !== 'number' ||
+    tx.exp < Date.now()
+  ) {
+    throw new Error('SSO transaction expired or invalid.');
   }
-  return data.org;
+  return tx as SsoTransaction;
 }
 
 export interface EntraConfig {
-  issuer: string;
   clientId: string;
   clientSecret: string;
+  /** Dedicated transaction-sealing secret (never BETTER_AUTH_SECRET). */
   stateSecret: string;
 }
 
-function verifyIdToken(
+function decodeSegment<T>(segment: string): T {
+  return JSON.parse(Buffer.from(segment, 'base64url').toString()) as T;
+}
+
+async function verifyIdToken(
   idToken: string,
-  keys: Jwk[],
-  expected: { issuer: string; audience: string; nonce?: string },
-): Record<string, unknown> {
+  jwksUri: string,
+  expected: { issuer: string; audience: string; nonce: string },
+): Promise<Record<string, unknown>> {
   const [h, p, s] = idToken.split('.');
   if (!h || !p || !s) throw new Error('SSO id_token malformed.');
-  const header = JSON.parse(Buffer.from(h, 'base64url').toString()) as {
-    alg?: string;
-    kid?: string;
-  };
+  const header = decodeSegment<{ alg?: string; kid?: string }>(h);
   if (header.alg !== 'RS256') throw new Error('SSO id_token algorithm rejected.');
-  const key = keys.find((k) => k.kty === 'RSA' && (!header.kid || k.kid === header.kid));
+  if (!header.kid) throw new Error('SSO id_token missing key id.');
+  const find = (keys: Jwk[]) => keys.find((k) => k.kty === 'RSA' && k.kid === header.kid);
+  // Unknown kid: refetch once to pick up an IdP key rotation.
+  const key = find(await jwks(jwksUri)) ?? find(await jwks(jwksUri, true));
   if (!key) throw new Error('SSO signing key not found.');
   const verifier = createVerify('RSA-SHA256');
   verifier.update(`${h}.${p}`);
@@ -138,22 +202,88 @@ function verifyIdToken(
     Buffer.from(s, 'base64url'),
   );
   if (!ok) throw new Error('SSO id_token signature invalid.');
-  const claims = JSON.parse(Buffer.from(p, 'base64url').toString()) as Record<
-    string,
-    unknown
-  >;
+  const claims = decodeSegment<Record<string, unknown>>(p);
   if (claims.iss !== expected.issuer) throw new Error('SSO issuer mismatch.');
   const aud = claims.aud;
   const audOk =
     aud === expected.audience || (Array.isArray(aud) && aud.includes(expected.audience));
   if (!audOk) throw new Error('SSO audience mismatch.');
-  if (typeof claims.exp !== 'number' || claims.exp * 1000 < Date.now()) {
+  if (Array.isArray(aud) && aud.length > 1 && claims.azp !== expected.audience) {
+    throw new Error('SSO authorized party mismatch.');
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof claims.exp !== 'number' || claims.exp + CLOCK_SKEW_S < now) {
     throw new Error('SSO id_token expired.');
   }
-  if (expected.nonce && claims.nonce !== expected.nonce) {
+  if (typeof claims.nbf === 'number' && claims.nbf - CLOCK_SKEW_S > now) {
+    throw new Error('SSO id_token not yet valid.');
+  }
+  if (typeof claims.nonce !== 'string' || !sameString(claims.nonce, expected.nonce)) {
     throw new Error('SSO nonce mismatch.');
   }
   return claims;
+}
+
+/**
+ * Second-factor methods Entra puts in `amr` once MFA has actually run.
+ * `pwd` alone is password-only and is rejected.
+ */
+const MFA_AMR = new Set([
+  'mfa',
+  'ngcmfa',
+  'otp',
+  'fido',
+  'rsa',
+  'hwk',
+  'sms',
+  'tel',
+  'pin',
+  'pop',
+]);
+
+/** Thrown when the id_token does not prove a second factor. */
+export class SsoMfaRequiredError extends Error {
+  constructor() {
+    super('SSO multi-factor authentication required.');
+    this.name = 'SsoMfaRequiredError';
+  }
+}
+
+/** True when `amr` contains a second factor. Missing `amr` fails closed. */
+export function idTokenSatisfiesMfa(
+  claims: Record<string, unknown> | undefined,
+): boolean {
+  const amr = claims?.amr;
+  if (!Array.isArray(amr)) return false;
+  return amr.some(
+    (value) => typeof value === 'string' && MFA_AMR.has(value.toLowerCase()),
+  );
+}
+
+/**
+ * Address used for first-time account linking.
+ *
+ * The UPN (`preferred_username`) wins. Entra only issues a UPN whose suffix is
+ * a domain verified in that tenant, and a council admin is the only person who
+ * can change it. A divergent `email` / mail attribute is ignored so it cannot
+ * point the link at a different BlakPath user. The mail claim is used only
+ * when there is no UPN, and only counts as verified when `email_verified` or
+ * `xms_edov` is true.
+ */
+function emailFrom(
+  claims: Record<string, unknown>,
+): { email: string; verified: boolean } | undefined {
+  const upn = claims.preferred_username;
+  if (typeof upn === 'string' && upn.includes('@')) {
+    return { email: upn, verified: true };
+  }
+  if (typeof claims.email === 'string' && claims.email.includes('@')) {
+    return {
+      email: claims.email,
+      verified: claims.email_verified === true || claims.xms_edov === true,
+    };
+  }
+  return undefined;
 }
 
 export class EntraSsoProvider implements SsoProvider {
@@ -166,30 +296,57 @@ export class EntraSsoProvider implements SsoProvider {
     this.config = config;
   }
 
+  private assertClient(clientId: string): void {
+    if (clientId !== this.config.clientId) {
+      throw new Error('SSO binding client does not match the configured client.');
+    }
+  }
+
   async start(context: SsoStartContext): Promise<SsoAuthorizationRequest> {
-    const { authorization_endpoint } = await discover(this.config.issuer);
-    const state = signState(context.organisationId, this.config.stateSecret);
+    this.assertClient(context.clientId);
+    const { authorization_endpoint } = await discover(context.issuer);
+    const tx: SsoTransaction = {
+      org: context.organisationId,
+      iss: context.issuer,
+      state: randomToken(),
+      nonce: randomToken(),
+      cv: randomToken(),
+      exp: Date.now() + TRANSACTION_TTL_MS,
+    };
     const params = new URLSearchParams({
       client_id: this.config.clientId,
       response_type: 'code',
       redirect_uri: context.callbackUrl,
       response_mode: 'query',
       scope: 'openid profile email',
-      state,
+      state: tx.state,
+      nonce: tx.nonce,
+      code_challenge: createHash('sha256').update(tx.cv).digest('base64url'),
+      code_challenge_method: 'S256',
     });
-    return { redirectUrl: `${authorization_endpoint}?${params.toString()}`, state };
+    if (context.loginHint) params.set('login_hint', context.loginHint);
+    return {
+      redirectUrl: `${authorization_endpoint}?${params.toString()}`,
+      state: tx.state,
+      transaction: sealTransaction(tx, this.config.stateSecret),
+    };
   }
 
   async complete(context: SsoCallbackContext): Promise<FederatedIdentity> {
+    this.assertClient(context.clientId);
     const url = new URL(context.callbackUrl);
+    if (url.searchParams.get('error')) throw new Error('SSO provider returned an error.');
     const code = url.searchParams.get('code');
     const state = context.state || url.searchParams.get('state');
     if (!code || !state) throw new Error('SSO callback missing code or state.');
-    const organisationId = verifyState(state, this.config.stateSecret);
-    if (organisationId !== context.organisationId) {
+    if (!context.transaction) throw new Error('SSO transaction missing.');
+    const tx = openTransaction(context.transaction, this.config.stateSecret);
+    if (!sameString(state, tx.state)) throw new Error('SSO state mismatch.');
+    if (tx.org !== context.organisationId) {
       throw new Error('SSO organisation mismatch.');
     }
-    const discovery = await discover(this.config.issuer);
+    if (tx.iss !== context.issuer) throw new Error('SSO issuer mismatch.');
+    const discovery = await discover(tx.iss);
     const tokenRes = await fetch(discovery.token_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -198,26 +355,28 @@ export class EntraSsoProvider implements SsoProvider {
         client_id: this.config.clientId,
         client_secret: this.config.clientSecret,
         code,
+        code_verifier: tx.cv,
         redirect_uri: `${url.origin}${url.pathname}`,
       }).toString(),
     });
     if (!tokenRes.ok) throw new Error('SSO code exchange failed.');
+    // Only the id_token is read; IdP access/refresh tokens are never stored.
     const tokens = (await tokenRes.json()) as { id_token?: string };
     if (!tokens.id_token) throw new Error('SSO token response missing id_token.');
-    const keys = await jwks(discovery.jwks_uri);
-    const claims = verifyIdToken(tokens.id_token, keys, {
-      issuer: this.config.issuer,
+    const claims = await verifyIdToken(tokens.id_token, discovery.jwks_uri, {
+      issuer: tx.iss,
       audience: this.config.clientId,
+      nonce: tx.nonce,
     });
+    if (!idTokenSatisfiesMfa(claims)) throw new SsoMfaRequiredError();
     const subject = claims.sub;
     if (typeof subject !== 'string' || subject.length === 0) {
       throw new Error('SSO identity missing subject.');
     }
-    const email = typeof claims.email === 'string' ? claims.email : undefined;
+    const link = emailFrom(claims);
     return {
       subject,
-      ...(email ? { email } : {}),
-      emailVerified: claims.email_verified === true,
+      ...(link ? { email: link.email, emailVerified: link.verified } : {}),
       ...(typeof claims.name === 'string' ? { name: claims.name } : {}),
       claims,
     };
@@ -225,21 +384,17 @@ export class EntraSsoProvider implements SsoProvider {
 }
 
 /**
- * Register the Entra provider from env when configured. Call once at startup
- * (instrumentation). Missing env = provider unavailable (secure default).
+ * Register the Entra provider from env when configured. Idempotent: safe to
+ * call from instrumentation and again lazily from the auth plugin (Next.js may
+ * load those in separate module graphs). Missing env = provider unavailable
+ * (secure default) — including a missing dedicated `SSO_STATE_SECRET`.
  */
 export function registerEntraFromEnv(): boolean {
+  if (resolveSsoProvider('entra')) return true;
   const clientId = env.SSO_ENTRA_CLIENT_ID;
   const clientSecret = env.SSO_ENTRA_CLIENT_SECRET;
-  const issuer = env.SSO_ENTRA_ISSUER ?? 'https://login.microsoftonline.com/common/v2.0';
-  if (!clientId || !clientSecret) return false;
-  registerSsoProvider(
-    new EntraSsoProvider({
-      issuer,
-      clientId,
-      clientSecret,
-      stateSecret: env.BETTER_AUTH_SECRET,
-    }),
-  );
+  const stateSecret = env.SSO_STATE_SECRET;
+  if (!clientId || !clientSecret || !stateSecret) return false;
+  registerSsoProvider(new EntraSsoProvider({ clientId, clientSecret, stateSecret }));
   return true;
 }

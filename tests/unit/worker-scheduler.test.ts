@@ -7,17 +7,23 @@ vi.mock('@/lib/queues', () => ({
     AuditVerify: 'audit-verify',
     Retention: 'retention',
     Reminder: 'reminder',
+    KeyHealth: 'key-health',
   },
   getQueue: vi.fn(),
 }));
 
 vi.mock('@/db/client', () => ({ db: {} }));
 
-import { PLATFORM_AUDIT_CHAIN_KEY } from '@/domains/audit/chain-id';
 import { QueueName } from '@/lib/queues';
 import { reconcileTenantSchedules, tenantSchedulerId } from '@worker/scheduler';
 
-type Call = { id: string; every: number; name: string; organisationId: string };
+type Call = {
+  id: string;
+  every: number;
+  name: string;
+  organisationId: string;
+  platformChain?: boolean;
+};
 
 function fakeQueue(existing: string[] = []) {
   const upserts: Call[] = [];
@@ -28,13 +34,17 @@ function fakeQueue(existing: string[] = []) {
     async upsertJobScheduler(
       id: string,
       repeat: { every: number },
-      template: { name: string; data: { organisationId: string } },
+      template: {
+        name: string;
+        data: { organisationId: string; platformChain?: boolean };
+      },
     ) {
       upserts.push({
         id,
         every: repeat.every,
         name: template.name,
         organisationId: template.data.organisationId,
+        ...(template.data.platformChain ? { platformChain: true } : {}),
       });
     },
     async getJobSchedulers() {
@@ -59,12 +69,8 @@ describe('tenant maintenance scheduler', () => {
 
   it('schedules each active tenant once and removes only stale maintenance schedules', async () => {
     const staleAudit = tenantSchedulerId(QueueName.AuditVerify, 'suspended-org');
-    const platformAudit = tenantSchedulerId(
-      QueueName.AuditVerify,
-      PLATFORM_AUDIT_CHAIN_KEY,
-    );
     const staleRetention = tenantSchedulerId(QueueName.Retention, 'closed-org');
-    const auditQueue = fakeQueue([staleAudit, platformAudit, 'other-system-schedule']);
+    const auditQueue = fakeQueue([staleAudit, 'other-system-schedule']);
     const retentionQueue = fakeQueue([staleRetention]);
 
     const report = await reconcileTenantSchedules({
@@ -88,47 +94,17 @@ describe('tenant maintenance scheduler', () => {
         name: 'verify',
         organisationId: 'org-b',
       },
-      {
-        id: platformAudit,
-        every: 60_000,
-        name: 'verify',
-        organisationId: PLATFORM_AUDIT_CHAIN_KEY,
-      },
     ]);
     expect(retentionQueue.upserts.map((call) => call.every)).toEqual([120_000, 120_000]);
     expect(auditQueue.removed).toEqual([staleAudit]);
     expect(retentionQueue.removed).toEqual([staleRetention]);
-    expect(retentionQueue.upserts.map((call) => call.organisationId)).not.toContain(
-      PLATFORM_AUDIT_CHAIN_KEY,
-    );
     expect(report).toEqual({
-      auditSchedulers: 3,
+      auditSchedulers: 2,
       retentionSchedulers: 2,
       reminderSchedulers: 0,
+      keyHealthSchedulers: 0,
       removedSchedulers: 2,
     });
-  });
-
-  it('schedules the platform audit chain when no tenant is active', async () => {
-    const auditQueue = fakeQueue();
-    const retentionQueue = fakeQueue();
-    const report = await reconcileTenantSchedules({
-      organisationIds: [],
-      auditQueue,
-      retentionQueue,
-      intervals: { auditVerifyMs: 86_400_000, retentionSweepMs: 86_400_000 },
-    });
-    expect(auditQueue.upserts).toEqual([
-      {
-        id: tenantSchedulerId(QueueName.AuditVerify, PLATFORM_AUDIT_CHAIN_KEY),
-        every: 86_400_000,
-        name: 'verify',
-        organisationId: PLATFORM_AUDIT_CHAIN_KEY,
-      },
-    ]);
-    expect(retentionQueue.upserts).toEqual([]);
-    expect(report.auditSchedulers).toBe(1);
-    expect(report.retentionSchedulers).toBe(0);
   });
 
   it('schedules reminder sweeps when a reminder queue is supplied', async () => {
@@ -151,6 +127,61 @@ describe('tenant maintenance scheduler', () => {
       },
     ]);
     expect(report.reminderSchedulers).toBe(1);
+    expect(report.keyHealthSchedulers).toBe(0);
     expect(report.removedSchedulers).toBe(0);
+  });
+
+  it('schedules the platform chain without dropping tenant schedules', async () => {
+    const auditQueue = fakeQueue();
+    const retentionQueue = fakeQueue();
+    await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue,
+      retentionQueue,
+      includePlatformChain: true,
+      intervals: { auditVerifyMs: 86_400_000, retentionSweepMs: 86_400_000 },
+    });
+    expect(auditQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.AuditVerify, 'platform'),
+        every: 86_400_000,
+        name: 'verify',
+        organisationId: 'platform',
+        platformChain: true,
+      },
+      {
+        id: tenantSchedulerId(QueueName.AuditVerify, 'org-a'),
+        every: 86_400_000,
+        name: 'verify',
+        organisationId: 'org-a',
+      },
+    ]);
+    expect(auditQueue.removed).toEqual([]);
+  });
+
+  it('schedules a key-health check on the configured interval', async () => {
+    const auditQueue = fakeQueue();
+    const retentionQueue = fakeQueue();
+    const keyHealthQueue = fakeQueue();
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue,
+      retentionQueue,
+      keyHealthQueue,
+      intervals: {
+        auditVerifyMs: 60_000,
+        retentionSweepMs: 120_000,
+        keyHealthMs: 300_000,
+      },
+    });
+    expect(keyHealthQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.KeyHealth, 'org-a'),
+        every: 300_000,
+        name: 'check',
+        organisationId: 'org-a',
+      },
+    ]);
+    expect(report.keyHealthSchedulers).toBe(1);
   });
 });

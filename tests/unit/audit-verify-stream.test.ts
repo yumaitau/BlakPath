@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { Logger } from 'pino';
 import { computeEventHash, type HashableAuditEvent } from '@/domains/audit/hash';
-import { PLATFORM_AUDIT_CHAIN_KEY } from '@/domains/audit/chain-id';
+import {
+  PLATFORM_CHAIN_ID,
+  type AnchoredChainProbe,
+  type AuditAnchorStore,
+} from '@/domains/audit/anchor';
+import { createHmacAnchorSigner } from '@/domains/audit/anchor-sign';
 import {
   verifyAndCheckpoint,
   verifyChainFromPages,
@@ -14,14 +19,71 @@ import {
   type AuditPageQuery,
   type AuditVerificationReader,
   type StoredAuditEvent,
+  type VerifyFromCheckpointResult,
 } from '@/domains/audit/verify';
 import { processAuditVerifyJob } from '../../worker/audit-verify';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
+const ORG = '018f1a20-7c3a-7b1a-8f2a-0a0a0a0a0a0b';
+const SECRET = 'stream-test-anchor-secret-at-least-32-chars';
+const DAY_ONE = new Date('2026-10-13T02:00:00.000Z');
+const DAY_TWO = new Date('2026-10-14T02:00:00.000Z');
+
+function anchorStore(): AuditAnchorStore & { objects: Map<string, string> } {
+  const objects = new Map<string, string>();
+  return {
+    objects,
+    async get(key) {
+      return objects.get(key) ?? null;
+    },
+    async list(prefix) {
+      return [...objects.keys()].filter((key) => key.startsWith(prefix));
+    },
+    async put(key, body) {
+      if (objects.has(key)) throw new Error(`anchor already exists: ${key}`);
+      objects.set(key, body);
+    },
+  };
+}
+
+/** In-memory twin of `auditChainProbe`: absolute length through the tip. */
+function memoryProbe(
+  events: readonly StoredAuditEvent[],
+): (verified: VerifyFromCheckpointResult) => Promise<AnchoredChainProbe> {
+  return async (verified) => {
+    const tip = verified.tip;
+    const position = tip ? events.findIndex((event) => event.id === tip.id) : -1;
+    const eventCount = verified.ok && tip ? position + 1 : 0;
+    return {
+      ok: verified.ok,
+      eventCount,
+      async hashesAt(positions) {
+        const view: { length: number; [position: number]: string } = {
+          length: eventCount,
+        };
+        for (const at of positions) {
+          const hash = at >= 0 && at < eventCount ? events[at]?.hash : undefined;
+          if (hash) view[at] = hash;
+        }
+        return view;
+      },
+    };
+  };
+}
+
+const quietLogger = {
+  error() {
+    return undefined;
+  },
+  info() {
+    return undefined;
+  },
+} as unknown as Logger;
 
 function appendEvent(
   rows: StoredAuditEvent[],
   organisationId: string | null,
+  reason: string | null = null,
 ): StoredAuditEvent {
   const previous = rows[rows.length - 1];
   const sequence = rows.length;
@@ -39,7 +101,7 @@ function appendEvent(
     resourceType: 'application',
     resourceId: `resource-${sequence}`,
     result: 'success',
-    reason: null,
+    reason,
     ipAddress: null,
     userAgent: null,
     correlationId: 'corr',
@@ -59,10 +121,14 @@ function appendEvent(
   return row;
 }
 
-function chain(count: number, organisationId: string | null): StoredAuditEvent[] {
+function chain(
+  count: number,
+  organisationId: string | null,
+  reason: string | null = null,
+): StoredAuditEvent[] {
   const rows: StoredAuditEvent[] = [];
   for (let index = 0; index < count; index += 1) {
-    appendEvent(rows, organisationId);
+    appendEvent(rows, organisationId, reason);
   }
   return rows;
 }
@@ -238,12 +304,18 @@ describe('audit chain streaming verification', () => {
 
     const result = await processAuditVerifyJob(
       {
-        organisationId: PLATFORM_AUDIT_CHAIN_KEY,
+        organisationId: PLATFORM_CHAIN_ID,
+        platformChain: true,
         correlationId: 'platform-verify',
         jobId: 'job-1',
       },
       logger,
-      { reader: store.reader, pageSize: 2 },
+      {
+        verify: { reader: store.reader, pageSize: 2 },
+        store: anchorStore(),
+        signer: createHmacAnchorSigner(SECRET),
+        probe: memoryProbe(events),
+      },
     );
 
     expect(result.ok).toBe(false);
@@ -272,6 +344,103 @@ describe('audit chain streaming verification', () => {
     expect(alarm).toContain('{ $.signal = "audit_integrity_failure" && $.alert = true }');
     expect(alarm).toContain('MetricName: AuditIntegrityFailures');
     expect(alarm).toContain('AlarmName: blakpath-audit-integrity-failure');
+  });
+
+  it('resumes from a checkpoint and still fails the anchor when the tail is removed', async () => {
+    const events = chain(4, null);
+    const reader = memoryReader(events);
+    const anchors = anchorStore();
+    const signer = createHmacAnchorSigner(SECRET);
+    const job = {
+      organisationId: PLATFORM_CHAIN_ID,
+      platformChain: true,
+      correlationId: 'c',
+    };
+    const deps = {
+      verify: { reader: reader.reader, pageSize: 2 },
+      store: anchors,
+      signer,
+      probe: memoryProbe(events),
+    };
+
+    const day1 = await processAuditVerifyJob(job, quietLogger, { ...deps, now: DAY_ONE });
+    expect(day1.anchor.status).toBe('anchored');
+    expect(day1.checkpointWritten).toBe(true);
+
+    // Drop the anchored tail and forge a checkpoint for the new, shorter tip.
+    events.splice(2);
+    const forgedTip = events[1];
+    if (!forgedTip) throw new Error('expected a second event');
+    await reader.reader.insertCheckpoint({
+      organisationId: null,
+      periodStart: forgedTip.timestamp,
+      periodEnd: forgedTip.timestamp,
+      eventCount: 1,
+      startHash: forgedTip.hash,
+      endHash: forgedTip.hash,
+    });
+    reader.served.length = 0;
+
+    const day2 = await processAuditVerifyJob(job, quietLogger, { ...deps, now: DAY_TWO });
+    expect(day2.ok).toBe(true);
+    expect(day2.resumedFrom).toEqual({
+      timestamp: forgedTip.timestamp,
+      id: forgedTip.id,
+    });
+    expect(reader.served).toEqual([[]]);
+    expect(day2.anchor).toMatchObject({
+      status: 'anchor_mismatch',
+      reason: 'chain_truncated',
+    });
+    expect(day2.checkpointWritten).toBe(false);
+    expect(anchors.objects.size).toBe(1);
+  });
+
+  it('resumes from a forged checkpoint and still fails the anchor when the chain is recomputed', async () => {
+    const events = chain(4, ORG);
+    const reader = memoryReader(events);
+    const anchors = anchorStore();
+    const signer = createHmacAnchorSigner(SECRET);
+    const job = { organisationId: ORG, correlationId: 'c' };
+    const probe = (rows: StoredAuditEvent[]) => memoryProbe(rows);
+    const deps = {
+      store: anchors,
+      signer,
+      verify: { reader: reader.reader, pageSize: 2 },
+    };
+
+    const day1 = await processAuditVerifyJob(job, quietLogger, {
+      ...deps,
+      probe: probe(events),
+      now: DAY_ONE,
+    });
+    expect(day1.anchor.status).toBe('anchored');
+
+    // Replace every row with a freshly hashed chain, then checkpoint its tip.
+    events.splice(0, events.length, ...chain(4, ORG, 'rewritten'));
+    const tip = events[3];
+    if (!tip) throw new Error('expected a fourth event');
+    await reader.reader.insertCheckpoint({
+      organisationId: ORG,
+      periodStart: tip.timestamp,
+      periodEnd: tip.timestamp,
+      eventCount: 4,
+      startHash: tip.hash,
+      endHash: tip.hash,
+    });
+
+    const day2 = await processAuditVerifyJob(job, quietLogger, {
+      ...deps,
+      probe: probe(events),
+      now: DAY_TWO,
+    });
+    expect(day2.ok).toBe(true);
+    expect(day2.anchor).toMatchObject({
+      status: 'anchor_mismatch',
+      reason: 'head_mismatch',
+    });
+    expect(day2.checkpointWritten).toBe(false);
+    expect(anchors.objects.size).toBe(1);
   });
 
   it('verifies 5M events under a fixed memory ceiling', () => {

@@ -1,0 +1,70 @@
+# Example egress policy for the worker. Not included in kustomization.yaml.
+#
+# Apply only after a human confirms:
+# - Postgres and Redis ports and CIDRs (the data-plane rules below).
+# - Whether object storage is reached on the public AWS ranges (allowed on 443)
+#   or through an interface endpoint inside the VPC (that 443 path must be added
+#   explicitly; do not open all private 443).
+# - The cluster DNS namespace label.
+# - IPv6, if the cluster routes it. Application code still refuses unique-local
+#   and link-local answers; this example is IPv4.
+#
+# A tighter follow-up is a dedicated egress proxy whose only public path is
+# TCP 443, with this worker sending webhook traffic there and nowhere else.
+# That proxy is not deployed by this file.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: blakpath-worker-egress
+  namespace: blakpath
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: blakpath-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 3310
+        - protocol: TCP
+          port: 4318
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 587

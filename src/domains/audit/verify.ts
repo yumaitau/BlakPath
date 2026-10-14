@@ -1,7 +1,22 @@
-import { and, asc, desc, eq, gt, gte, isNull, lte, or, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { db, type Database } from '@/db/client';
 import { auditEvents, auditIntegrityCheckpoints } from '@/db/schema';
+import type { AnchoredChainProbe } from './anchor';
 import type { AuditAction, AuditResult, ResourceType } from './events';
 import { computeEventHash, toIsoTimestamp, type HashableAuditEvent } from './hash';
 
@@ -20,6 +35,12 @@ import { computeEventHash, toIsoTimestamp, type HashableAuditEvent } from './has
  * inserts the next anchor when the new suffix is intact. Both are safe to run
  * as scheduled jobs (e.g. via BullMQ). Reads dominate; the only write is the
  * single checkpoint insert.
+ *
+ * Checkpoints live in the same database as the chain, so they only bound the
+ * re-walk. The signed anchors (`./anchor`) remain the external trust root:
+ * `auditChainProbe` gives them the absolute chain length and the stored hash at
+ * each anchored position, without buffering the chain, so a truncated tail or
+ * a recomputed chain still fails the anchor comparison.
  */
 
 /** Rows fetched per page. One page is the resident working set. */
@@ -153,11 +174,22 @@ export interface VerifyAndCheckpointOptions extends VerifyChainOptions {
   readonly verifiedByUserId?: string | null;
 }
 
-export interface VerifyAndCheckpointResult extends VerifyChainResult {
-  readonly checkpointId: string | null;
-  readonly checkpointWritten: boolean;
+/** Outcome of an incremental walk, before any checkpoint is written. */
+export interface VerifyFromCheckpointResult extends VerifyChainResult {
+  /** Checkpoint the walk resumed from, if any. */
+  readonly priorCheckpointId: string | null;
   /** Cursor this run started after. Null means the walk began at genesis. */
   readonly resumedFrom: AuditChainCursor | null;
+  /**
+   * Last verified event of the chain: the walked tail, or the checkpoint tip
+   * when nothing new was appended. Null for an empty chain or on divergence.
+   */
+  readonly tip: AuditChainCursor | null;
+}
+
+export interface VerifyAndCheckpointResult extends VerifyFromCheckpointResult {
+  readonly checkpointId: string | null;
+  readonly checkpointWritten: boolean;
 }
 
 interface FoldState {
@@ -167,6 +199,7 @@ interface FoldState {
   divergence: ChainDivergence | null;
   startHash: string | null;
   endHash: string | null;
+  endId: string | null;
   periodStart: Date | null;
   periodEnd: Date | null;
 }
@@ -246,6 +279,7 @@ function emptyFold(startingPrevHash: string | null): FoldState {
     divergence: null,
     startHash: null,
     endHash: null,
+    endId: null,
     periodStart: null,
     periodEnd: null,
   };
@@ -265,6 +299,7 @@ function foldAuditPage(rows: readonly StoredAuditEvent[], state: FoldState): Fol
   let divergence: ChainDivergence | null = state.divergence;
   let startHash = state.startHash;
   let endHash = state.endHash;
+  let endId = state.endId;
   let periodStart = state.periodStart;
   let periodEnd = state.periodEnd;
 
@@ -275,6 +310,7 @@ function foldAuditPage(rows: readonly StoredAuditEvent[], state: FoldState): Fol
       periodStart = row.timestamp;
     }
     endHash = row.hash;
+    endId = row.id;
     periodEnd = row.timestamp;
     eventCount += 1;
 
@@ -315,6 +351,7 @@ function foldAuditPage(rows: readonly StoredAuditEvent[], state: FoldState): Fol
     divergence,
     startHash,
     endHash,
+    endId,
     periodStart,
     periodEnd,
   };
@@ -344,12 +381,21 @@ function foldToResult(
  */
 export async function verifyChainFromPages(
   organisationId: string | null,
-  loadPage: (
-    after: AuditChainCursor | null,
-    limit: number,
-  ) => Promise<readonly StoredAuditEvent[]>,
+  loadPage: PageLoader,
   options: VerifyChainOptions = {},
 ): Promise<VerifyChainResult> {
+  return foldToResult(organisationId, await walkPages(loadPage, options));
+}
+
+type PageLoader = (
+  after: AuditChainCursor | null,
+  limit: number,
+) => Promise<readonly StoredAuditEvent[]>;
+
+async function walkPages(
+  loadPage: PageLoader,
+  options: VerifyChainOptions,
+): Promise<FoldState> {
   const limit = resolvePageSize(options.pageSize);
   let state = emptyFold(options.startingPrevHash ?? null);
   let cursor: AuditChainCursor | null = options.after ?? null;
@@ -368,7 +414,7 @@ export async function verifyChainFromPages(
     cursor = { timestamp: tail.timestamp, id: tail.id };
   }
 
-  return foldToResult(organisationId, state);
+  return state;
 }
 
 async function loadAuditPage(
@@ -585,18 +631,23 @@ function sliceOptions(
   };
 }
 
+function failedAtCheckpoint(
+  failure: VerifyChainResult,
+  checkpoint: AuditCheckpointAnchor,
+): VerifyFromCheckpointResult {
+  return { ...failure, priorCheckpointId: checkpoint.id, resumedFrom: null, tip: null };
+}
+
 /**
- * Verify a chain from its latest checkpoint and, when the new suffix is
- * intact and non-empty, append the next checkpoint. An empty chain, or a
- * clean chain with nothing after the current tip, does not insert a
- * zero-length anchor — the previous checkpoint remains the resume point.
- * Divergence never writes a checkpoint.
+ * Verify a chain from its latest checkpoint. Writes nothing. The anchored tip
+ * must still exist and still recompute, so a removed or edited tip fails here.
+ * Without an explicit slice, `tip` is the verified head of the whole chain.
  */
-export async function verifyAndCheckpoint(
+export async function verifyFromCheckpoint(
   organisationId: string | null,
   options: VerifyAndCheckpointOptions = {},
   database: Database = db,
-): Promise<VerifyAndCheckpointResult> {
+): Promise<VerifyFromCheckpointResult> {
   const reader = options.reader ?? databaseReader(database);
   const explicitSlice =
     options.after !== undefined ||
@@ -619,43 +670,36 @@ export async function verifyAndCheckpoint(
         const recomputed = suspect
           ? computeEventHash(suspect.prevHash, toHashable(suspect))
           : checkpoint.endHash;
-        const failure = anchorFailure(
-          organisationId,
+        return failedAtCheckpoint(
+          anchorFailure(
+            organisationId,
+            checkpoint,
+            suspect,
+            suspect && recomputed !== suspect.hash ? 'hash_mismatch' : 'broken_link',
+            suspect && recomputed !== suspect.hash ? recomputed : checkpoint.endHash,
+          ),
           checkpoint,
-          suspect,
-          suspect && recomputed !== suspect.hash ? 'hash_mismatch' : 'broken_link',
-          suspect && recomputed !== suspect.hash ? recomputed : checkpoint.endHash,
         );
-        return {
-          ...failure,
-          checkpointId: checkpoint.id,
-          checkpointWritten: false,
-          resumedFrom: null,
-        };
       }
       const recomputed = computeEventHash(anchored.prevHash, toHashable(anchored));
       if (recomputed !== anchored.hash) {
-        const failure = anchorFailure(
-          organisationId,
+        return failedAtCheckpoint(
+          anchorFailure(
+            organisationId,
+            checkpoint,
+            anchored,
+            'hash_mismatch',
+            recomputed,
+          ),
           checkpoint,
-          anchored,
-          'hash_mismatch',
-          recomputed,
         );
-        return {
-          ...failure,
-          checkpointId: checkpoint.id,
-          checkpointWritten: false,
-          resumedFrom: null,
-        };
       }
       resumedFrom = { timestamp: anchored.timestamp, id: anchored.id };
       startingPrevHash = anchored.hash;
     }
   }
 
-  const result = await verifyChainFromPages(
-    organisationId,
+  const state = await walkPages(
     (after, limit) =>
       reader.loadPage({
         organisationId,
@@ -666,34 +710,133 @@ export async function verifyAndCheckpoint(
       }),
     sliceOptions(options, startingPrevHash, resumedFrom),
   );
-
-  if (
-    !result.ok ||
-    result.eventCount === 0 ||
-    !result.startHash ||
-    !result.endHash ||
-    !result.periodStart ||
-    !result.periodEnd
-  ) {
-    return {
-      ...result,
-      checkpointId: priorCheckpointId,
-      checkpointWritten: false,
-      resumedFrom,
-    };
+  const result = foldToResult(organisationId, state);
+  let tip: AuditChainCursor | null = null;
+  if (result.ok) {
+    tip =
+      state.endId !== null && state.periodEnd !== null
+        ? { timestamp: state.periodEnd, id: state.endId }
+        : resumedFrom;
   }
+  return { ...result, priorCheckpointId, resumedFrom, tip };
+}
 
-  const checkpointId = await reader.insertCheckpoint({
-    organisationId,
-    periodStart: result.periodStart,
-    periodEnd: result.periodEnd,
-    eventCount: result.eventCount,
-    startHash: result.startHash,
-    endHash: result.endHash,
+/**
+ * Persist the checkpoint for an intact, non-empty walk. Returns null when
+ * there is nothing to anchor: an empty or unchanged chain keeps the previous
+ * checkpoint as its resume point, and a divergent walk is never anchored.
+ */
+export async function checkpointVerifiedSuffix(
+  verified: VerifyFromCheckpointResult,
+  options: Pick<VerifyAndCheckpointOptions, 'reader' | 'verifiedByUserId'> = {},
+  database: Database = db,
+): Promise<string | null> {
+  if (
+    !verified.ok ||
+    verified.eventCount === 0 ||
+    !verified.startHash ||
+    !verified.endHash ||
+    !verified.periodStart ||
+    !verified.periodEnd
+  ) {
+    return null;
+  }
+  const reader = options.reader ?? databaseReader(database);
+  return reader.insertCheckpoint({
+    organisationId: verified.organisationId,
+    periodStart: verified.periodStart,
+    periodEnd: verified.periodEnd,
+    eventCount: verified.eventCount,
+    startHash: verified.startHash,
+    endHash: verified.endHash,
     ...(options.verifiedByUserId !== undefined
       ? { verifiedByUserId: options.verifiedByUserId }
       : {}),
   });
+}
 
-  return { ...result, checkpointId, checkpointWritten: true, resumedFrom };
+/**
+ * Verify a chain from its latest checkpoint and, when the new suffix is
+ * intact and non-empty, append the next checkpoint. An empty chain, or a
+ * clean chain with nothing after the current tip, does not insert a
+ * zero-length anchor — the previous checkpoint remains the resume point.
+ * Divergence never writes a checkpoint.
+ */
+export async function verifyAndCheckpoint(
+  organisationId: string | null,
+  options: VerifyAndCheckpointOptions = {},
+  database: Database = db,
+): Promise<VerifyAndCheckpointResult> {
+  const verified = await verifyFromCheckpoint(organisationId, options, database);
+  const checkpointId = await checkpointVerifiedSuffix(verified, options, database);
+  return checkpointId
+    ? { ...verified, checkpointId, checkpointWritten: true }
+    : { ...verified, checkpointId: verified.priorCheckpointId, checkpointWritten: false };
+}
+
+/**
+ * Signed-anchor view of a chain up to its verified tip, without loading the
+ * chain. `eventCount` is the absolute length through `tip`; `hashesAt` returns
+ * the stored hash at each requested 0-based position. Anchors compare these to
+ * their signed heads, so a truncated or recomputed prefix still fails even
+ * though the walk itself resumed from a database checkpoint.
+ */
+export async function auditChainProbe(
+  verified: Pick<VerifyFromCheckpointResult, 'ok' | 'tip'> & {
+    readonly organisationId: string | null;
+  },
+  database: Database = db,
+): Promise<AnchoredChainProbe> {
+  const tip = verified.tip;
+  if (!verified.ok || !tip) {
+    return { ok: verified.ok, eventCount: 0, hashesAt: async () => ({ length: 0 }) };
+  }
+  const throughTip = and(
+    chainWhere(verified.organisationId),
+    or(
+      lt(auditEvents.timestamp, tip.timestamp),
+      and(eq(auditEvents.timestamp, tip.timestamp), lte(auditEvents.id, tip.id)),
+    ),
+  ) as SQL;
+  const counted = await database
+    .select({ count: sql<number>`count(*)::int` })
+    .from(auditEvents)
+    .where(throughTip);
+  const eventCount = Number(counted[0]?.count ?? 0);
+
+  return {
+    ok: true,
+    eventCount,
+    async hashesAt(positions) {
+      const view: { length: number; [position: number]: string } = {
+        length: eventCount,
+      };
+      const wanted = [...new Set(positions)].filter(
+        (position) =>
+          Number.isInteger(position) && position >= 0 && position < eventCount,
+      );
+      if (wanted.length === 0) {
+        return view;
+      }
+      const ranked = database
+        .select({
+          hash: auditEvents.hash,
+          position:
+            sql<number>`(row_number() over (order by ${auditEvents.timestamp}, ${auditEvents.id}) - 1)::int`.as(
+              'position',
+            ),
+        })
+        .from(auditEvents)
+        .where(throughTip)
+        .as('ranked');
+      const rows = await database
+        .select({ hash: ranked.hash, position: ranked.position })
+        .from(ranked)
+        .where(inArray(ranked.position, wanted));
+      for (const row of rows) {
+        view[Number(row.position)] = row.hash;
+      }
+      return view;
+    },
+  };
 }

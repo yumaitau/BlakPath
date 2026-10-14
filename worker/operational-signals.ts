@@ -15,8 +15,9 @@ export interface AuditIntegrityFailureSignal {
   metric: 'AuditIntegrityFailures';
   chain: 'platform' | 'tenant';
   organisationId: string | null;
-  eventId: string;
-  index: number;
+  /** Null when the break is an anchor mismatch rather than a recomputed event. */
+  eventId: string | null;
+  index: number | null;
   reason: string;
   eventCount: number;
 }

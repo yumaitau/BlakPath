@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -33,28 +33,20 @@ export function ApplicationRegister({
   applications,
   participants,
   canCreate,
+  query = '',
 }: {
   applications: RegisterApplication[];
   participants: RegisterParticipant[];
   canCreate: boolean;
+  /** Current blind-index query, echoed into the search form. */
+  query?: string;
 }) {
   const router = useRouter();
-  const [query, setQuery] = useState('');
   const [name, setName] = useState('');
   const [priority, setPriority] = useState('normal');
   const [applicantUserId, setApplicantUserId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return applications;
-    return applications.filter(
-      (application) =>
-        application.reference.toLowerCase().includes(normalized) ||
-        application.applicantName.toLowerCase().includes(normalized),
-    );
-  }, [applications, query]);
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -180,20 +172,20 @@ export function ApplicationRegister({
               Results are limited to cases you are allowed to view.
             </p>
           </div>
-          <div className="w-full sm:w-72">
+          <form method="get" action="/applications" className="w-full sm:w-72">
             <Label htmlFor="application-search" className="sr-only">
               Search applications
             </Label>
             <Input
               id="application-search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              name="q"
+              defaultValue={query}
               placeholder="Search by name or reference"
             />
-          </div>
+          </form>
         </div>
 
-        {filtered.length === 0 ? (
+        {applications.length === 0 ? (
           <Card>
             <CardContent className="text-muted-foreground py-8 text-sm">
               No applications match this search. Start a new application when someone has
@@ -202,7 +194,7 @@ export function ApplicationRegister({
           </Card>
         ) : (
           <ul className="border-border divide-border divide-y overflow-hidden rounded-lg border">
-            {filtered.map((application) => (
+            {applications.map((application) => (
               <li key={application.id}>
                 <Link
                   href={`/applications/${application.id}`}

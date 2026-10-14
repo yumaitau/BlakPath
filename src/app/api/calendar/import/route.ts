@@ -8,11 +8,12 @@ const MAX_ICS_BYTES = 1024 * 1024;
 
 /**
  * POST /api/calendar/import — create committee meetings from an uploaded `.ics`
- * document. Body is the raw calendar text. Requires `meeting:create`.
+ * document. Body is `{ ics }` JSON. Requires `meeting:create`.
  */
 export async function POST(request: NextRequest): Promise<Response> {
   try {
-    const text = await request.text();
+    const body = (await request.json().catch(() => null)) as { ics?: unknown } | null;
+    const text = typeof body?.ics === 'string' ? body.ics : '';
     if (text.length === 0) {
       return NextResponse.json({ error: 'Empty request body' }, { status: 400 });
     }

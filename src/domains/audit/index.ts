@@ -6,6 +6,7 @@
  *   - `hash`    — canonical serialisation, SHA-256 chaining and redaction.
  *   - `service` — `recordAudit` / `recordPlatformAudit` write path.
  *   - `verify`  — `verifyChain` / `verifyAndCheckpoint` integrity tooling.
+ *   - `anchor` — signed chain-head anchors stored outside the database.
  */
 export type { AuditAction, AuditResult, ResourceType } from './events';
 export { AUDIT_RESULTS, isAuditResult } from './events';
@@ -40,15 +41,42 @@ export type {
   VerifyAndCheckpointOptions,
   VerifyAndCheckpointResult,
   VerifyChainOptions,
+  VerifyFromCheckpointResult,
   VerifyChainResult,
 } from './verify';
 export {
   AUDIT_VERIFY_PAGE_SIZE,
   AuditChainDivergenceError,
+  auditChainProbe,
+  checkpointVerifiedSuffix,
   createCheckpoint,
   verifyAndCheckpoint,
   verifyChain,
   verifyChainFromPages,
+  verifyFromCheckpoint,
 } from './verify';
 
-export { PLATFORM_AUDIT_CHAIN_KEY, auditOrganisationIdFromJob } from './chain-id';
+export type {
+  AnchorBody,
+  AnchorMismatchReason,
+  AnchorSignature,
+  AnchorSigner,
+  AnchoredChainProbe,
+  AnchoredChainView,
+  AuditAnchorStore,
+  ChainHashes,
+  SettleAuditChainResult,
+  SettleAuditChainStatus,
+  SignedAuditAnchor,
+} from './anchor';
+export {
+  PLATFORM_CHAIN_ID,
+  anchorDay,
+  anchorObjectKey,
+  assessAnchoredChain,
+  auditChainId,
+  canonicalAnchorBody,
+  hashAnchorBody,
+  parseSignedAnchor,
+  settleAuditChain,
+} from './anchor';
