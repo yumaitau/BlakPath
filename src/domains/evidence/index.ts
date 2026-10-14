@@ -6,6 +6,12 @@
  *   - `schemas` — zod v4 input validation for uploads/classification/requests.
  *   - `service` — tenant-scoped, permission-checked, audited request path plus
  *     the fail-secure worker scan (`processEvidenceScan`).
+ *
+ * Exception: the worker-only scan sweeper is imported as
+ * `@/domains/evidence/sweep`, not re-exported here. It loads storage before
+ * the applications domain, and pulling it in through this barrel next to other
+ * domains deadlocks the existing organisation-keys / s3 import cycle under
+ * vitest's parallel module loader.
  */
 export {
   ALLOWED_CONTENT_TYPES,

@@ -10,7 +10,11 @@ import {
 } from '@/lib/encryption/key-health';
 import { LocalKeyProvider } from '@/lib/encryption/local-provider';
 import { scopeFor } from '@/lib/encryption/scope';
-import { applyTenantJobGate, tenantKeyPauseSignal } from '@worker/tenant-key-gate';
+import {
+  applyTenantJobGate,
+  pauseOnTenantKeyLoss,
+  tenantKeyPauseSignal,
+} from '@worker/tenant-key-gate';
 import { DelayedError } from 'bullmq';
 
 const ORG_A = '11111111-1111-4111-8111-111111111111';
@@ -189,6 +193,25 @@ describe('tenant key revocation', () => {
       },
     });
     expect(ranAgain).toBe('run');
+  });
+
+  it('delays a scan whose key went non-active mid-job instead of spending an attempt', async () => {
+    const delayed: number[] = [];
+    const moveToDelayed = async (timestamp: number) => {
+      delayed.push(timestamp);
+    };
+    await expect(
+      pauseOnTenantKeyLoss({
+        err: new TenantKeyUnavailableError(ORG_A, 423),
+        now: 5_000,
+        moveToDelayed,
+      }),
+    ).resolves.toBe(true);
+    expect(delayed).toEqual([5_000 + 30_000]);
+    await expect(
+      pauseOnTenantKeyLoss({ err: new Error('clamd down'), moveToDelayed }),
+    ).resolves.toBe(false);
+    expect(delayed).toHaveLength(1);
   });
 
   it('pauses a key pending deletion and does not restore it from a healthy probe', async () => {

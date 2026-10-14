@@ -12,7 +12,7 @@ import {
   subjectFromContext,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
-import { addJob, QueueName } from '@/lib/queues';
+import { enqueueMalwareScan } from '@/lib/queues/malware-scan';
 import { logger } from '@/lib/observability/logger';
 import { queueNotification } from '@/domains/notifications';
 import {
@@ -20,6 +20,7 @@ import {
   EVIDENCE_BUCKET,
   getObjectStream,
   headObject,
+  isMissingObject,
   moveQuarantineToEvidence,
   objectKey,
   presignDownload,
@@ -38,6 +39,8 @@ import {
   type RequestUploadInput,
 } from './schemas';
 import { detectContentType } from './detect';
+import { EvidenceUploadIncompleteError } from './errors';
+import { quarantineUploadProblem } from './recovery';
 import { isServable, uploadSizeAcceptable, verifiedContentType } from './status';
 import { assertCanCompleteEvidenceUpload, decideEvidenceUpload } from './upload-auth';
 
@@ -159,7 +162,11 @@ export async function requestUpload(
 /**
  * Confirm the bytes have been PUT. Moves the record to `quarantined` and
  * enqueues the malware scan. The scan job is keyed by the evidence id so a
- * duplicate notification cannot double-schedule work.
+ * duplicate notification cannot double-schedule work. A sweeper redrive uses a
+ * fresh id because BullMQ will not replace this one after it fails.
+ *
+ * The quarantine object is stated first. A missing object or a size mismatch
+ * throws and leaves the row `pending`, so a later PUT can still complete.
  */
 export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
   const ctx = requireTenantContext();
@@ -171,8 +178,22 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     // Already progressed; return as-is (idempotent).
     return existing;
   }
+  if (!existing.quarantineKey) {
+    throw new EvidenceUploadIncompleteError('missing');
+  }
 
   const scope = currentScope();
+  const head = await headObject({
+    bucket: QUARANTINE_BUCKET,
+    key: existing.quarantineKey,
+    organisationId: scope.organisationId,
+  }).catch((err: unknown) => {
+    if (isMissingObject(err)) return null;
+    throw err;
+  });
+  const problem = quarantineUploadProblem(existing.sizeBytes, head);
+  if (problem) throw new EvidenceUploadIncompleteError(problem);
+
   const updated = await scope.db
     .update(evidence)
     .set({ status: 'quarantined' })
@@ -180,16 +201,12 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     .returning();
   const row = must(updated[0], 'evidence');
 
-  await addJob(
-    QueueName.MalwareScan,
-    'scan',
-    {
-      organisationId: scope.organisationId,
-      correlationId: ctx.correlationId,
-      evidenceId,
-    },
-    { jobId: evidenceId },
-  );
+  await enqueueMalwareScan({
+    organisationId: scope.organisationId,
+    correlationId: ctx.correlationId,
+    evidenceId,
+    jobId: evidenceId,
+  });
 
   const after: { data: Record<string, unknown>; allow: string[] } = {
     data: { applicationId: row.applicationId },
@@ -500,9 +517,76 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     });
   };
 
-  // Verify the stored size against the declaration; a storage error here
-  // should retry, so let it throw.
-  const head = await headObject({ bucket: QUARANTINE_BUCKET, key, organisationId });
+  // A missing quarantine object is terminal, not transient: retrying it only
+  // fills the dead-letter queue. A crash after copy+delete leaves the clean
+  // copy in the evidence bucket (only a clean scan writes there), so settle it
+  // clean. With nothing promoted, reject. Never mark unpromoted bytes clean.
+  const settleMissingQuarantine = async () => {
+    const promoted = await headObject({
+      bucket: EVIDENCE_BUCKET,
+      key,
+      organisationId,
+    }).catch((err: unknown) => {
+      if (isMissingObject(err)) return null;
+      throw err;
+    });
+    if (promoted?.etag && uploadSizeAcceptable(row.sizeBytes, promoted.contentLength)) {
+      const promotedHash = createHash('sha256');
+      const promotedBody = await getObjectStream({
+        bucket: EVIDENCE_BUCKET,
+        key,
+        ifMatch: promoted.etag,
+        organisationId,
+      });
+      try {
+        for await (const chunk of promotedBody) promotedHash.update(chunk as Uint8Array);
+      } finally {
+        promotedBody.destroy();
+      }
+      await settle({
+        status: 'clean',
+        evidenceKey: key,
+        // Set from the verified type when the object was promoted.
+        detectedContentType: promoted.contentType ?? null,
+        sha256: promotedHash.digest('hex'),
+        scanResult: 'clean',
+        scannedAt: new Date(),
+      });
+      await systemAudit(organisationId, correlationId, {
+        action: 'evidence.scan_clean',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+        reason: 'evidence.promoted_object_present',
+      });
+      return;
+    }
+    await settle({
+      status: 'rejected',
+      scanResult: 'rejected:missing-object',
+      scannedAt: new Date(),
+    });
+    await systemAudit(organisationId, correlationId, {
+      action: 'evidence.rejected',
+      resourceType: 'evidence',
+      resourceId: evidenceId,
+      result: 'failure',
+      reason: 'evidence.quarantine_object_missing',
+    });
+  };
+
+  // Verify the stored size against the declaration; any other storage error
+  // here should retry, so let it throw.
+  const head = await headObject({ bucket: QUARANTINE_BUCKET, key, organisationId }).catch(
+    (err: unknown) => {
+      if (isMissingObject(err)) return null;
+      throw err;
+    },
+  );
+  if (!head) {
+    await settleMissingQuarantine();
+    return;
+  }
   if (!head.etag || !uploadSizeAcceptable(row.sizeBytes, head.contentLength)) {
     await rejectUpload(null, 'rejected:size', 'evidence.size_mismatch', {
       data: {
