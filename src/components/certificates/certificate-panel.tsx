@@ -2,9 +2,11 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { readConflictMessage } from '@/lib/http/conflict-message';
+import { withStepUp } from '@/lib/auth/step-up-flow';
 import { cn } from '@/lib/utils';
 
 /**
@@ -49,6 +51,7 @@ export function CertificatePanel({
   certificates: PanelCertificate[];
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,12 +67,12 @@ export function CertificatePanel({
     setBusy(key);
     setError(null);
     try {
-      const res = await fn();
+      const res = await withStepUp(fn, () => stepUp.request());
       if (res.status === 401) {
         const data: { code?: string } = await res.json().catch(() => ({}));
         setError(
           data.code === 'STEP_UP_REQUIRED'
-            ? 'For security, signing needs a recent sign-in. Sign out and back in, then sign within 10 minutes.'
+            ? 'Confirm it is you to continue. You stay signed in.'
             : 'Please sign in again.',
         );
         return;
@@ -99,7 +102,12 @@ export function CertificatePanel({
     );
 
   const sign = (id: string) =>
-    run(`sign:${id}`, () => fetch(`/api/certificates/${id}/sign`, { method: 'POST' }));
+    run(`sign:${id}`, () =>
+      fetch(`/api/certificates/${id}/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
 
   const revoke = (id: string) => {
     const reason = window.prompt('Reason for revoking this certificate?');
@@ -115,6 +123,7 @@ export function CertificatePanel({
 
   return (
     <section aria-label="Certificates" className="flex flex-col gap-4">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <h2 className="text-lg font-semibold tracking-tight">Certificates</h2>
       {error ? <Alert tone="destructive">{error}</Alert> : null}
 

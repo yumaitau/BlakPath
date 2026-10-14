@@ -3,7 +3,10 @@ import { NextResponse } from 'next/server';
 
 import { FormTokenError, submitPublicResponse } from '@/domains/forms';
 import { ConcurrencyConflictError } from '@/lib/concurrency/error';
+import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
+import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
+import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 
 /**
  * POST /api/public/forms/[token] — submit a form response, unauthenticated.
@@ -27,6 +30,9 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await params;
+  const ip = clientIpForLimits(request.headers);
+  const limited = await enforcePair(REQUEST_LIMITS.publicFormPost, ip, token);
+  if (limited) return limited;
 
   let answers: unknown;
   try {
@@ -37,9 +43,7 @@ export async function POST(
     return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
   }
 
-  // First value of x-forwarded-for is the originating client (best-effort only).
-  const forwardedFor = request.headers.get('x-forwarded-for');
-  const ipAddress = forwardedFor?.split(',')[0]?.trim() || undefined;
+  const ipAddress = ip === UNKNOWN_CLIENT_IP ? undefined : ip;
 
   try {
     await submitPublicResponse(token, answers, ipAddress);
@@ -47,6 +51,9 @@ export async function POST(
   } catch (error) {
     if (error instanceof ConcurrencyConflictError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    if (error instanceof OrganisationUnavailableError) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     if (error instanceof FormTokenError) {
       return NextResponse.json(

@@ -59,10 +59,8 @@ integration('optimistic concurrency', () => {
       import('@/lib/env'),
     ]);
     env.__resetEnvCache();
+    // audit_events is append-only; its rows stay behind by design.
     for (const organisationId of organisationIds) {
-      await db
-        .delete(schema.auditEvents)
-        .where(drizzle.eq(schema.auditEvents.organisationId, organisationId));
       await db
         .delete(schema.organisations)
         .where(drizzle.eq(schema.organisations.id, organisationId));
@@ -132,6 +130,8 @@ integration('optimistic concurrency', () => {
       slug: `concurrency-${suffix}`,
       status: 'active',
     });
+    const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+    await ensureOrganisationKey(orgId);
     await rt.db.insert(rt.schema.memberships).values({
       id: membershipId,
       organisationId: orgId,
@@ -237,6 +237,11 @@ integration('optimistic concurrency', () => {
       reference: `CERT-RACE-${certificateId.slice(0, 8)}`,
       verificationCode: randomUUID().replace(/-/g, ''),
       status: 'draft',
+      // Signing seals the PDF digest and holder binding; supply both so the
+      // race is over the status claim, not fixture gaps.
+      sha256: 'a'.repeat(64),
+      holderBindingSalt: 'b'.repeat(32),
+      holderNameHash: 'c'.repeat(64),
     });
 
     const release = holdClaims(2);

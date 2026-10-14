@@ -1,0 +1,4 @@
+ALTER TABLE "organisation_keys" ADD COLUMN "escrow_consent_reference" text;--> statement-breakpoint
+ALTER TABLE "organisation_keys" ADD COLUMN "escrow_consented_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "organisation_keys" ADD COLUMN "escrow_package_digest" text;--> statement-breakpoint
+ALTER TABLE "organisation_keys" ADD CONSTRAINT "organisation_keys_escrow_consent" CHECK ("organisation_keys"."escrow" = false OR ("organisation_keys"."escrow_consent_reference" IS NOT NULL AND "organisation_keys"."escrow_consented_at" IS NOT NULL AND "organisation_keys"."escrow_package_digest" IS NOT NULL));
