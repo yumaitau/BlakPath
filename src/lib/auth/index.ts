@@ -275,7 +275,7 @@ export const auth = betterAuth({
     ...staffMfaDatabaseHooks,
     session: {
       create: {
-        before: async (session: { lastAuthenticatedAt?: Date | string | null }) => {
+        before: async (session: Record<string, unknown>) => {
           if (session.lastAuthenticatedAt) return;
           return { data: { lastAuthenticatedAt: new Date() } };
         },

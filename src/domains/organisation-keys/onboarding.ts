@@ -1,28 +1,18 @@
-import { KmsKeyProvider } from '@/lib/encryption/kms-provider';
-import { runKeyHandshake, withLocalKeyPolicy } from '@/lib/encryption/key-handshake';
-import type { KeyProvider } from '@/lib/encryption/key-provider';
-import { createKeyProvider } from '@/lib/encryption/provider';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
-  completeOrganisationKeyValidation,
   getOrganisationKey,
   registerOrganisationKey,
   resetOrganisationKeyForValidation,
   toPublicOrganisationKey,
   type KeyCustodyMode,
+  validateOrganisationKey,
   type PublicOrganisationKey,
 } from './service';
 
 export interface SubmitOrganisationKeyInput {
   readonly kmsKeyArn: string;
   readonly custodyMode: KeyCustodyMode;
-}
-
-function providerForHandshake(orgId: string): KeyProvider {
-  const provider = createKeyProvider();
-  if (provider instanceof KmsKeyProvider) return provider;
-  return withLocalKeyPolicy(provider, orgId);
 }
 
 /** Current key for the signed-in admin. Null when none is registered. */
@@ -58,15 +48,6 @@ export async function submitOrganisationKey(
     });
   }
 
-  const handshake = await runKeyHandshake(providerForHandshake(ctx.organisationId), {
-    keyArn: input.kmsKeyArn,
-    orgId: ctx.organisationId,
-  });
-  const row = await completeOrganisationKeyValidation({
-    organisationId: ctx.organisationId,
-    failureCode: handshake.ok ? null : handshake.code,
-    canaryCiphertext: handshake.ok ? handshake.canaryCiphertext.toString('base64') : null,
-  });
-  if (handshake.ok) handshake.canaryCiphertext.fill(0);
+  const row = await validateOrganisationKey(ctx.organisationId, input.kmsKeyArn);
   return toPublicOrganisationKey(row);
 }

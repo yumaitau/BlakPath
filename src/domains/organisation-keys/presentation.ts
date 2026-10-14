@@ -30,6 +30,7 @@ export const KEY_STATUS_LABEL: Record<OrganisationKeyStatus, string> = {
   disabled: 'Disabled',
   pending_deletion: 'Pending deletion',
   unavailable: 'Unavailable',
+  pending_validation: 'Awaiting validation',
 };
 
 export interface EscrowView {
@@ -141,6 +142,8 @@ const ACTION_SUMMARY: Record<string, string> = {
   'key.status_changed': 'Status changed',
   'key.unavailable': 'KMS refused the key',
   'key.health_checked': 'Health check',
+  'key.validation_passed': 'Key validated',
+  'key.validation_failed': 'Key validation failed',
 };
 
 function metaNumber(meta: unknown, key: string): number | null {

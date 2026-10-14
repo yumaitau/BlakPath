@@ -48,7 +48,7 @@ RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 ########################################  deps  ###############################
 FROM with-pnpm AS deps
 # Only the manifest + lockfile so this layer caches across source changes.
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml .npmrc .pnpmfile.cjs ./
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
   pnpm install --frozen-lockfile
 
@@ -134,7 +134,7 @@ RUN addgroup -S -g 1001 nodejs \
 # Full dependency set (tsx lives in devDependencies and is required at runtime
 # to execute the TypeScript worker). Install BEFORE setting NODE_ENV, otherwise
 # pnpm prunes devDependencies and tsx is missing at runtime.
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml .npmrc .pnpmfile.cjs ./
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
   pnpm install --frozen-lockfile
 

@@ -3,9 +3,14 @@ import { db, type Database } from '@/db/client';
 import { organisationKeyRewraps, organisationKeys } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit';
 import { sharedDekCache } from '@/lib/encryption/dek-cache';
-import type { KeyValidationFailureCode } from '@/lib/encryption/key-handshake';
-import { parseKeyArn } from '@/lib/encryption/key-provider';
-import { DEV_TENANT_KEY_ARN } from '@/lib/encryption/provider';
+import {
+  runKeyHandshake,
+  withLocalKeyPolicy,
+  type KeyValidationFailureCode,
+} from '@/lib/encryption/key-handshake';
+import { parseKeyArn, type KeyProvider } from '@/lib/encryption/key-provider';
+import { KmsKeyProvider } from '@/lib/encryption/kms-provider';
+import { createKeyProvider, DEV_TENANT_KEY_ARN } from '@/lib/encryption/provider';
 import { replacementRequired } from '@/lib/encryption/rewrap';
 import { env, isProduction } from '@/lib/env';
 
@@ -83,7 +88,8 @@ export async function getOrganisationKey(
 }
 
 /**
- * Register a key when the organisation has none.
+ * Register a key when the organisation has none, then run the handshake so a
+ * passing key is active.
  *
  * Development and CI use the local tenant ARN. Production uses
  * `PLATFORM_KMS_KEY_ARN` only as a bootstrap stand-in for seed and pilot
@@ -103,6 +109,44 @@ export async function ensureOrganisationKey(
     { organisationId, custodyMode: 'blakpath_managed', kmsKeyArn },
     database,
   );
+  await validateOrganisationKey(organisationId, kmsKeyArn, database);
+}
+
+/**
+ * Run the handshake against the registered key and record the result. Only a
+ * pass makes the key active.
+ */
+export async function validateOrganisationKey(
+  organisationId: string,
+  kmsKeyArn: string,
+  database: Database = db,
+): Promise<OrganisationKeyRow> {
+  const handshake = await runKeyHandshake(handshakeProvider(organisationId), {
+    keyArn: kmsKeyArn,
+    orgId: organisationId,
+  });
+  const row = await completeOrganisationKeyValidation(
+    {
+      organisationId,
+      failureCode: handshake.ok ? null : handshake.code,
+      canaryCiphertext: handshake.ok
+        ? handshake.canaryCiphertext.toString('base64')
+        : null,
+    },
+    database,
+  );
+  if (handshake.ok) handshake.canaryCiphertext.fill(0);
+  return row;
+}
+
+/**
+ * Provider for the key handshake. Local development has no key policy, so the
+ * local provider is wrapped in one that refuses any other org_id.
+ */
+export function handshakeProvider(organisationId: string): KeyProvider {
+  const provider = createKeyProvider();
+  if (provider instanceof KmsKeyProvider) return provider;
+  return withLocalKeyPolicy(provider, organisationId);
 }
 
 /** Insert the organisation's current key and append a platform-chain event. */
@@ -120,7 +164,7 @@ export async function registerOrganisationKey(
       keyVersion: 1,
       status: 'pending_validation',
       validationStatus: 'pending',
-      escrow: input.escrow ?? input.custodyMode === 'client_owned_escrow',
+      escrow: input.escrow ?? false,
     })
     .returning();
   const row = inserted[0];
@@ -291,7 +335,7 @@ export async function resetOrganisationKeyForValidation(
       keyVersion: current.keyVersion + 1,
       status: 'pending_validation',
       validationStatus: 'pending',
-      escrow: input.escrow ?? input.custodyMode === 'client_owned_escrow',
+      escrow: input.escrow ?? false,
       validatedAt: null,
       validationFailure: null,
       canaryCiphertext: null,

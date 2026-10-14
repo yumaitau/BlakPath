@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { CLIENT_IP_HEADER, ORIGIN_VERIFY_HEADER } from '@/lib/http/client-ip';
 import { E2E_ORIGIN_VERIFY_SECRET } from './origin-verify';
 
@@ -29,7 +29,11 @@ export async function isolateSignInClient(page: Page): Promise<void> {
     .slice(0, 24)
     .match(/.{4}/g);
   if (!groups) throw new Error('Unable to generate an isolated E2E client address.');
+  // setExtraHTTPHeaders replaces the config's headers, so keep its Origin.
+  const baseURL = test.info().project.use.baseURL;
+  if (!baseURL) throw new Error('Playwright baseURL is required for E2E sign-in.');
   await page.context().setExtraHTTPHeaders({
+    Origin: baseURL,
     [CLIENT_IP_HEADER]: `2001:db8:${groups.join(':')}`,
     [ORIGIN_VERIFY_HEADER]: E2E_ORIGIN_VERIFY_SECRET,
   });

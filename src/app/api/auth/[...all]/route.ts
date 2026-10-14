@@ -22,20 +22,28 @@ import { headersWithTrustedClientIp } from '@/lib/http/client-ip';
  */
 const handler = toNextJsHandler(auth);
 
-function withTrustedClientIp(request: Request): Request {
-  return new Request(request, {
+/**
+ * Next hands the route its own Request subclass, which `new Request(request)`
+ * cannot clone (`#state` belongs to another class). Copy the parts instead.
+ */
+async function withTrustedClientIp(request: Request): Promise<Request> {
+  const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+  return new Request(request.url, {
+    method: request.method,
     headers: headersWithTrustedClientIp(request.headers),
+    signal: request.signal,
+    ...(hasBody ? { body: await request.arrayBuffer() } : {}),
   });
 }
 
-export function GET(request: Request): Promise<Response> {
-  return handler.GET(withTrustedClientIp(request));
+export async function GET(request: Request): Promise<Response> {
+  return handler.GET(await withTrustedClientIp(request));
 }
 
 const RESET_PATHS = ['/forget-password', '/request-password-reset'] as const;
 
-export function POST(request: Request): Promise<Response> {
-  const trusted = withTrustedClientIp(request);
+export async function POST(request: Request): Promise<Response> {
+  const trusted = await withTrustedClientIp(request);
   const { pathname } = new URL(request.url);
   if (!RESET_PATHS.some((path) => pathname.endsWith(path))) return handler.POST(trusted);
   return withConstantTime(RESET_RESPONSE_BUDGET_MS, () => handler.POST(trusted));

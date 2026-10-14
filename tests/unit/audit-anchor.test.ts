@@ -257,7 +257,7 @@ describe('audit append-only privileges', () => {
     expect(sql).toContain('audit_integrity_checkpoints');
 
     const migration = readFileSync(
-      'src/db/migrations/0019_audit-chain-predecessor.sql',
+      'src/db/migrations/0022_fluffy_franklin_richards.sql',
       'utf8',
     );
     for (const statement of AUDIT_APPEND_ONLY_STATEMENTS) {

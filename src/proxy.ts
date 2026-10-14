@@ -3,6 +3,7 @@ import { env } from '@/lib/env';
 import { clientIpForLimits, originRequestAllowed } from '@/lib/http/client-ip';
 import {
   buildContentSecurityPolicy,
+  uploadOrigin,
   createNonce,
   CSP_REPORT_GROUP,
   CSP_REPORT_PATH,
@@ -58,6 +59,14 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     nonce,
     development: env.NODE_ENV === 'development',
     upgradeInsecureRequests: appOrigin.startsWith('https://'),
+    connectSources: [
+      uploadOrigin({
+        endpoint: env.S3_ENDPOINT,
+        region: env.S3_REGION,
+        bucket: env.S3_BUCKET_QUARANTINE,
+        forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      }),
+    ],
   });
 
   const decision = evaluateCookieMutation({
@@ -68,7 +77,10 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     appOrigin,
   });
   if (!decision.allow) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: policyHeaders(contentSecurityPolicy) });
+    return NextResponse.json(
+      { error: 'Forbidden' },
+      { status: 403, headers: policyHeaders(contentSecurityPolicy) },
+    );
   }
 
   const { pathname } = request.nextUrl;

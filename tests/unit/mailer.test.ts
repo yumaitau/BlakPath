@@ -141,16 +141,15 @@ describe('sendEmail', () => {
     expect(JSON.stringify(info.mock.calls)).not.toContain('token-1');
   });
 
-  it('sends password reset through the same transport without logging the link', async () => {
+  it('delivers queued password reset through the same transport without logging the link', async () => {
     delete process.env.SMTP_USER;
     await resetMailState();
-    const { authMailer } = await import('@/lib/email/mailer');
+    const { deliverPasswordResetEmail } = await import('@/lib/email/mailer');
 
-    await authMailer.sendPasswordResetEmail({
+    await deliverPasswordResetEmail({
       to: 'ada@example.com',
       name: 'Ada',
       url: bearerUrl,
-      token: 'secret-bearer',
     });
 
     const command = sesSend.mock.calls[0]?.[0] as {

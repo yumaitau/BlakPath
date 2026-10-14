@@ -24,13 +24,19 @@ import { createKeyProvider } from './provider';
 const PURPOSE = 'blind-index';
 
 function httpStatus(
-  status: 'active' | 'disabled' | 'pending_deletion' | 'unavailable',
+  status:
+    | 'active'
+    | 'disabled'
+    | 'pending_deletion'
+    | 'unavailable'
+    | 'pending_validation',
 ): 423 | 503 | null {
   switch (status) {
     case 'active':
       return null;
     case 'disabled':
     case 'pending_deletion':
+    case 'pending_validation':
       return 423;
     case 'unavailable':
       return 503;
