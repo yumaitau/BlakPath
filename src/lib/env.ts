@@ -145,6 +145,17 @@ const serverSchema = z
     RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     REMINDER_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    // Evidence scan recovery. The scan job itself retries through a 10 minute
+    // ClamAV gap; the sweep re-queues anything still quarantined after that
+    // and expires uploads that never completed.
+    EVIDENCE_SCAN_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    EVIDENCE_QUARANTINE_REQUEUE_AFTER_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .default(600_000),
+    EVIDENCE_PENDING_EXPIRE_MS: z.coerce.number().int().min(60_000).default(86_400_000),
+    EVIDENCE_QUARANTINE_ALARM_AGE_SECONDS: z.coerce.number().int().min(60).default(1_800),
     // How often each active tenant's CMK is described and canary-decrypted.
     KEY_HEALTH_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
     // Operator address for key-health state changes. Not a secret.

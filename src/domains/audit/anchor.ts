@@ -69,10 +69,24 @@ export interface AuditAnchorStore {
   put(key: string, body: string): Promise<void>;
 }
 
+/** Chain hashes by 0-based position. May be sparse; `length` is the chain length. */
+export type ChainHashes = ArrayLike<string | undefined>;
+
 export interface AnchoredChainView {
   readonly ok: boolean;
-  readonly hashes: readonly string[];
+  readonly hashes: ChainHashes;
   readonly eventCount: number;
+}
+
+/**
+ * A chain too large to hold. `hashesAt` returns a sparse view of length
+ * `eventCount` holding the stored hash at each requested position: every
+ * anchored head and the current head.
+ */
+export interface AnchoredChainProbe {
+  readonly ok: boolean;
+  readonly eventCount: number;
+  hashesAt(positions: readonly number[]): Promise<ChainHashes>;
 }
 
 export type SettleAuditChainStatus =
@@ -215,7 +229,7 @@ function byAge(left: SignedAuditAnchor, right: SignedAuditAnchor): number {
 export async function assessAnchoredChain(
   chainId: string,
   organisationId: string | null,
-  chainHashes: readonly string[],
+  chainHashes: ChainHashes,
   anchors: readonly SignedAuditAnchor[],
   signer: AnchorSigner,
 ): Promise<
@@ -284,7 +298,7 @@ async function readAnchors(
  */
 export async function settleAuditChain(input: {
   organisationId: string | null;
-  chain: AnchoredChainView;
+  chain: AnchoredChainView | AnchoredChainProbe;
   store: AuditAnchorStore;
   signer: AnchorSigner;
   now?: Date;
@@ -299,7 +313,8 @@ export async function settleAuditChain(input: {
       day: null,
     };
   }
-  if (input.chain.eventCount === 0 || input.chain.hashes.length === 0) {
+  const fullView = 'hashes' in input.chain ? input.chain.hashes : null;
+  if (input.chain.eventCount === 0 || fullView?.length === 0) {
     return { status: 'empty', reason: null, eventCount: 0, day: null };
   }
 
@@ -313,10 +328,17 @@ export async function settleAuditChain(input: {
       day: null,
     };
   }
+  const hashes: ChainHashes =
+    'hashes' in input.chain
+      ? input.chain.hashes
+      : await input.chain.hashesAt([
+          ...loaded.map((anchor) => anchor.eventCount - 1),
+          input.chain.eventCount - 1,
+        ]);
   const assessment = await assessAnchoredChain(
     chainId,
     input.organisationId,
-    input.chain.hashes,
+    hashes,
     loaded,
     input.signer,
   );
@@ -343,8 +365,8 @@ export async function settleAuditChain(input: {
     const existing = parseSignedAnchor(existingRaw);
     const prefixOk =
       existing !== null &&
-      input.chain.hashes.length >= existing.eventCount &&
-      input.chain.hashes[existing.eventCount - 1] === existing.chainHeadHash;
+      hashes.length >= existing.eventCount &&
+      hashes[existing.eventCount - 1] === existing.chainHeadHash;
     if (!prefixOk) {
       return {
         status: 'anchor_mismatch',
@@ -362,7 +384,7 @@ export async function settleAuditChain(input: {
   }
 
   const previous = [...loaded].sort(byAge).at(-1) ?? null;
-  const head = input.chain.hashes[input.chain.hashes.length - 1];
+  const head = hashes[hashes.length - 1];
   if (!head) {
     return { status: 'empty', reason: null, eventCount: 0, day: null };
   }
@@ -371,7 +393,7 @@ export async function settleAuditChain(input: {
     chainId,
     organisationId: input.organisationId,
     day,
-    eventCount: input.chain.hashes.length,
+    eventCount: hashes.length,
     chainHeadHash: head,
     prevAnchorHash: previous ? hashAnchorBody(previous) : null,
     anchoredAt: now.toISOString(),

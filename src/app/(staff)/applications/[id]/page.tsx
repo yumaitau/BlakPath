@@ -91,6 +91,8 @@ export default async function ApplicationDetailPage({
             classification: item.classification,
             sizeBytes: item.sizeBytes,
             createdAt: item.createdAt.toISOString(),
+            receiptChannel: item.receiptChannel,
+            receivedOn: item.receivedOn,
           })),
           evidenceRequests: evidenceRequests.map((request) => ({
             id: request.id,
@@ -124,8 +126,16 @@ export default async function ApplicationDetailPage({
               'application:update-intake',
             ]),
             uploadEvidence:
-              application.applicantUserId === ctx.userId &&
-              hasPermission(subject, 'evidence:upload-own'),
+              (application.applicantUserId === ctx.userId &&
+                hasPermission(subject, 'evidence:upload-own')) ||
+              hasPermission(subject, 'evidence:upload-on-behalf'),
+            // Receipt fields when this is not the applicant uploading their own file.
+            uploadOnBehalf:
+              hasPermission(subject, 'evidence:upload-on-behalf') &&
+              !(
+                application.applicantUserId === ctx.userId &&
+                hasPermission(subject, 'evidence:upload-own')
+              ),
           },
         },
         governance: {

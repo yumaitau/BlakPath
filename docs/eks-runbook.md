@@ -344,7 +344,10 @@ same availability zone as their volumes, on two different nodes.
 
 ## Alarms
 
-Audit divergence, scan backlog past handling target, dead-letter email/export/
-retention/webhook jobs, backup failures, sustained 5xx / readiness failures,
-ClamAV signature age above 48 hours.
-See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+Audit divergence, oldest quarantined-evidence age
+(`blakpath-oldest-quarantined-age`, 30 minutes), malware-scan dead-letter depth
+(`blakpath-malware-scan-dlq`), dead-letter email/export/retention/webhook jobs,
+backup failures, sustained 5xx / readiness failures, ClamAV signature age above
+48 hours. See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+The evidence sweep redrives stuck scans; the age alarm means that redrive is
+not draining.
