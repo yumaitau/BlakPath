@@ -17,6 +17,7 @@ const permissions = {
   addNote: true,
   uploadEvidence: true,
   classifyEvidence: true,
+  uploadOnBehalf: true,
 };
 
 function workspace(
@@ -38,6 +39,8 @@ function workspace(
           classification: 'supplied',
           sizeBytes: 2048,
           createdAt: '2026-10-01T01:00:00.000Z',
+          receiptChannel: 'post',
+          receivedOn: '2026-09-30',
         },
         {
           id: 'ev-bad',
@@ -46,6 +49,8 @@ function workspace(
           classification: null,
           sizeBytes: 1024,
           createdAt: '2026-10-01T01:00:00.000Z',
+          receiptChannel: null,
+          receivedOn: null,
         },
       ]}
       evidenceRequests={[]}
@@ -88,6 +93,8 @@ describe('application case workspace', () => {
     expect(screen.getByText('birth-record.pdf')).toBeTruthy();
     expect(screen.getByText('Scan clean')).toBeTruthy();
     expect(screen.getByText('Infected')).toBeTruthy();
+    // A file staff received for the applicant says how and when, once.
+    expect(screen.getAllByText(/Received by post on/)).toHaveLength(1);
     // Only the clean file offers a download.
     expect(screen.getAllByRole('button', { name: /^download$/i })).toHaveLength(1);
   });
