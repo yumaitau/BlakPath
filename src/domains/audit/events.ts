@@ -220,12 +220,17 @@ export type AuditAction =
   // Legacy data import.
   | 'import.completed'
   // Retention / lifecycle of data.
+  | 'retention.policy_drafted'
+  | 'retention.policy_activated'
   | 'retention.policy_applied'
   | 'retention.policy_deleted'
+  | 'retention.authority_signed'
   | 'retention.record_purged'
   | 'retention.record_anonymised'
   | 'retention.hold_placed'
   | 'retention.hold_released'
+  | 'retention.purge_blocked'
+  | 'retention.register_exported'
   // Break-glass (emergency cross-tenant access).
   | 'break_glass.requested'
   | 'break_glass.approved'
@@ -332,6 +337,8 @@ export type ResourceType =
   | 'export'
   | 'import'
   | 'retention_policy'
+  | 'disposal_authority'
+  | 'destruction_register'
   | 'break_glass_request'
   | 'integration'
   | 'job'

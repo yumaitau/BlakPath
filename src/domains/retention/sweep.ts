@@ -24,6 +24,8 @@ import {
   clients,
   decisionVotes,
   decisions,
+  destructionRegister,
+  disposalAuthoritySignoffs,
   evidence,
   evidenceRequests,
   familyLinks,
@@ -53,25 +55,36 @@ import {
   QUARANTINE_BUCKET,
 } from '@/lib/storage/s3';
 import {
+  disposalAuthorityVerified,
+  sweepBlockReason,
+  type AuthoritySignoffGate,
+  type SweepBlockReason,
+} from './approval';
+import { CATALOGUE_VERSION, DISPOSAL_CLASS_INFO, isDisposalClass } from './disposal';
+import {
   ANONYMISED_PLACEHOLDER,
   HARD_DELETE_GRACE_DAYS,
-  hasDisposalAuthority,
-  isRetentionResourceType,
+  isSweepResourceType,
   MIN_RETENTION_DAYS,
   officialRecordBlocksDisposal,
   retentionCutoff,
   type RetentionAction,
-  type RetentionResourceType,
+  type SweepResourceType,
 } from './rules';
 
 /**
  * Retention sweep (worker side).
  *
- * For each active policy, selects records past retention that are not under a
- * legal hold and not already anonymised or tombstoned. Official records
- * (decided applications, finalised decisions, issued certificates) are left
- * alone unless the policy carries a disposal authority reference. Every
- * successful action is audited. A failed object delete is audited as a failure
+ * For each active policy that a second person approved (issue #44), selects
+ * records past retention that are not under a legal hold and not already
+ * anonymised or tombstoned. A purge, and the hard-delete after grace, runs only
+ * when the policy's disposal authority reference matches a current
+ * records-manager sign-off; otherwise the policy is skipped and the block is
+ * audited with a coded reason. Official records (decided applications,
+ * finalised decisions, issued certificates) are left alone unless that signed
+ * authority is verified. A bare reference string never unlocks disposal. Each
+ * purge writes a destruction-register row in the same transaction as the
+ * tombstone. Every successful action is audited. A failed object delete is audited as a failure
  * and left eligible so the next sweep retries it. The append-only audit trail
  * is never a target.
  *
@@ -94,8 +107,10 @@ export interface SweepInput {
 
 export interface RetentionPreviewItem {
   policyId: string;
-  resourceType: RetentionResourceType;
+  resourceType: SweepResourceType;
   action: RetentionAction;
+  /** Why the sweep will not act on this policy. Counts are zero when set. */
+  blocked: SweepBlockReason | null;
   due: number;
   protectedOfficial: number;
   hardDeleteDue: number;
@@ -104,6 +119,12 @@ export interface RetentionPreviewItem {
 type Scope = ReturnType<typeof scopeFor>;
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 type Policy = typeof retentionPolicies.$inferSelect;
+type Signoff = typeof disposalAuthoritySignoffs.$inferSelect;
+
+/** Coded audit reasons. Never free text. */
+type SweepAuditReason =
+  | 'retention.action_failed'
+  | `retention.purge_blocked.${SweepBlockReason}`;
 
 interface Cursor {
   at: Date;
@@ -296,7 +317,7 @@ function sysAudit(
   resourceType: ResourceType,
   resourceId: string,
   result: 'success' | 'failure',
-  reason?: 'retention.action_failed',
+  reason?: SweepAuditReason,
   phase?: 'hard_delete',
   tx?: AuditTransaction,
 ) {
@@ -320,6 +341,8 @@ function sysAudit(
 
 /** Success audit written inside the disposal transaction. */
 type AuditInTx = (tx: Tx) => Promise<unknown>;
+
+const NO_WORK = { actioned: 0, failed: 0 } as const;
 
 async function walkDue(
   load: (cursor: Cursor | null) => Promise<DueRow[]>,
@@ -350,8 +373,9 @@ async function runRecord(
   phase: 'hard_delete' | undefined,
   work: (audit: AuditInTx) => Promise<'actioned' | 'skipped'>,
 ): Promise<'actioned' | 'failed' | 'skipped'> {
-  // The success audit joins the disposal transaction, so a rolled-back
-  // disposal never leaves a success event behind.
+  // The success audit joins the disposal transaction, together with the
+  // tombstone or delete and any destruction-register row, so a rolled-back
+  // disposal never leaves a success event or register entry behind.
   const audit: AuditInTx = (tx) =>
     sysAudit(
       input.organisationId,
@@ -448,7 +472,7 @@ async function disposalBlocked(
   tx: Tx,
   organisationId: string,
   applicationId: string | null,
-  authorityRef: string | null,
+  authorityVerified: boolean,
 ): Promise<boolean> {
   // A public form file not yet linked to a case has no official record above it.
   if (applicationId === null) return false;
@@ -491,7 +515,7 @@ async function disposalBlocked(
     applicationStatus: app.status,
     hasFinalisedDecision: decision !== undefined,
     hasIssuedCertificate: certificate !== undefined,
-    disposalAuthorityRef: authorityRef,
+    authorityVerified,
   });
 }
 
@@ -959,6 +983,94 @@ function effectiveDays(retentionDays: number): number {
   return Math.max(retentionDays, MIN_RETENTION_DAYS);
 }
 
+/** Current sign-offs for this catalogue version. Superseded rows are history only. */
+async function loadSignoffs(scope: Scope, organisationId: string): Promise<Signoff[]> {
+  return scope.db
+    .select()
+    .from(disposalAuthoritySignoffs)
+    .where(
+      and(
+        eq(disposalAuthoritySignoffs.organisationId, organisationId),
+        eq(disposalAuthoritySignoffs.catalogueVersion, CATALOGUE_VERSION),
+        isNull(disposalAuthoritySignoffs.supersededAt),
+      ),
+    );
+}
+
+function signoffGate(
+  rows: readonly Signoff[],
+  policy: Policy,
+): AuthoritySignoffGate | null {
+  if (!policy.jurisdiction || !policy.disposalClass) return null;
+  const row = rows.find(
+    (candidate) =>
+      candidate.jurisdiction === policy.jurisdiction &&
+      candidate.disposalClass === policy.disposalClass,
+  );
+  if (!row) return null;
+  return {
+    authorityReference: row.authorityReference,
+    permanent: row.permanent,
+    disposalClass: row.disposalClass,
+    jurisdiction: row.jurisdiction,
+    minimumRetentionDays: row.minimumRetentionDays,
+  };
+}
+
+interface PolicyGate {
+  /** Non-null: the sweep must not act on this policy at all. */
+  block: SweepBlockReason | null;
+  /** Signed, two-person-approved authority: official records may be disposed. */
+  authority: boolean;
+  retentionDays: number;
+}
+
+/** Fail closed: an unknown class counts as one that must never be destroyed. */
+function gatePolicy(policy: Policy, signoffs: readonly Signoff[]): PolicyGate {
+  const disposalClass = policy.disposalClass;
+  const destructionForbidden =
+    disposalClass !== null && isDisposalClass(disposalClass)
+      ? DISPOSAL_CLASS_INFO[disposalClass].destructionForbidden
+      : true;
+  const signoff = signoffGate(signoffs, policy);
+  const block = sweepBlockReason(policy, signoff, destructionForbidden);
+  const retentionDays = policy.retentionDays;
+  if (block || retentionDays == null) {
+    return { block: block ?? 'permanent', authority: false, retentionDays: 0 };
+  }
+  return {
+    block: null,
+    authority: disposalAuthorityVerified(policy, signoff, destructionForbidden),
+    retentionDays,
+  };
+}
+
+/** One register row per purged record, in the same transaction as the tombstone. */
+async function registerDestruction(
+  tx: Tx,
+  policy: Policy,
+  input: SweepInput,
+  resourceType: SweepResourceType,
+  resourceId: string,
+  now: Date,
+): Promise<void> {
+  const authorityReference = policy.disposalAuthorityRef?.trim() ?? '';
+  if (!policy.disposalClass || !policy.jurisdiction || authorityReference.length === 0) {
+    throw new Error('Purge reached the register without a signed disposal authority');
+  }
+  await tx.insert(destructionRegister).values({
+    organisationId: input.organisationId,
+    resourceType,
+    resourceId,
+    disposalClass: policy.disposalClass,
+    jurisdiction: policy.jurisdiction,
+    authorityReference,
+    policyId: policy.id,
+    destroyedAt: now,
+    correlationId: input.correlationId,
+  });
+}
+
 /** Counts only. No writes and no audit events. */
 export async function previewRetentionSweep(
   organisationId: string,
@@ -966,27 +1078,45 @@ export async function previewRetentionSweep(
   const scope = scopeFor(organisationId);
   const now = new Date();
   const policies = await loadPolicies(scope, organisationId);
+  const signoffs = await loadSignoffs(scope, organisationId);
   const items: RetentionPreviewItem[] = [];
   for (const policy of policies) {
-    if (!isRetentionResourceType(policy.resourceType)) continue;
-    const cutoff = retentionCutoff(effectiveDays(policy.retentionDays), now);
+    if (!isSweepResourceType(policy.resourceType)) continue;
+    const gate = gatePolicy(policy, signoffs);
+    if (gate.block) {
+      items.push({
+        policyId: policy.id,
+        resourceType: policy.resourceType,
+        action: policy.action,
+        blocked: gate.block,
+        due: 0,
+        protectedOfficial: 0,
+        hardDeleteDue: 0,
+      });
+      continue;
+    }
+    const cutoff = retentionCutoff(effectiveDays(gate.retentionDays), now);
     const graceCutoff = retentionCutoff(HARD_DELETE_GRACE_DAYS, now);
-    const authority = hasDisposalAuthority(policy.disposalAuthorityRef);
+    const authority = gate.authority;
     const due = await countDue(scope, organisationId, policy, cutoff, authority);
     const protectedOfficial = authority
       ? 0
       : await countProtected(scope, organisationId, policy, cutoff);
-    const hardDeleteDue = await countHardDelete(
-      scope,
-      organisationId,
-      policy.resourceType,
-      graceCutoff,
-      authority,
-    );
+    const hardDeleteDue =
+      policy.action === 'purge'
+        ? await countHardDelete(
+            scope,
+            organisationId,
+            policy.resourceType,
+            graceCutoff,
+            authority,
+          )
+        : 0;
     items.push({
       policyId: policy.id,
       resourceType: policy.resourceType,
       action: policy.action,
+      blocked: null,
       due,
       protectedOfficial,
       hardDeleteDue,
@@ -1085,7 +1215,7 @@ async function countProtected(
 async function countHardDelete(
   scope: Scope,
   organisationId: string,
-  resourceType: RetentionResourceType,
+  resourceType: SweepResourceType,
   graceCutoff: Date,
   authority: boolean,
 ): Promise<number> {
@@ -1231,17 +1361,18 @@ async function disposeApplication(
   scope: Scope,
   input: SweepInput,
   applicationId: string,
-  action: RetentionAction,
-  authorityRef: string | null,
+  policy: Policy,
+  authorityVerified: boolean,
   now: Date,
   audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
+  const action = policy.action;
   if (
     await disposalBlocked(
       await reader(scope),
       input.organisationId,
       applicationId,
-      authorityRef,
+      authorityVerified,
     )
   ) {
     return 'skipped';
@@ -1254,13 +1385,16 @@ async function disposeApplication(
     );
   }
   return scope.db.transaction(async (tx): Promise<'actioned'> => {
-    if (await disposalBlocked(tx, input.organisationId, applicationId, authorityRef)) {
+    if (
+      await disposalBlocked(tx, input.organisationId, applicationId, authorityVerified)
+    ) {
       throw new Error('Official record became protected during retention disposal');
     }
     if (action === 'anonymise') {
       await anonymiseApplication(tx, input.organisationId, applicationId, now);
     } else {
       await tombstoneApplication(tx, input.organisationId, applicationId, now);
+      await registerDestruction(tx, policy, input, 'application', applicationId, now);
     }
     await audit(tx);
     return 'actioned';
@@ -1280,12 +1414,35 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
   const scope = scopeFor(organisationId);
   const now = new Date();
   const policies = await loadPolicies(scope, organisationId);
+  const signoffs = await loadSignoffs(scope, organisationId);
 
   for (const policy of policies) {
-    if (!isRetentionResourceType(policy.resourceType)) continue;
-    const cutoff = retentionCutoff(effectiveDays(policy.retentionDays), now);
+    if (!isSweepResourceType(policy.resourceType)) continue;
+    const gate = gatePolicy(policy, signoffs);
+    if (gate.block) {
+      if (policy.action === 'purge') {
+        await sysAudit(
+          organisationId,
+          input.correlationId,
+          'retention.purge_blocked',
+          'retention_policy',
+          policy.id,
+          'failure',
+          `retention.purge_blocked.${gate.block}`,
+        );
+        logger.warn(
+          { organisationId, policyId: policy.id, reason: gate.block },
+          'retention purge blocked',
+        );
+      }
+      continue;
+    }
+    const cutoff = retentionCutoff(effectiveDays(gate.retentionDays), now);
     const graceCutoff = retentionCutoff(HARD_DELETE_GRACE_DAYS, now);
-    const authority = hasDisposalAuthority(policy.disposalAuthorityRef);
+    const authority = gate.authority;
+    // Hard delete is destruction: only a purge policy that passed the signed
+    // authority gate may remove tombstoned rows.
+    const hardDelete = policy.action === 'purge';
     let actioned = 0;
     let failed = 0;
 
@@ -1317,48 +1474,42 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
             row.id,
             undefined,
             (audit) =>
-              disposeApplication(
-                scope,
-                input,
-                row.id,
-                policy.action,
-                policy.disposalAuthorityRef,
-                now,
-                audit,
-              ),
+              disposeApplication(scope, input, row.id, policy, authority, now, audit),
           ),
       );
-      const hard = await walkDue(
-        async (cursor) => {
-          const rows = await scope.db
-            .select({ id: applications.id, at: applications.deletedAt })
-            .from(applications)
-            .where(
-              applicationHardWhere(scope, organisationId, graceCutoff, authority, cursor),
-            )
-            .orderBy(asc(applications.deletedAt), asc(applications.id))
-            .limit(BATCH);
-          return rows.flatMap((row) =>
-            row.at ? [{ id: row.id, at: asDate(row.at) }] : [],
-          );
-        },
-        (row) =>
-          runRecord(
-            input,
-            'retention.record_purged',
-            'application',
-            row.id,
-            'hard_delete',
-            (audit) =>
-              hardDeleteOneApplication(
-                scope,
+      const hard = hardDelete
+        ? await walkDue(
+            async (cursor) => {
+              const rows = await scope.db
+                .select({ id: applications.id, at: applications.deletedAt })
+                .from(applications)
+                .where(
+                  applicationHardWhere(
+                    scope,
+                    organisationId,
+                    graceCutoff,
+                    authority,
+                    cursor,
+                  ),
+                )
+                .orderBy(asc(applications.deletedAt), asc(applications.id))
+                .limit(BATCH);
+              return rows.flatMap((row) =>
+                row.at ? [{ id: row.id, at: asDate(row.at) }] : [],
+              );
+            },
+            (row) =>
+              runRecord(
                 input,
+                'retention.record_purged',
+                'application',
                 row.id,
-                policy.disposalAuthorityRef,
-                audit,
+                'hard_delete',
+                (audit) =>
+                  hardDeleteOneApplication(scope, input, row.id, authority, audit),
               ),
-          ),
-      );
+          )
+        : NO_WORK;
       actioned += soft.actioned + hard.actioned;
       failed += soft.failed + hard.failed;
     } else if (policy.resourceType === 'evidence') {
@@ -1389,48 +1540,41 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
             row.id,
             undefined,
             (audit) =>
-              disposeEvidence(
-                scope,
-                input,
-                row.id,
-                policy.action,
-                policy.disposalAuthorityRef,
-                now,
-                audit,
-              ),
+              disposeEvidence(scope, input, row.id, policy, authority, now, audit),
           ),
       );
-      const hard = await walkDue(
-        async (cursor) => {
-          const rows = await scope.db
-            .select({ id: evidence.id, at: evidence.deletedAt })
-            .from(evidence)
-            .where(
-              evidenceHardWhere(scope, organisationId, graceCutoff, authority, cursor),
-            )
-            .orderBy(asc(evidence.deletedAt), asc(evidence.id))
-            .limit(BATCH);
-          return rows.flatMap((row) =>
-            row.at ? [{ id: row.id, at: asDate(row.at) }] : [],
-          );
-        },
-        (row) =>
-          runRecord(
-            input,
-            'retention.record_purged',
-            'evidence',
-            row.id,
-            'hard_delete',
-            (audit) =>
-              hardDeleteOneEvidence(
-                scope,
+      const hard = hardDelete
+        ? await walkDue(
+            async (cursor) => {
+              const rows = await scope.db
+                .select({ id: evidence.id, at: evidence.deletedAt })
+                .from(evidence)
+                .where(
+                  evidenceHardWhere(
+                    scope,
+                    organisationId,
+                    graceCutoff,
+                    authority,
+                    cursor,
+                  ),
+                )
+                .orderBy(asc(evidence.deletedAt), asc(evidence.id))
+                .limit(BATCH);
+              return rows.flatMap((row) =>
+                row.at ? [{ id: row.id, at: asDate(row.at) }] : [],
+              );
+            },
+            (row) =>
+              runRecord(
                 input,
+                'retention.record_purged',
+                'evidence',
                 row.id,
-                policy.disposalAuthorityRef,
-                audit,
+                'hard_delete',
+                (audit) => hardDeleteOneEvidence(scope, input, row.id, authority, audit),
               ),
-          ),
-      );
+          )
+        : NO_WORK;
       actioned += soft.actioned + hard.actioned;
       failed += soft.failed + hard.failed;
     } else {
@@ -1461,46 +1605,36 @@ export async function processRetentionSweep(input: SweepInput): Promise<void> {
             row.id,
             undefined,
             (audit) =>
-              disposeFormResponse(
-                scope,
-                input,
-                row.id,
-                policy.action,
-                policy.disposalAuthorityRef,
-                now,
-                audit,
-              ),
+              disposeFormResponse(scope, input, row.id, policy, authority, now, audit),
           ),
       );
-      const hard = await walkDue(
-        async (cursor) => {
-          const rows = await scope.db
-            .select({ id: formResponses.id, at: formResponses.deletedAt })
-            .from(formResponses)
-            .where(formHardWhere(scope, organisationId, graceCutoff, authority, cursor))
-            .orderBy(asc(formResponses.deletedAt), asc(formResponses.id))
-            .limit(BATCH);
-          return rows.flatMap((row) =>
-            row.at ? [{ id: row.id, at: asDate(row.at) }] : [],
-          );
-        },
-        (row) =>
-          runRecord(
-            input,
-            'retention.record_purged',
-            'form_response',
-            row.id,
-            'hard_delete',
-            (audit) =>
-              hardDeleteOneFormResponse(
-                scope,
+      const hard = hardDelete
+        ? await walkDue(
+            async (cursor) => {
+              const rows = await scope.db
+                .select({ id: formResponses.id, at: formResponses.deletedAt })
+                .from(formResponses)
+                .where(
+                  formHardWhere(scope, organisationId, graceCutoff, authority, cursor),
+                )
+                .orderBy(asc(formResponses.deletedAt), asc(formResponses.id))
+                .limit(BATCH);
+              return rows.flatMap((row) =>
+                row.at ? [{ id: row.id, at: asDate(row.at) }] : [],
+              );
+            },
+            (row) =>
+              runRecord(
                 input,
+                'retention.record_purged',
+                'form_response',
                 row.id,
-                policy.disposalAuthorityRef,
-                audit,
+                'hard_delete',
+                (audit) =>
+                  hardDeleteOneFormResponse(scope, input, row.id, authority, audit),
               ),
-          ),
-      );
+          )
+        : NO_WORK;
       actioned += soft.actioned + hard.actioned;
       failed += soft.failed + hard.failed;
     }
@@ -1537,7 +1671,7 @@ async function hardDeleteOneApplication(
   scope: Scope,
   input: SweepInput,
   applicationId: string,
-  authorityRef: string | null,
+  authorityVerified: boolean,
   audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   if (
@@ -1545,7 +1679,7 @@ async function hardDeleteOneApplication(
       await reader(scope),
       input.organisationId,
       applicationId,
-      authorityRef,
+      authorityVerified,
     )
   ) {
     return 'skipped';
@@ -1554,7 +1688,9 @@ async function hardDeleteOneApplication(
     await applicationObjectTargets(scope, input.organisationId, applicationId),
   );
   return scope.db.transaction(async (tx): Promise<'actioned'> => {
-    if (await disposalBlocked(tx, input.organisationId, applicationId, authorityRef)) {
+    if (
+      await disposalBlocked(tx, input.organisationId, applicationId, authorityVerified)
+    ) {
       throw new Error('Official record became protected during retention disposal');
     }
     await hardDeleteApplication(tx, input.organisationId, applicationId);
@@ -1567,11 +1703,12 @@ async function disposeEvidence(
   scope: Scope,
   input: SweepInput,
   evidenceId: string,
-  action: RetentionAction,
-  authorityRef: string | null,
+  policy: Policy,
+  authorityVerified: boolean,
   now: Date,
   audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
+  const action = policy.action;
   const [row] = await scope.db
     .select({
       applicationId: evidence.applicationId,
@@ -1589,7 +1726,7 @@ async function disposeEvidence(
       await reader(scope),
       input.organisationId,
       row.applicationId,
-      authorityRef,
+      authorityVerified,
     )
   ) {
     return 'skipped';
@@ -1601,7 +1738,12 @@ async function disposeEvidence(
   await deleteTargets(targets);
   return scope.db.transaction(async (tx): Promise<'actioned'> => {
     if (
-      await disposalBlocked(tx, input.organisationId, row.applicationId, authorityRef)
+      await disposalBlocked(
+        tx,
+        input.organisationId,
+        row.applicationId,
+        authorityVerified,
+      )
     ) {
       throw new Error('Official record became protected during retention disposal');
     }
@@ -1632,6 +1774,7 @@ async function disposeEvidence(
             eq(evidence.id, evidenceId),
           ),
         );
+      await registerDestruction(tx, policy, input, 'evidence', evidenceId, now);
     }
     await audit(tx);
     return 'actioned';
@@ -1642,7 +1785,7 @@ async function hardDeleteOneEvidence(
   scope: Scope,
   input: SweepInput,
   evidenceId: string,
-  authorityRef: string | null,
+  authorityVerified: boolean,
   audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   const [row] = await scope.db
@@ -1662,7 +1805,7 @@ async function hardDeleteOneEvidence(
       await reader(scope),
       input.organisationId,
       row.applicationId,
-      authorityRef,
+      authorityVerified,
     )
   ) {
     return 'skipped';
@@ -1674,7 +1817,12 @@ async function hardDeleteOneEvidence(
   await deleteTargets(targets);
   return scope.db.transaction(async (tx): Promise<'actioned'> => {
     if (
-      await disposalBlocked(tx, input.organisationId, row.applicationId, authorityRef)
+      await disposalBlocked(
+        tx,
+        input.organisationId,
+        row.applicationId,
+        authorityVerified,
+      )
     ) {
       throw new Error('Official record became protected during retention disposal');
     }
@@ -1714,11 +1862,12 @@ async function disposeFormResponse(
   scope: Scope,
   input: SweepInput,
   formResponseId: string,
-  action: RetentionAction,
-  authorityRef: string | null,
+  policy: Policy,
+  authorityVerified: boolean,
   now: Date,
   audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
+  const action = policy.action;
   const applicationId = await formApplicationId(
     scope,
     input.organisationId,
@@ -1730,7 +1879,7 @@ async function disposeFormResponse(
       await reader(scope),
       input.organisationId,
       applicationId,
-      authorityRef,
+      authorityVerified,
     ))
   ) {
     return 'skipped';
@@ -1738,7 +1887,7 @@ async function disposeFormResponse(
   return scope.db.transaction(async (tx): Promise<'actioned'> => {
     if (
       applicationId &&
-      (await disposalBlocked(tx, input.organisationId, applicationId, authorityRef))
+      (await disposalBlocked(tx, input.organisationId, applicationId, authorityVerified))
     ) {
       throw new Error('Official record became protected during retention disposal');
     }
@@ -1754,6 +1903,7 @@ async function disposeFormResponse(
             eq(formResponses.id, formResponseId),
           ),
         );
+      await registerDestruction(tx, policy, input, 'form_response', formResponseId, now);
     }
     await audit(tx);
     return 'actioned';
@@ -1764,7 +1914,7 @@ async function hardDeleteOneFormResponse(
   scope: Scope,
   input: SweepInput,
   formResponseId: string,
-  authorityRef: string | null,
+  authorityVerified: boolean,
   audit: AuditInTx,
 ): Promise<'actioned' | 'skipped'> {
   const applicationId = await formApplicationId(
@@ -1778,7 +1928,7 @@ async function hardDeleteOneFormResponse(
       await reader(scope),
       input.organisationId,
       applicationId,
-      authorityRef,
+      authorityVerified,
     ))
   ) {
     return 'skipped';
@@ -1786,7 +1936,7 @@ async function hardDeleteOneFormResponse(
   return scope.db.transaction(async (tx): Promise<'actioned'> => {
     if (
       applicationId &&
-      (await disposalBlocked(tx, input.organisationId, applicationId, authorityRef))
+      (await disposalBlocked(tx, input.organisationId, applicationId, authorityVerified))
     ) {
       throw new Error('Official record became protected during retention disposal');
     }

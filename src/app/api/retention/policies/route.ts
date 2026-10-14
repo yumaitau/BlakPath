@@ -4,7 +4,11 @@ import { withRequestTenant } from '@/lib/http/tenant-route';
 import { createPolicy, listPolicies, type CreatePolicyInput } from '@/domains/retention';
 import { tenantHandler } from '@/lib/http/error-response';
 
-/** Retention policies. GET list / POST create ({ resourceType, retentionDays, action }). */
+/**
+ * Retention policies.
+ * GET list / POST draft ({ resourceType, retentionDays, action, jurisdiction, authorityReference? }).
+ * A draft stays inactive until a different person activates it.
+ */
 export const GET = tenantHandler(async function GET(): Promise<Response> {
   const items = await withRequestTenant(() => listPolicies());
   return NextResponse.json({ items });

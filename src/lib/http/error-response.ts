@@ -158,6 +158,17 @@ function classify(error: unknown): MappedError {
   if (error instanceof Error && error.name === 'ConcurrencyConflictError') {
     return { status: 409, code: 'CONCURRENCY_CONFLICT', error: error.message };
   }
+  // Disposal-authority and two-person approval refusals
+  // (src/domains/retention/errors.ts). Every message is a fixed phrase chosen
+  // at the throw site and names no record, so it is returned with its code.
+  if (error instanceof Error && error.name === 'RetentionError') {
+    const code = (error as { code?: unknown }).code;
+    return {
+      status: 409,
+      code: typeof code === 'string' && SAFE_CODE.test(code) ? code : 'RETENTION_REFUSED',
+      error: error.message,
+    };
+  }
   // Per-tenant MCP budget (src/domains/mcp/rate-limit.ts).
   if (error instanceof Error && error.name === 'McpRateLimitError') {
     const seconds = (error as { retryAfterSeconds?: unknown }).retryAfterSeconds;

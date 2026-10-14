@@ -239,29 +239,46 @@ and both lookups and name checks are rate-limited.
 
 ## Retention & deletion vs official records
 
-- **Tenant-set defaults.** Retention periods are organisation-configured
-  (`organisation_settings.retentionDefaults`).
+- **Disposal authority, not a software sentence.** Every resource type maps to a
+  disposal class. A records manager signs the authority reference for a class in
+  the organisation's jurisdiction. The software does not choose the statute, the
+  class number, or the keep period (`docs/records-disposal.md`).
+- **Two people to activate.** A retention policy is drafted inactive. A different
+  `retention:manage` holder has to activate it. The drafter cannot activate their
+  own policy.
+- **No purge without an authority.** A purge runs only when the policy cites a
+  current sign-off. Permanent retention (`retain`, no end date) is never due.
+  Each committed purge is written to the destruction register, which can be
+  exported.
+- **Tenant-set defaults.** Organisation settings still carry
+  `organisation_settings.retentionDefaults` for guidance. They do not by
+  themselves authorise destruction.
 - **Soft delete first.** The `softDelete` helper (`deletedAt`) supports
   reversible removal and grace periods before any hard deletion.
 - **Worker-driven lifecycle.** Retention/deletion runs as background jobs
   (`docs/architecture.md`), tenant-scoped and audited.
 - **Official records are protected.** A recorded determination (`decided`
   application or finalised decision) or an issued certificate is an official
-  record. The retention sweep will not anonymise or purge it, or its evidence
-  and form responses, unless the active policy carries a disposal authority
-  reference. That reference is the interim gate; dual-control approval of the
-  reference is a separate records control. The audit trail is never a target.
+  record (`official_outcome`). The retention sweep will not anonymise or purge
+  it, or its evidence and form responses, unless the policy's disposal
+  authority is verified: a second person activated the policy and its
+  authority reference matches a current records-manager sign-off that is not
+  marked permanent. A bare reference string does not unlock disposal. The
+  audit trail is never a target.
 - **Retention floor and grace.** A policy cannot be shorter than 30 days. Purge
   tombstones the database row, removes every S3 object version immediately, and
-  hard-deletes the row only after a further 30-day grace. Anonymised rows are
-  marked and are not rewritten on later sweeps.
+  hard-deletes the row only after a further 30-day grace. The hard delete runs
+  only under a purge policy that still passes the signed-authority gate.
+  Anonymised rows are marked and are not rewritten on later sweeps.
 - **Legal holds cascade.** A hold on an application also shields its evidence,
   form responses, notes and family links. A hold on evidence or a form response
   keeps that record, and its parent application, out of the sweep. Holds can
   only be placed on a record that exists.
 - **The audit trail is not deletable per-row.** Deleting individual audit rows
   would defeat tamper-evidence; audit retention is handled by whole, verified,
-  archived periods, never by editing rows (`docs/audit-log-design.md`).
+  archived periods, never by editing rows (`docs/audit-log-design.md`). The
+  destruction register is the same kind of control record and is not a sweep
+  target.
 
 ## No automated determination — the guarantee
 

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /**
  * Staff actions that connect one submitted response to a case.
@@ -24,6 +25,7 @@ export function FormResponseActions({
   applicationId: string | null;
 }) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [reference, setReference] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -70,7 +72,7 @@ export function FormResponseActions({
         <Button
           type="button"
           size="sm"
-          disabled={busy}
+          disabled={!hydrated || busy}
           onClick={() => {
             void post({});
           }}
@@ -110,7 +112,7 @@ export function FormResponseActions({
           type="submit"
           size="sm"
           variant="secondary"
-          disabled={busy || reference.trim() === ''}
+          disabled={!hydrated || busy || reference.trim() === ''}
         >
           Attach to case
         </Button>

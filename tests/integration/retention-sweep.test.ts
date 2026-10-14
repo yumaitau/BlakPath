@@ -6,6 +6,7 @@ import type * as TenantFields from '@/lib/encryption/tenant-fields';
 import * as schema from '@/db/schema';
 import type { RetentionPreviewItem, SweepInput } from '@/domains/retention/sweep';
 import { ANONYMISED_PLACEHOLDER, MIN_RETENTION_DAYS } from '@/domains/retention/rules';
+import { CATALOGUE_VERSION } from '@/domains/retention/disposal';
 
 /**
  * Real Postgres. Proves the sweep page cannot hide due rows behind not-due or
@@ -147,19 +148,64 @@ integration('retention sweep', () => {
     return ids;
   }
 
+  const CLASS_BY_TYPE = {
+    application: 'application_matter',
+    evidence: 'supporting_evidence',
+    form_response: 'application_matter',
+  } as const;
+
+  async function signAuthority(
+    orgId: string,
+    resourceType: keyof typeof CLASS_BY_TYPE,
+    authorityReference: string,
+  ): Promise<void> {
+    const signer = await createUser();
+    await db.insert(schema.disposalAuthoritySignoffs).values({
+      organisationId: orgId,
+      jurisdiction: 'nsw',
+      disposalClass: CLASS_BY_TYPE[resourceType],
+      catalogueVersion: CATALOGUE_VERSION,
+      authorityReference,
+      permanent: false,
+      signedOffByUserId: signer,
+    });
+  }
+
+  /**
+   * An active policy drafted by one person and activated by another. A purge
+   * gets a matching records-manager sign-off unless `signed` is false.
+   */
   async function addPolicy(
     orgId: string,
-    resourceType: 'application' | 'evidence' | 'form_response',
+    resourceType: keyof typeof CLASS_BY_TYPE,
     action: 'anonymise' | 'purge',
-    disposalAuthorityRef?: string,
-  ): Promise<void> {
-    await db.insert(schema.retentionPolicies).values({
-      organisationId: orgId,
-      resourceType,
-      retentionDays: MIN_RETENTION_DAYS,
-      action,
-      ...(disposalAuthorityRef ? { disposalAuthorityRef } : {}),
-    });
+    options: { disposalAuthorityRef?: string; signed?: boolean } = {},
+  ): Promise<string> {
+    const drafter = await createUser();
+    const approver = await createUser();
+    const disposalAuthorityRef =
+      options.disposalAuthorityRef ?? (action === 'purge' ? 'GA39-1.1.1' : undefined);
+    const [policy] = await db
+      .insert(schema.retentionPolicies)
+      .values({
+        organisationId: orgId,
+        resourceType,
+        disposalClass: CLASS_BY_TYPE[resourceType],
+        jurisdiction: 'nsw',
+        retentionDays: MIN_RETENTION_DAYS,
+        action,
+        active: true,
+        createdByUserId: drafter,
+        approvedByUserId: approver,
+        approvedAt: new Date(),
+        ...(disposalAuthorityRef ? { disposalAuthorityRef } : {}),
+      })
+      .returning({ id: schema.retentionPolicies.id });
+    if (!policy) throw new Error('policy insert failed');
+    if ((options.signed ?? action === 'purge') && disposalAuthorityRef) {
+      await signAuthority(orgId, resourceType, disposalAuthorityRef);
+    }
+    return policy.id;
   }
 
   async function auditCount(orgId: string, correlationId?: string): Promise<number> {
@@ -451,7 +497,7 @@ integration('retention sweep', () => {
     expect(deleteAllObjectVersions).not.toHaveBeenCalled();
   });
 
-  it('refuses decided and certified applications unless an authority reference is set', async () => {
+  it('refuses decided and certified applications until a signed authority is verified', async () => {
     const orgId = await createOrg();
     const dueAt = new Date(Date.now() - (MIN_RETENTION_DAYS + 10) * DAY);
     const [decidedId] = await insertApps(orgId, 'DECIDED', 1, dueAt, {
@@ -480,11 +526,31 @@ integration('retention sweep', () => {
       status: 'signed',
       verificationCode: `verify-${certifiedId}`,
     });
-    await addPolicy(orgId, 'application', 'purge');
+    // A reference with no records-manager sign-off is not an authority.
+    const policyId = await addPolicy(orgId, 'application', 'purge', {
+      disposalAuthorityRef: 'GA39-1.1.1',
+      signed: false,
+    });
 
     await processRetentionSweep({
       organisationId: orgId,
       correlationId: 'official-blocked',
+    });
+    const [blockedAudit] = await db
+      .select({
+        reason: schema.auditEvents.reason,
+        resourceId: schema.auditEvents.resourceId,
+      })
+      .from(schema.auditEvents)
+      .where(
+        drizzle.and(
+          drizzle.eq(schema.auditEvents.organisationId, orgId),
+          drizzle.eq(schema.auditEvents.action, 'retention.purge_blocked'),
+        ),
+      );
+    expect(blockedAudit).toEqual({
+      reason: 'retention.purge_blocked.no_signoff',
+      resourceId: policyId,
     });
 
     const blocked = await db
@@ -506,10 +572,31 @@ integration('retention sweep', () => {
       .where(drizzle.eq(schema.decisions.id, decision?.id ?? ''));
     expect(kept?.rationale).toBe('human record');
 
+    // Self-approval is not two-person approval, even with a signed authority.
+    await signAuthority(orgId, 'application', 'GA39-1.1.1');
+    const [drafter] = await db
+      .select({ createdByUserId: schema.retentionPolicies.createdByUserId })
+      .from(schema.retentionPolicies)
+      .where(drizzle.eq(schema.retentionPolicies.id, policyId));
     await db
       .update(schema.retentionPolicies)
-      .set({ disposalAuthorityRef: 'GA39-1.1.1' })
-      .where(drizzle.eq(schema.retentionPolicies.organisationId, orgId));
+      .set({ approvedByUserId: drafter?.createdByUserId ?? null })
+      .where(drizzle.eq(schema.retentionPolicies.id, policyId));
+    await processRetentionSweep({
+      organisationId: orgId,
+      correlationId: 'official-self-approved',
+    });
+    const stillKept = await db
+      .select({ deletedAt: schema.applications.deletedAt })
+      .from(schema.applications)
+      .where(drizzle.inArray(schema.applications.id, [decidedId, certifiedId]));
+    expect(stillKept.every((row) => row.deletedAt === null)).toBe(true);
+
+    const approver = await createUser();
+    await db
+      .update(schema.retentionPolicies)
+      .set({ approvedByUserId: approver })
+      .where(drizzle.eq(schema.retentionPolicies.id, policyId));
     await processRetentionSweep({
       organisationId: orgId,
       correlationId: 'official-authorised',
@@ -520,6 +607,91 @@ integration('retention sweep', () => {
       .from(schema.applications)
       .where(drizzle.inArray(schema.applications.id, [decidedId, certifiedId]));
     expect(disposed.every((row) => row.deletedAt instanceof Date)).toBe(true);
+    const register = await db
+      .select({
+        resourceId: schema.destructionRegister.resourceId,
+        authorityReference: schema.destructionRegister.authorityReference,
+      })
+      .from(schema.destructionRegister)
+      .where(drizzle.eq(schema.destructionRegister.organisationId, orgId));
+    expect(register.map((row) => row.resourceId).sort()).toEqual(
+      [decidedId, certifiedId].sort(),
+    );
+    expect(register.every((row) => row.authorityReference === 'GA39-1.1.1')).toBe(true);
+  });
+
+  it('does not anonymise an official record on a bare authority reference', async () => {
+    const orgId = await createOrg();
+    const dueAt = new Date(Date.now() - (MIN_RETENTION_DAYS + 10) * DAY);
+    const [decidedId] = await insertApps(orgId, 'BARE', 1, dueAt, { status: 'decided' });
+    const [openId] = await insertApps(orgId, 'OPEN', 1, dueAt, { status: 'submitted' });
+    if (!decidedId || !openId) throw new Error('fixture insert failed');
+    await addPolicy(orgId, 'application', 'anonymise', {
+      disposalAuthorityRef: 'GA39-1.1.1',
+      signed: false,
+    });
+
+    await processRetentionSweep({ organisationId: orgId, correlationId: 'bare-ref' });
+
+    const rows = await db
+      .select({
+        id: schema.applications.id,
+        anonymisedAt: schema.applications.anonymisedAt,
+      })
+      .from(schema.applications)
+      .where(drizzle.inArray(schema.applications.id, [decidedId, openId]));
+    const byId = new Map(rows.map((row) => [row.id, row.anonymisedAt]));
+    expect(byId.get(decidedId)).toBeNull();
+    expect(byId.get(openId)).toBeInstanceOf(Date);
+  });
+
+  it('needs a second person to activate a policy and a signed authority to draft a purge', async () => {
+    const orgId = await createOrg();
+    const drafter = await createUser();
+    const approver = await createUser();
+    const { createPolicy, activatePolicy } = await import('@/domains/retention/service');
+    const { RetentionError } = await import('@/domains/retention/errors');
+    const { runWithTenantContext } = await import('@/lib/tenancy/context');
+    const ctxFor = (userId: string) => ({
+      organisationId: orgId,
+      userId,
+      membershipId: userId,
+      permissions: new Set(['retention:manage']),
+      roles: ['records-officer'],
+      sessionId: userId,
+      correlationId: 'two-person',
+      requestId: 'two-person',
+    });
+
+    await expect(
+      runWithTenantContext(ctxFor(drafter), () =>
+        createPolicy({
+          resourceType: 'application',
+          retentionDays: MIN_RETENTION_DAYS,
+          action: 'purge',
+          jurisdiction: 'nsw',
+          authorityReference: 'GA39-1.1.1',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RetentionError);
+
+    const draft = await runWithTenantContext(ctxFor(drafter), () =>
+      createPolicy({
+        resourceType: 'application',
+        retentionDays: MIN_RETENTION_DAYS,
+        action: 'anonymise',
+        jurisdiction: 'nsw',
+      }),
+    );
+    expect(draft.active).toBe(false);
+    await expect(
+      runWithTenantContext(ctxFor(drafter), () => activatePolicy(draft.id)),
+    ).rejects.toThrow();
+    const active = await runWithTenantContext(ctxFor(approver), () =>
+      activatePolicy(draft.id),
+    );
+    expect(active.active).toBe(true);
+    expect(active.approvedByUserId).toBe(approver);
   });
 
   it('audits a failed object delete and retries it', async () => {

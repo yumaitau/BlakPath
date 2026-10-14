@@ -705,6 +705,7 @@ function FileInput({
   onUploaded: (evidenceId: string) => void;
   onUploadingChange: (active: boolean) => void;
 }) {
+  const hydrated = useHydrated();
   const [name, setName] = useState<string | null>(evidenceId ? 'Saved file' : null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -734,7 +735,7 @@ function FileInput({
         type="file"
         accept={FILE_ACCEPT}
         aria-required={required || undefined}
-        disabled={busy}
+        disabled={!hydrated || busy}
         onChange={(event) => {
           void onChange(event);
         }}
