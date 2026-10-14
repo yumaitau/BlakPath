@@ -2,6 +2,12 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import 'dotenv/config';
+import {
+  applyAuditAppPrivileges,
+  applyAuditAppendOnlyGuard,
+  DEFAULT_AUDIT_APP_ROLE,
+} from './audit-guard';
+import { resolveMigrationDatabaseUrl } from './migration-url';
 import { postgresClientOptions } from './postgres-options';
 
 /**
@@ -10,8 +16,8 @@ import { postgresClientOptions } from './postgres-options';
  * on completion so the process exits cleanly.
  */
 async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL is required to run migrations');
+  const url = resolveMigrationDatabaseUrl(process.env);
+  const role = process.env.AUDIT_DB_APP_ROLE || DEFAULT_AUDIT_APP_ROLE;
 
   const sql = postgres(
     url,
@@ -22,6 +28,12 @@ async function main() {
 
     console.log('[migrate] applying migrations…');
     await migrate(database, { migrationsFolder: './src/db/migrations' });
+    console.log('[migrate] enforcing append-only audit guards…');
+    await applyAuditAppendOnlyGuard((statement) => sql.unsafe(statement));
+    await applyAuditAppPrivileges(sql, {
+      role,
+      required: process.env.NODE_ENV === 'production',
+    });
 
     console.log('[migrate] done');
   } finally {

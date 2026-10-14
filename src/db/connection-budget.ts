@@ -13,9 +13,9 @@
  */
 
 export const WEB_POOL_MAX = 10;
-export const WORKER_POOL_MAX = 32;
+export const WORKER_POOL_MAX = 33;
 /** One BullMQ worker per queue, this many jobs at once. See `worker/index.ts`. */
-export const WORKER_QUEUE_CONCURRENCY = 4;
+export const WORKER_QUEUE_CONCURRENCY = 3;
 export const WEB_HPA_MIN_REPLICAS = 2;
 export const WEB_HPA_MAX_REPLICAS = 4;
 export const WEB_MAX_SURGE = 1;

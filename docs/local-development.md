@@ -7,7 +7,7 @@ the same on your machine as in `ap-southeast-2`.
 
 ## Prerequisites
 
-- **Node.js** `>= 20.11.0`
+- **Node.js** `24.21.0` (see `.nvmrc`; engines require `>= 24.21.0`)
 - **pnpm** `9` (`packageManager: pnpm@9.12.0`) — `corepack enable` will pin it
 - **Docker** + **Docker Compose** (for Postgres, Redis, MinIO, ClamAV, Mailpit)
 - **OpenSSL** (to generate secrets)
@@ -24,7 +24,9 @@ Generate the two secrets you must not leave at their placeholder values:
 
 ```bash
 openssl rand -base64 48   # BETTER_AUTH_SECRET  (>= 32 chars required)
-openssl rand -base64 32   # ENCRYPTION_MASTER_KEY (base64-encoded 32-byte key)
+# Envelope encryption uses a deterministic local provider in development.
+# Set ENCRYPTION_LOCAL_KEY (openssl rand -base64 32) only to pin that root.
+# ENCRYPTION_MASTER_KEY is optional and only reads version-1 ciphertext.
 ```
 
 Configuration is validated centrally by `src/lib/env.ts` (Zod). The process
@@ -35,15 +37,15 @@ exceptions are `src/db/migrate.ts` and instrumentation).
 
 Key local defaults (see `.env.example`):
 
-| Variable                                      | Local value                                            | Notes                                                                |
-| --------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------- |
-| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres. No TLS locally. Production requires `sslmode=verify-full`. |
-| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                             |
-| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                |
-| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                   |
-| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                     |
-| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                           |
-| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — must never decide/score/infer                       |
+| Variable                                      | Local value                                            | Notes                                                                             |
+| --------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                | `postgres://blakpath:blakpath@localhost:5432/blakpath` | Postgres. No TLS locally. Production requires `sslmode=verify-full`.              |
+| `REDIS_URL`                                   | `redis://localhost:6379`                               | Queues / ephemeral state                                                          |
+| `S3_ENDPOINT`                                 | `http://localhost:9000`                                | MinIO (S3-compatible)                                                             |
+| `S3_BUCKET_EVIDENCE` / `S3_BUCKET_QUARANTINE` | `blakpath-evidence` / `blakpath-quarantine`            | Evidence lifecycle                                                                |
+| `CLAMAV_HOST:PORT`                            | `localhost:3310`                                       | Malware scanning                                                                  |
+| `SMTP_HOST:PORT`                              | `localhost:1025`                                       | Mailpit (catches all mail)                                                        |
+| `AI_FEATURES_ENABLED`                         | `false`                                                | Off by default — external tool access stays hidden. Must never decide/score/infer |
 
 ## Local services (Docker)
 
@@ -69,6 +71,16 @@ Local endpoints you'll use:
 pnpm db:migrate     # apply migrations (tsx src/db/migrate.ts)
 pnpm db:seed        # seed permission catalogue, system roles, dev org/user
 ```
+
+`pnpm db:seed` creates the local administrator only when `ALLOW_DEV_SEED=1`
+and `DATABASE_URL` points at `localhost`, `127.0.0.1`, or `::1`. Copying
+`.env.example` sets the flag. A non-local database fails the command.
+
+Local `pnpm db:migrate` uses `DATABASE_URL`. Set `DATABASE_MIGRATION_URL` only
+when you want to exercise the separate owner role. After migrate, triggers
+reject `UPDATE`, `DELETE` and `TRUNCATE` on `audit_events` and
+`audit_integrity_checkpoints`, including for the table owner. A superuser can
+disable those triggers; the application role must not be able to.
 
 The non-production seed prints two synthetic test accounts. The administrator
 combines the operational roles needed to exercise every staff screen locally.
@@ -139,8 +151,8 @@ or email, keep it running.
 
 - **"Invalid environment configuration".** `src/lib/env.ts` rejected your `.env`;
   the error lists the failing keys. Common causes: `BETTER_AUTH_SECRET` shorter
-  than 32 chars, or `ENCRYPTION_MASTER_KEY` not a base64 32-byte key. Regenerate
-  with the `openssl` commands above.
+  than 32 chars. Regenerate with the `openssl` command above. A set
+  `ENCRYPTION_LOCAL_KEY` or `ENCRYPTION_MASTER_KEY` must be base64 for 32 bytes.
 - **DB connection refused / migrations fail.** Ensure `docker compose ps` shows
   Postgres healthy and `DATABASE_URL` matches. `pnpm db:migrate` uses a dedicated
   single connection and exits cleanly on success.
