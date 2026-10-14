@@ -34,27 +34,32 @@ export async function createSsoBinding(
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const input = bindingSchema.parse(raw);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(organisationSsoProviders)
-    .values(
-      scope.insertValues({
-        providerKey: input.providerKey,
-        issuer: input.issuer,
-        clientId: input.clientId,
-        domain: input.domain,
-        enabled: false,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'sso binding');
-  await recordAudit({
-    action: 'admin.settings_updated',
-    resourceType: 'organisation',
-    resourceId: scope.organisationId,
-    result: 'success',
-    reason: 'sso.binding_created',
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(organisationSsoProviders)
+      .values(
+        scope.insertValues({
+          providerKey: input.providerKey,
+          issuer: input.issuer,
+          clientId: input.clientId,
+          domain: input.domain,
+          enabled: false,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'sso binding');
+    await recordAudit(
+      {
+        action: 'admin.settings_updated',
+        resourceType: 'organisation',
+        resourceId: scope.organisationId,
+        result: 'success',
+        reason: 'sso.binding_created',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listSsoBindings(): Promise<SsoBindingRow[]> {
@@ -104,23 +109,28 @@ export async function setSsoBindingEnabled(
       throw new AuthorizationError('POLICY_DENIED');
     }
   }
-  const updated = await scope.db
-    .update(organisationSsoProviders)
-    .set({ enabled })
-    .where(
-      scope.where(
-        organisationSsoProviders.organisationId,
-        eq(organisationSsoProviders.id, id),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'sso binding');
-  await recordAudit({
-    action: 'admin.settings_updated',
-    resourceType: 'organisation',
-    resourceId: scope.organisationId,
-    result: 'success',
-    reason: enabled ? 'sso.binding_enabled' : 'sso.binding_disabled',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationSsoProviders)
+      .set({ enabled })
+      .where(
+        scope.where(
+          organisationSsoProviders.organisationId,
+          eq(organisationSsoProviders.id, id),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'sso binding');
+    await recordAudit(
+      {
+        action: 'admin.settings_updated',
+        resourceType: 'organisation',
+        resourceId: scope.organisationId,
+        result: 'success',
+        reason: enabled ? 'sso.binding_enabled' : 'sso.binding_disabled',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }

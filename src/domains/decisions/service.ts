@@ -133,32 +133,36 @@ export async function proposeDecision(
     id,
     input.rationale ?? null,
   );
-  const inserted = await scope.db
-    .insert(decisions)
-    .values(
-      scope.insertValues({
-        id,
-        applicationId,
-        proposedByUserId: ctx.userId,
-        proposedOutcome: input.outcome,
-        rationale,
-        status: 'proposed',
-      }),
-    )
-    .returning();
-  const stored = must(inserted[0], 'decision');
-  const [row] = await openDecisionRows(scope.organisationId, [stored]);
-  const opened = must(row, 'decision');
+  const stored = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(decisions)
+      .values(
+        scope.insertValues({
+          id,
+          applicationId,
+          proposedByUserId: ctx.userId,
+          proposedOutcome: input.outcome,
+          rationale,
+          status: 'proposed',
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'decision');
 
-  await recordAudit({
-    action: 'decision.proposed',
-    resourceType: 'decision',
-    resourceId: opened.id,
-    result: 'success',
-    after: { data: { applicationId }, allow: ['applicationId'] },
+    await recordAudit(
+      {
+        action: 'decision.proposed',
+        resourceType: 'decision',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { applicationId }, allow: ['applicationId'] },
+      },
+      tx,
+    );
+    return created;
   });
-
-  return opened;
+  const [row] = await openDecisionRows(scope.organisationId, [stored]);
+  return must(row, 'decision');
 }
 
 /** Cast or change a committee vote on a proposed decision. */
@@ -195,41 +199,51 @@ export async function castVote(
     .limit(1);
   const existing = existingRows[0];
 
-  if (existing) {
-    const updated = await scope.db
-      .update(decisionVotes)
-      .set({ choice: input.choice, note: input.note ?? null })
-      .where(scope.where(decisionVotes.organisationId, eq(decisionVotes.id, existing.id)))
-      .returning();
-    const row = must(updated[0], 'vote');
-    await recordAudit({
-      action: 'vote.changed',
-      resourceType: 'vote',
-      resourceId: row.id,
-      result: 'success',
-    });
-    return row;
-  }
+  return scope.db.transaction(async (tx) => {
+    if (existing) {
+      const updated = await tx
+        .update(decisionVotes)
+        .set({ choice: input.choice, note: input.note ?? null })
+        .where(
+          scope.where(decisionVotes.organisationId, eq(decisionVotes.id, existing.id)),
+        )
+        .returning();
+      const row = must(updated[0], 'vote');
+      await recordAudit(
+        {
+          action: 'vote.changed',
+          resourceType: 'vote',
+          resourceId: row.id,
+          result: 'success',
+        },
+        tx,
+      );
+      return row;
+    }
 
-  const inserted = await scope.db
-    .insert(decisionVotes)
-    .values(
-      scope.insertValues({
-        decisionId,
-        voterUserId: ctx.userId,
-        choice: input.choice,
-        note: input.note ?? null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'vote');
-  await recordAudit({
-    action: 'vote.cast',
-    resourceType: 'vote',
-    resourceId: row.id,
-    result: 'success',
+    const inserted = await tx
+      .insert(decisionVotes)
+      .values(
+        scope.insertValues({
+          decisionId,
+          voterUserId: ctx.userId,
+          choice: input.choice,
+          note: input.note ?? null,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'vote');
+    await recordAudit(
+      {
+        action: 'vote.cast',
+        resourceType: 'vote',
+        resourceId: row.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Withdraw the caller's own vote on a still-open decision. */
@@ -244,21 +258,26 @@ export async function withdrawVote(decisionId: string): Promise<void> {
   }
 
   const scope = currentScope();
-  await scope.db
-    .delete(decisionVotes)
-    .where(
-      scope.where(
-        decisionVotes.organisationId,
-        eq(decisionVotes.decisionId, decisionId),
-        eq(decisionVotes.voterUserId, ctx.userId),
-      ),
-    );
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .delete(decisionVotes)
+      .where(
+        scope.where(
+          decisionVotes.organisationId,
+          eq(decisionVotes.decisionId, decisionId),
+          eq(decisionVotes.voterUserId, ctx.userId),
+        ),
+      );
 
-  await recordAudit({
-    action: 'vote.withdrawn',
-    resourceType: 'vote',
-    resourceId: decisionId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'vote.withdrawn',
+        resourceType: 'vote',
+        resourceId: decisionId,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }
 
@@ -319,18 +338,19 @@ export async function finaliseDecision(
       'record_decision',
       { note: input.note },
     );
+    await recordApplicationTransitionAudit('record_decision', transition, tx);
+    await recordAudit(
+      {
+        action: 'decision.finalised',
+        resourceType: 'decision',
+        resourceId: decisionId,
+        result: 'success',
+        reason: input.note ? 'decision.finalise_note' : null,
+        after: { data: { outcome: input.outcome }, allow: ['outcome'] },
+      },
+      tx,
+    );
     return { row, transition };
-  });
-
-  await recordApplicationTransitionAudit('record_decision', committed.transition);
-
-  await recordAudit({
-    action: 'decision.finalised',
-    resourceType: 'decision',
-    resourceId: decisionId,
-    result: 'success',
-    reason: input.note ? 'decision.finalise_note' : null,
-    after: { data: { outcome: input.outcome }, allow: ['outcome'] },
   });
 
   // Notify subscribed webhook endpoints (best-effort; never fails the decision).

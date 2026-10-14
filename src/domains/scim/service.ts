@@ -229,60 +229,71 @@ async function replaceScimRoles(
 }
 
 async function auditRoleChanges(
+  tx: DbTx,
   organisationId: string,
   membershipId: string,
   credentialId: string,
   changes: RoleSync,
 ): Promise<void> {
   for (const slug of changes.removed) {
-    await recordAudit({
-      action: 'membership.role_removed',
-      resourceType: 'membership',
-      resourceId: membershipId,
-      result: 'success',
-      reason: 'scim',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'scim',
-      after: {
-        data: { role: slug, scimAuthId: credentialId },
-        allow: ['role', 'scimAuthId'],
+    await recordAudit(
+      {
+        action: 'membership.role_removed',
+        resourceType: 'membership',
+        resourceId: membershipId,
+        result: 'success',
+        reason: 'scim',
+        organisationId,
+        actorUserId: null,
+        actingRole: 'scim',
+        after: {
+          data: { role: slug, scimAuthId: credentialId },
+          allow: ['role', 'scimAuthId'],
+        },
       },
-    });
+      tx,
+    );
   }
   for (const slug of changes.added) {
-    await recordAudit({
-      action: 'membership.role_assigned',
-      resourceType: 'membership',
-      resourceId: membershipId,
-      result: 'success',
-      reason: 'scim',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'scim',
-      after: {
-        data: { role: slug, scimAuthId: credentialId },
-        allow: ['role', 'scimAuthId'],
+    await recordAudit(
+      {
+        action: 'membership.role_assigned',
+        resourceType: 'membership',
+        resourceId: membershipId,
+        result: 'success',
+        reason: 'scim',
+        organisationId,
+        actorUserId: null,
+        actingRole: 'scim',
+        after: {
+          data: { role: slug, scimAuthId: credentialId },
+          allow: ['role', 'scimAuthId'],
+        },
       },
-    });
+      tx,
+    );
   }
 }
 
 async function auditSessionRevokes(
+  tx: DbTx,
   organisationId: string,
   sessionIds: readonly string[],
 ): Promise<void> {
   for (const sessionId of sessionIds) {
-    await recordAudit({
-      action: 'session.revoked',
-      resourceType: 'session',
-      resourceId: sessionId,
-      result: 'success',
-      reason: 'scim',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'scim',
-    });
+    await recordAudit(
+      {
+        action: 'session.revoked',
+        resourceType: 'session',
+        resourceId: sessionId,
+        result: 'success',
+        reason: 'scim',
+        organisationId,
+        actorUserId: null,
+        actingRole: 'scim',
+      },
+      tx,
+    );
   }
 }
 
@@ -308,24 +319,23 @@ export async function provisionScimUser(
   const nextStatus = input.active === false ? 'suspended' : 'active';
   const desired = mapGroupsToRoles(input, auth.allowOrganisationAdmin);
 
-  let userId = await findUserId(email);
-  if (!userId) {
-    userId = uuidv7();
-    await db.insert(users).values({
-      id: userId,
-      name: displayName(input),
-      email,
-      emailVerified: true,
-    });
-  }
+  const foundUserId = await findUserId(email);
+  const userId = foundUserId ?? uuidv7();
 
-  const [existing] = await db
-    .select({ id: memberships.id, status: memberships.status })
-    .from(memberships)
-    .where(
-      and(eq(memberships.organisationId, organisationId), eq(memberships.userId, userId)),
-    )
-    .limit(1);
+  // A user created here has no membership yet. The insert joins the
+  // provisioning transaction below so it rolls back with the audit.
+  const [existing] = foundUserId
+    ? await db
+        .select({ id: memberships.id, status: memberships.status })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.organisationId, organisationId),
+            eq(memberships.userId, foundUserId),
+          ),
+        )
+        .limit(1)
+    : [];
 
   if (existing?.status === 'revoked') {
     await recordAudit({
@@ -342,6 +352,15 @@ export async function provisionScimUser(
   }
 
   const outcome = await db.transaction(async (tx) => {
+    if (!foundUserId) {
+      await tx.insert(users).values({
+        id: userId,
+        name: displayName(input),
+        email,
+        emailVerified: true,
+      });
+    }
+
     if (
       existing &&
       existing.status === 'active' &&
@@ -378,45 +397,47 @@ export async function provisionScimUser(
     );
     const revokedSessionIds =
       nextStatus === 'suspended' ? await deleteUserSessions(tx, userId) : [];
-    return { membershipId, changes, revokedSessionIds, created: !existing };
-  });
 
-  await auditRoleChanges(
-    organisationId,
-    outcome.membershipId,
-    auth.credentialId,
-    outcome.changes,
-  );
-  await auditSessionRevokes(organisationId, outcome.revokedSessionIds);
-  if (existing && existing.status !== nextStatus) {
-    await recordAudit({
-      action: nextStatus === 'active' ? 'membership.reinstated' : 'membership.suspended',
-      resourceType: 'membership',
-      resourceId: outcome.membershipId,
-      result: 'success',
-      reason: 'scim',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'scim',
-    });
-  }
-  if (outcome.created) {
-    await recordAudit({
-      action: 'membership.invitation_accepted',
-      resourceType: 'membership',
-      resourceId: outcome.membershipId,
-      result: 'success',
-      reason: 'scim.provision',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'scim',
-      after: {
-        // `credential*` keys are denylisted; this is the credential row id.
-        data: { scimAuthId: auth.credentialId, status: nextStatus },
-        allow: ['scimAuthId', 'status'],
-      },
-    });
-  }
+    await auditRoleChanges(tx, organisationId, membershipId, auth.credentialId, changes);
+    await auditSessionRevokes(tx, organisationId, revokedSessionIds);
+    if (existing && existing.status !== nextStatus) {
+      await recordAudit(
+        {
+          action:
+            nextStatus === 'active' ? 'membership.reinstated' : 'membership.suspended',
+          resourceType: 'membership',
+          resourceId: membershipId,
+          result: 'success',
+          reason: 'scim',
+          organisationId,
+          actorUserId: null,
+          actingRole: 'scim',
+        },
+        tx,
+      );
+    }
+    if (!existing) {
+      await recordAudit(
+        {
+          action: 'membership.invitation_accepted',
+          resourceType: 'membership',
+          resourceId: membershipId,
+          result: 'success',
+          reason: 'scim.provision',
+          organisationId,
+          actorUserId: null,
+          actingRole: 'scim',
+          after: {
+            // `credential*` keys are denylisted; this is the credential row id.
+            data: { scimAuthId: auth.credentialId, status: nextStatus },
+            allow: ['scimAuthId', 'status'],
+          },
+        },
+        tx,
+      );
+    }
+    return { membershipId };
+  });
 
   return {
     id: outcome.membershipId,
@@ -463,10 +484,10 @@ export async function setScimUserActive(
       });
       throw new AuthorizationError('POLICY_DENIED');
     }
-    const revokedSessionIds = await db.transaction(async (tx) =>
-      deleteUserSessions(tx, userId),
-    );
-    await auditSessionRevokes(auth.organisationId, revokedSessionIds);
+    await db.transaction(async (tx) => {
+      const revokedSessionIds = await deleteUserSessions(tx, userId);
+      await auditSessionRevokes(tx, auth.organisationId, revokedSessionIds);
+    });
     return;
   }
 
@@ -480,26 +501,29 @@ export async function setScimUserActive(
   const nextStatus = active ? 'active' : 'suspended';
   if (membership.status === nextStatus && active) return;
 
-  const revokedSessionIds = await db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     await tx
       .update(memberships)
       .set({ status: nextStatus })
       .where(eq(memberships.id, membership.id));
-    return active ? [] : deleteUserSessions(tx, userId);
+    const revokedSessionIds = active ? [] : await deleteUserSessions(tx, userId);
+    await auditSessionRevokes(tx, auth.organisationId, revokedSessionIds);
+    if (membership.status !== nextStatus) {
+      await recordAudit(
+        {
+          action: active ? 'membership.reinstated' : 'membership.suspended',
+          resourceType: 'membership',
+          resourceId: membership.id,
+          result: 'success',
+          reason: 'scim',
+          organisationId: auth.organisationId,
+          actorUserId: null,
+          actingRole: 'scim',
+        },
+        tx,
+      );
+    }
   });
-  await auditSessionRevokes(auth.organisationId, revokedSessionIds);
-  if (membership.status !== nextStatus) {
-    await recordAudit({
-      action: active ? 'membership.reinstated' : 'membership.suspended',
-      resourceType: 'membership',
-      resourceId: membership.id,
-      result: 'success',
-      reason: 'scim',
-      organisationId: auth.organisationId,
-      actorUserId: null,
-      actingRole: 'scim',
-    });
-  }
 }
 
 /**
@@ -535,26 +559,29 @@ export async function revokeScimUser(
     if (blocked) throw new AuthorizationError('POLICY_DENIED');
   }
 
-  const revokedSessionIds = await db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     if (membership.status !== 'revoked') {
       await tx
         .update(memberships)
         .set({ status: 'revoked' })
         .where(eq(memberships.id, membership.id));
     }
-    return deleteUserSessions(tx, userId);
+    const revokedSessionIds = await deleteUserSessions(tx, userId);
+    await auditSessionRevokes(tx, auth.organisationId, revokedSessionIds);
+    if (membership.status !== 'revoked') {
+      await recordAudit(
+        {
+          action: 'membership.revoked',
+          resourceType: 'membership',
+          resourceId: membership.id,
+          result: 'success',
+          reason: 'scim',
+          organisationId: auth.organisationId,
+          actorUserId: null,
+          actingRole: 'scim',
+        },
+        tx,
+      );
+    }
   });
-  await auditSessionRevokes(auth.organisationId, revokedSessionIds);
-  if (membership.status !== 'revoked') {
-    await recordAudit({
-      action: 'membership.revoked',
-      resourceType: 'membership',
-      resourceId: membership.id,
-      result: 'success',
-      reason: 'scim',
-      organisationId: auth.organisationId,
-      actorUserId: null,
-      actingRole: 'scim',
-    });
-  }
 }

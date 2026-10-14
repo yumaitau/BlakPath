@@ -275,26 +275,43 @@ export async function generateCertificate(
   });
   const sha256 = createHash('sha256').update(pdf).digest('hex');
 
-  let inserted: CertificateRow[];
   try {
-    inserted = await scope.db
-      .insert(certificates)
-      .values(
-        scope.insertValues({
-          id,
-          applicationId: decision.applicationId,
-          decisionId: decision.id,
-          reference,
-          verificationCode,
-          status: 'draft',
-          pdfObjectKey: key,
-          sha256,
-          holderBindingSalt: holder.salt,
-          holderNameHash: holder.nameHash,
-          holderDobHash: holder.dobHash,
-        }),
-      )
-      .returning();
+    return await scope.db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(certificates)
+        .values(
+          scope.insertValues({
+            id,
+            applicationId: decision.applicationId,
+            decisionId: decision.id,
+            reference,
+            verificationCode,
+            status: 'draft',
+            pdfObjectKey: key,
+            sha256,
+            holderBindingSalt: holder.salt,
+            holderNameHash: holder.nameHash,
+            holderDobHash: holder.dobHash,
+          }),
+        )
+        .returning();
+      const row = must(inserted[0], 'certificate');
+
+      await recordAudit(
+        {
+          action: 'certificate.generated',
+          resourceType: 'certificate',
+          resourceId: id,
+          result: 'success',
+          after: {
+            data: { reference, decisionId: decision.id },
+            allow: ['reference', 'decisionId'],
+          },
+        },
+        tx,
+      );
+      return row;
+    });
   } catch (error) {
     const pg = postgresError(error);
     if (pg.code === '23505' && pg.constraint === 'certificates_live_decision_unique') {
@@ -302,19 +319,6 @@ export async function generateCertificate(
     }
     throw error;
   }
-  const row = must(inserted[0], 'certificate');
-
-  await recordAudit({
-    action: 'certificate.generated',
-    resourceType: 'certificate',
-    resourceId: id,
-    result: 'success',
-    after: {
-      data: { reference, decisionId: decision.id },
-      allow: ['reference', 'decisionId'],
-    },
-  });
-  return row;
 }
 
 /**
@@ -522,49 +526,55 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   // Public half first: no stored seal may reference a key /verify cannot load.
   if (seal.publicKey) await recordSigningKey(seal.publicKey);
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(certificates)
-    .set({
-      status: 'signed',
-      signedByUserId: ctx.userId,
-      signedAt,
-      payloadVersion: '2',
-      payloadHash: seal.payloadHash,
-      signature: seal.signatureB64,
-      signingAlgorithm: seal.algorithm,
-      signingKeyId: seal.keyId,
-      version: nextRowVersion(),
-      holderBindingSalt: binding.salt,
-      holderNameHash: binding.nameHash,
-      holderDobHash: binding.dobHash,
-    })
-    .where(
-      scope.where(
-        certificates.organisationId,
-        eq(certificates.id, id),
-        eq(certificates.status, 'draft'),
-        versionMatches(certificates.version, loaded.versionText),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError(
-      'This certificate was already signed or changed. Refresh and try again.',
-    );
-  }
-  const row = must(updated[0], 'certificate');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(certificates)
+      .set({
+        status: 'signed',
+        signedByUserId: ctx.userId,
+        signedAt,
+        payloadVersion: '2',
+        payloadHash: seal.payloadHash,
+        signature: seal.signatureB64,
+        signingAlgorithm: seal.algorithm,
+        signingKeyId: seal.keyId,
+        version: nextRowVersion(),
+        holderBindingSalt: binding.salt,
+        holderNameHash: binding.nameHash,
+        holderDobHash: binding.dobHash,
+      })
+      .where(
+        scope.where(
+          certificates.organisationId,
+          eq(certificates.id, id),
+          eq(certificates.status, 'draft'),
+          versionMatches(certificates.version, loaded.versionText),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This certificate was already signed or changed. Refresh and try again.',
+      );
+    }
+    const signed = must(updated[0], 'certificate');
 
-  await recordAudit({
-    action: 'certificate.signed',
-    resourceType: 'certificate',
-    resourceId: id,
-    result: 'success',
-    reason: 'certificate.sealed',
-    before: { data: { status: 'draft' }, allow: ['status'] },
-    after: {
-      data: { status: 'signed', algorithm: seal.algorithm },
-      allow: ['status', 'algorithm'],
-    },
+    await recordAudit(
+      {
+        action: 'certificate.signed',
+        resourceType: 'certificate',
+        resourceId: id,
+        result: 'success',
+        reason: 'certificate.sealed',
+        before: { data: { status: 'draft' }, allow: ['status'] },
+        after: {
+          data: { status: 'signed', algorithm: seal.algorithm },
+          allow: ['status', 'algorithm'],
+        },
+      },
+      tx,
+    );
+    return signed;
   });
 
   await emitWebhookEventSafe({
@@ -601,39 +611,44 @@ export async function revokeCertificate(
 
   const scope = currentScope();
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(certificates)
-    .set({
-      status: 'revoked',
-      revokedByUserId: ctx.userId,
-      revokedAt: new Date(),
-      revokedReason: input.reason,
-      version: nextRowVersion(),
-    })
-    .where(
-      scope.where(
-        certificates.organisationId,
-        eq(certificates.id, id),
-        eq(certificates.status, 'signed'),
-        versionMatches(certificates.version, loaded.versionText),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError(
-      'This certificate was already revoked or changed. Refresh and try again.',
-    );
-  }
-  const row = must(updated[0], 'certificate');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(certificates)
+      .set({
+        status: 'revoked',
+        revokedByUserId: ctx.userId,
+        revokedAt: new Date(),
+        revokedReason: input.reason,
+        version: nextRowVersion(),
+      })
+      .where(
+        scope.where(
+          certificates.organisationId,
+          eq(certificates.id, id),
+          eq(certificates.status, 'signed'),
+          versionMatches(certificates.version, loaded.versionText),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This certificate was already revoked or changed. Refresh and try again.',
+      );
+    }
+    const row = must(updated[0], 'certificate');
 
-  await recordAudit({
-    action: 'certificate.revoked',
-    resourceType: 'certificate',
-    resourceId: id,
-    result: 'success',
-    reason: 'certificate.revocation_reason',
+    await recordAudit(
+      {
+        action: 'certificate.revoked',
+        resourceType: 'certificate',
+        resourceId: id,
+        result: 'success',
+        reason: 'certificate.revocation_reason',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Mint a short-lived download URL for a signed, non-revoked certificate. */

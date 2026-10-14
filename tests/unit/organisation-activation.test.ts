@@ -23,7 +23,7 @@ function fakeDb(key: { status: string; validationStatus: string } | null) {
       }),
     }),
   });
-  const database = {
+  const database: Record<string, unknown> = {
     select: () => ({
       from: () => ({
         where: () => ({
@@ -32,6 +32,7 @@ function fakeDb(key: { status: string; validationStatus: string } | null) {
       }),
     }),
     update,
+    transaction: (fn: (tx: unknown) => unknown) => fn(database),
   };
   return { database: database as unknown as Database, update };
 }
@@ -90,6 +91,7 @@ describe('organisation activation', () => {
         reason: 'activated',
         result: 'success',
       }),
+      expect.anything(),
     );
   });
 });
