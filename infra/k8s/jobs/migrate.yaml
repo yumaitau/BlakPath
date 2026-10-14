@@ -20,13 +20,17 @@ spec:
         app.kubernetes.io/name: blakpath-migrate
         blakpath.yumait.au/release: __RELEASE_ID__
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-migrate
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: migrate
           image: __IMAGE__
@@ -46,6 +50,8 @@ spec:
               value: '4000'
             - name: MIGRATION_STATEMENT_TIMEOUT_MS
               value: '600000'
+            - name: HOME
+              value: /tmp
             # Owning role. Must not be the application DATABASE_URL. The
             # runtime secret must not carry this value; web and worker never
             # mount blakpath-migrator.
@@ -54,6 +60,9 @@ spec:
                 secretKeyRef:
                   name: blakpath-migrator
                   key: DATABASE_MIGRATION_URL
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 250m
@@ -63,5 +72,6 @@ spec:
               memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
-              drop: ['ALL']
+              drop: [ALL]

@@ -17,7 +17,7 @@ const docs: BoundaryDocuments = {
   serviceAccounts: read('infra/k8s/serviceaccounts.yaml'),
   kustomization: read('infra/k8s/kustomization.yaml'),
   boundaryTemplate: read('infra/aws/eks-boundary.example.yaml'),
-  workloadTrust: read('infra/aws/blakpath-eks-runtime-trust.example.json'),
+  workloadRoles: read('infra/aws/workload-roles.example.yaml'),
   endpointConfig: read('infra/aws/eks-api-endpoint.example.yaml'),
 };
 
