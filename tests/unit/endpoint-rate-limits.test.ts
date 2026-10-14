@@ -22,6 +22,8 @@ vi.mock('@/domains/forms', () => ({
 
 vi.mock('@/domains/applications', () => ({
   listApplications: vi.fn(async () => ({ items: [], limit: 20, offset: 0 })),
+  // The v1 route validates the query before the key check.
+  listApplicationsSchema: { parse: (value: unknown) => value },
 }));
 
 vi.mock('@/domains/mcp', () => ({
