@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ORG_ID, USER_ID, tenantContext } from './helpers/tenant';
-import { script } from './helpers/scripted-db';
+import { expectAuditedInTransaction, script, trackAudit } from './helpers/scripted-db';
 
-const audit = vi.hoisted(() => ({ recordAudit: vi.fn(async () => undefined) }));
+const audit = vi.hoisted(() => ({
+  recordAudit: vi.fn(async (_input: unknown, _tx?: unknown) => undefined),
+}));
 
 vi.mock('@/db/tenant-db', async () => {
   const { scriptedTenantModule } = await import('./helpers/scripted-db');
@@ -40,6 +42,7 @@ const SUBJECT = '00000000-0000-4000-8000-000000000001';
 beforeEach(() => {
   script.reset();
   audit.recordAudit.mockClear();
+  trackAudit(audit.recordAudit);
   sealing.sealWordingSnapshot.mockClear();
   sealing.openConsentRows.mockClear();
 });
@@ -87,7 +90,9 @@ describe('consent', () => {
     expect(script.writes[0]?.payload).not.toHaveProperty('score');
     expect(audit.recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'consent.recorded', result: 'success' }),
+      expect.anything(),
     );
+    expectAuditedInTransaction('consent.recorded');
     expect(script.wheres).toEqual([]);
   });
 

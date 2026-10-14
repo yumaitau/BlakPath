@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { script } from './helpers/scripted-db';
+import { expectAuditedInTransaction, script, trackAudit } from './helpers/scripted-db';
 
-const audit = vi.hoisted(() => ({ recordAudit: vi.fn(async () => undefined) }));
+const audit = vi.hoisted(() => ({
+  recordAudit: vi.fn(async (_input: unknown, _tx?: unknown) => undefined),
+}));
 
 vi.mock('@/db/client', async () => {
   const { scriptedDatabase } = await import('./helpers/scripted-db');
@@ -18,6 +20,7 @@ const { hashAddress, isSuppressed, recordSuppression } = await import('@/domains
 beforeEach(() => {
   script.reset();
   audit.recordAudit.mockClear();
+  trackAudit(audit.recordAudit);
 });
 
 describe('email suppression', () => {
@@ -68,7 +71,9 @@ describe('email suppression', () => {
         resourceId: 'sup-1',
         organisationId: null,
       }),
+      expect.anything(),
     );
+    expectAuditedInTransaction('email.suppressed');
   });
 
   it('is idempotent when the address is already suppressed', async () => {

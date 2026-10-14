@@ -1,4 +1,7 @@
-import { vi } from 'vitest';
+import { expect, vi } from 'vitest';
+
+/** Transaction handles whose callback is still running. */
+const openTransactions = new Set<unknown>();
 
 /**
  * In-memory stand-in for the Drizzle chains domain services await.
@@ -11,11 +14,20 @@ export const script = {
   ops: [] as string[],
   writes: [] as { op: 'values' | 'set'; payload: unknown }[],
   wheres: [] as unknown[],
+  /** Audit writes seen by `trackAudit`, with the transaction state at call time. */
+  audits: [] as {
+    action: string;
+    result: unknown;
+    tx: unknown;
+    inTransaction: boolean;
+  }[],
   reset() {
     this.results.length = 0;
     this.ops.length = 0;
     this.writes.length = 0;
     this.wheres.length = 0;
+    this.audits.length = 0;
+    openTransactions.clear();
   },
   take() {
     return this.results.shift() ?? [];
@@ -70,11 +82,48 @@ export function scriptedDatabase() {
       script.ops.push('delete');
       return chain();
     },
-    // The transaction handle is the same scripted surface. Throwing inside
-    // the callback rejects, as a rolled-back transaction would.
-    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+    // Each transaction gets its own handle over the same scripted surface, so
+    // a test can tell whether an audit write was handed the open transaction.
+    // Throwing inside the callback rejects, as a rolled-back transaction would.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = { ...db };
+      openTransactions.add(tx);
+      try {
+        return await fn(tx);
+      } finally {
+        openTransactions.delete(tx);
+      }
+    },
   };
   return db;
+}
+
+/**
+ * Make a `recordAudit` spy note whether its `tx` argument was a transaction
+ * that was still open at call time. Call after any `mockReset`.
+ */
+export function trackAudit(spy: {
+  mockImplementation: (
+    fn: (input: unknown, tx?: unknown) => Promise<undefined>,
+  ) => unknown;
+}): void {
+  spy.mockImplementation(async (input: unknown, tx?: unknown) => {
+    const { action, result } = input as { action: string; result: unknown };
+    script.audits.push({
+      action,
+      result,
+      tx,
+      inTransaction: tx !== undefined && openTransactions.has(tx),
+    });
+    return undefined;
+  });
+}
+
+/** Assert `action` was audited through the transaction that made the write. */
+export function expectAuditedInTransaction(action: string): void {
+  const entry = script.audits.find((audit) => audit.action === action);
+  expect(entry, `no audit for ${action}`).toBeDefined();
+  expect(entry?.inTransaction, `${action} audited outside its transaction`).toBe(true);
 }
 
 /** Tenant-scope module shape used by `vi.mock('@/db/tenant-db')`. */

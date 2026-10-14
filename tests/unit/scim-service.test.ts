@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { script } from './helpers/scripted-db';
+import { expectAuditedInTransaction, script, trackAudit } from './helpers/scripted-db';
 
 const ORG = '00000000-0000-4000-8000-0000000000aa';
 const OTHER_ORG = '00000000-0000-4000-8000-0000000000ab';
 const ROLE = '00000000-0000-4000-8000-000000000010';
 
-const audit = vi.hoisted(() => ({ recordAudit: vi.fn(async () => undefined) }));
+const audit = vi.hoisted(() => ({
+  recordAudit: vi.fn(async (_input: unknown, _tx?: unknown) => undefined),
+}));
 
 vi.mock('@/db/client', async () => {
   const { scriptedDatabase } = await import('./helpers/scripted-db');
@@ -35,6 +37,7 @@ function auditActions(): string[] {
 beforeEach(() => {
   script.reset();
   audit.recordAudit.mockClear();
+  trackAudit(audit.recordAudit);
 });
 
 describe('SCIM bearer', () => {
@@ -76,9 +79,8 @@ describe('SCIM provisioning', () => {
 
   it('creates a suspended membership and ignores groups outside the role allowlist', async () => {
     script.results.push(
-      [], // user lookup
-      [], // user insert
-      [], // membership lookup
+      [], // user lookup (a new user has no membership to look up)
+      [], // user insert, inside the provisioning transaction
       [], // membership insert
       [{ id: ROLE, slug: 'intake-officer' }], // tenant roles
       [], // current SCIM-managed roles
@@ -110,7 +112,6 @@ describe('SCIM provisioning', () => {
     expect(script.ops).toEqual([
       'select',
       'insert',
-      'select',
       'insert',
       'select',
       'select',
@@ -124,7 +125,11 @@ describe('SCIM provisioning', () => {
     ]);
     expect(audit.recordAudit).toHaveBeenLastCalledWith(
       expect.objectContaining({ reason: 'scim.provision', organisationId: ORG }),
+      expect.anything(),
     );
+    // The user, membership, roles and every audit row commit or roll back together.
+    expect(script.audits.every((entry) => entry.inTransaction)).toBe(true);
+    expect(new Set(script.audits.map((entry) => entry.tx)).size).toBe(1);
   });
 
   it('maps an allowlisted group onto an existing tenant role and no other role', async () => {
@@ -154,6 +159,7 @@ describe('SCIM provisioning', () => {
     // Active stays active: no sessions are ended and no status change is audited.
     expect(script.ops).not.toContain('delete');
     expect(auditActions()).toEqual(['membership.role_assigned']);
+    expectAuditedInTransaction('membership.role_assigned');
   });
 
   it('never reactivates a revoked membership', async () => {
@@ -188,6 +194,8 @@ describe('SCIM provisioning', () => {
     expect(script.writes.at(-1)?.payload).toMatchObject({ status: 'active' });
     expect(audit.recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'membership.reinstated', reason: 'scim' }),
+      expect.anything(),
     );
+    expectAuditedInTransaction('membership.reinstated');
   });
 });

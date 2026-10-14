@@ -48,15 +48,15 @@ export default defineConfig({
       // Floors, not targets. Raise them when a change lifts coverage; do not
       // lower them to make a shrinking suite pass.
       //
-      // Measured with RUN_INTEGRATION=true, as CI runs it: lines 59.6% overall,
-      // auth 72.8%, tenancy 88.3%, permissions 97.0%. Each floor sits just
+      // Measured with RUN_INTEGRATION=true, as CI runs it: lines 59.4% overall,
+      // auth 72.8%, tenancy 90.5%, permissions 97.0%. Each floor sits just
       // under that. Without the integration suite the global figure is far
       // lower, so run coverage against a database. 60% overall and 85% for
       // auth stay the targets; the auth gap is the step-up and SSO plugins.
       thresholds: {
         lines: 59,
         'src/lib/auth/**': { lines: 72 },
-        'src/lib/tenancy/**': { lines: 88 },
+        'src/lib/tenancy/**': { lines: 90 },
         'src/lib/permissions/**': { lines: 96 },
       },
     },

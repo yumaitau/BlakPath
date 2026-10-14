@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ORG_ID, tenantContext } from './helpers/tenant';
-import { script } from './helpers/scripted-db';
+import { expectAuditedInTransaction, script, trackAudit } from './helpers/scripted-db';
 
-const audit = vi.hoisted(() => ({ recordAudit: vi.fn(async () => undefined) }));
+const audit = vi.hoisted(() => ({
+  recordAudit: vi.fn(async (_input: unknown, _tx?: unknown) => undefined),
+}));
 
 vi.mock('@/db/tenant-db', async () => {
   const { scriptedTenantModule } = await import('./helpers/scripted-db');
@@ -45,6 +47,7 @@ function asAdmin<T>(fn: () => Promise<T>): Promise<T> {
 beforeEach(() => {
   script.reset();
   audit.recordAudit.mockClear();
+  trackAudit(audit.recordAudit);
 });
 
 describe('SSO bindings', () => {
@@ -67,7 +70,9 @@ describe('SSO bindings', () => {
     });
     expect(audit.recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'admin.settings_updated', result: 'success' }),
+      expect.anything(),
     );
+    expectAuditedInTransaction('admin.settings_updated');
   });
 
   it('rejects an issuer that is not a URL', async () => {

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ORG_ID, tenantContext } from './helpers/tenant';
-import { script } from './helpers/scripted-db';
+import { expectAuditedInTransaction, script, trackAudit } from './helpers/scripted-db';
 
-const audit = vi.hoisted(() => ({ recordAudit: vi.fn(async () => undefined) }));
+const audit = vi.hoisted(() => ({
+  recordAudit: vi.fn(async (_input: unknown, _tx?: unknown) => undefined),
+}));
 
 vi.mock('@/db/tenant-db', async () => {
   const { scriptedTenantModule } = await import('./helpers/scripted-db');
@@ -41,6 +43,7 @@ function asIntake<T>(fn: () => Promise<T>): Promise<T> {
 beforeEach(() => {
   script.reset();
   audit.recordAudit.mockClear();
+  trackAudit(audit.recordAudit);
 });
 
 describe('representative access', () => {
@@ -112,7 +115,9 @@ describe('representative access', () => {
         resourceId: AUTH_ID,
         result: 'success',
       }),
+      expect.anything(),
     );
+    expectAuditedInTransaction('representative.requested');
   });
 
   it('activates only a pending row that still has live consent', async () => {
@@ -190,6 +195,8 @@ describe('representative access', () => {
     expect(script.writes.at(-1)?.payload).toMatchObject({ status: 'revoked' });
     expect(audit.recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'representative.revoked', result: 'success' }),
+      expect.anything(),
     );
+    expectAuditedInTransaction('representative.revoked');
   });
 });
