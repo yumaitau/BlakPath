@@ -6,6 +6,7 @@ import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { readConflictMessage } from '@/lib/http/conflict-message';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import { withStepUp } from '@/lib/auth/step-up-flow';
 import { cn } from '@/lib/utils';
 
@@ -34,12 +35,15 @@ export interface PanelCertificate {
   status: string;
   decisionId: string;
   revokedReason: string | null;
+  /** Reference of the replacement, when this certificate was re-issued. */
+  supersededByReference: string | null;
 }
 
 const STATUS_CLASS: Record<string, string> = {
   draft: 'bg-muted text-muted-foreground',
   signed: 'bg-status-success-surface text-foreground',
   revoked: 'bg-status-destructive-surface text-destructive',
+  superseded: 'bg-muted text-muted-foreground',
 };
 
 export function CertificatePanel({
@@ -52,15 +56,20 @@ export function CertificatePanel({
 }) {
   const router = useRouter();
   const stepUp = useStepUp();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const certByDecision = new Map(certificates.map((c) => [c.decisionId, c]));
+  const liveDecisionIds = new Set(
+    certificates
+      .filter((c) => c.status === 'draft' || c.status === 'signed')
+      .map((c) => c.decisionId),
+  );
   const eligibleWithoutCert = decisions.filter(
     (d) =>
       d.status === 'finalised' &&
       d.finalOutcome === 'confirmed' &&
-      !certByDecision.has(d.id),
+      !liveDecisionIds.has(d.id),
   );
 
   async function run(key: string, fn: () => Promise<Response>) {
@@ -109,6 +118,16 @@ export function CertificatePanel({
       }),
     );
 
+  const reissue = (id: string) => {
+    const ok = window.confirm(
+      'Re-issue revokes this certificate now. Verification will show it as superseded. A new draft is created for you to preview and sign.',
+    );
+    if (!ok) return Promise.resolve();
+    return run(`reissue:${id}`, () =>
+      fetch(`/api/certificates/${id}/reissue`, { method: 'POST' }),
+    );
+  };
+
   const revoke = (id: string) => {
     const reason = window.prompt('Reason for revoking this certificate?');
     if (!reason) return Promise.resolve();
@@ -125,6 +144,16 @@ export function CertificatePanel({
     <section aria-label="Certificates" className="flex flex-col gap-4">
       <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <h2 className="text-lg font-semibold tracking-tight">Certificates</h2>
+      <p className="text-muted-foreground text-sm">
+        Drafts use the organisation&apos;s published wording, logo and signatory.{' '}
+        <a
+          className="font-semibold underline-offset-4 hover:underline"
+          href="/settings/certificate"
+        >
+          Edit the certificate template
+        </a>
+        .
+      </p>
       {error ? <Alert tone="destructive">{error}</Alert> : null}
 
       {eligibleWithoutCert.length > 0 ? (
@@ -150,57 +179,78 @@ export function CertificatePanel({
         <p className="text-muted-foreground text-sm">No certificates yet.</p>
       ) : (
         <ul className="flex flex-col gap-3">
-          {certificates.map((c) => (
-            <li
-              key={c.id}
-              className="border-border flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
-            >
-              <div className="flex flex-col">
-                <span className="font-medium">{c.reference}</span>
-                <span
-                  className={cn(
-                    'mt-1 inline-flex w-fit rounded px-2 py-0.5 text-xs',
-                    STATUS_CLASS[c.status] ?? 'bg-muted text-muted-foreground',
-                  )}
-                >
-                  {c.status}
-                </span>
-                {c.revokedReason ? (
-                  <span className="text-muted-foreground mt-1 text-xs">
-                    Revoked: {c.revokedReason}
-                  </span>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                {c.status === 'draft' ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={busy !== null}
-                    onClick={() => void sign(c.id)}
+          {certificates.map((c) => {
+            const displayStatus = c.supersededByReference ? 'superseded' : c.status;
+            return (
+              <li
+                key={c.id}
+                className="border-border flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
+              >
+                <div className="flex flex-col">
+                  <span className="font-medium">{c.reference}</span>
+                  <span
+                    className={cn(
+                      'mt-1 inline-flex w-fit rounded px-2 py-0.5 text-xs',
+                      STATUS_CLASS[displayStatus] ?? 'bg-muted text-muted-foreground',
+                    )}
                   >
-                    {busy === `sign:${c.id}` ? 'Signing…' : 'Sign'}
-                  </Button>
-                ) : null}
-                {c.status === 'signed' ? (
-                  <>
-                    <Button asChild variant="outline" size="sm">
-                      <a href={`/api/certificates/${c.id}/download`}>Download</a>
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      disabled={busy !== null}
-                      onClick={() => void revoke(c.id)}
-                    >
-                      {busy === `revoke:${c.id}` ? 'Revoking…' : 'Revoke'}
-                    </Button>
-                  </>
-                ) : null}
-              </div>
-            </li>
-          ))}
+                    {displayStatus}
+                  </span>
+                  {c.supersededByReference ? (
+                    <span className="text-muted-foreground mt-1 text-xs">
+                      Superseded by {c.supersededByReference}
+                    </span>
+                  ) : c.revokedReason ? (
+                    <span className="text-muted-foreground mt-1 text-xs">
+                      Revoked: {c.revokedReason}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  {c.status === 'draft' ? (
+                    <>
+                      <Button asChild variant="outline" size="sm">
+                        <a href={`/api/certificates/${c.id}/preview`}>Preview</a>
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => void sign(c.id)}
+                      >
+                        {busy === `sign:${c.id}` ? 'Signing…' : 'Sign'}
+                      </Button>
+                    </>
+                  ) : null}
+                  {c.status === 'signed' ? (
+                    <>
+                      <Button asChild variant="outline" size="sm">
+                        <a href={`/api/certificates/${c.id}/download`}>Download</a>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!hydrated || busy !== null}
+                        onClick={() => void reissue(c.id)}
+                      >
+                        {busy === `reissue:${c.id}` ? 'Re-issuing…' : 'Re-issue'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => void revoke(c.id)}
+                      >
+                        {busy === `revoke:${c.id}` ? 'Revoking…' : 'Revoke'}
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

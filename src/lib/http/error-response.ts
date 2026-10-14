@@ -106,6 +106,17 @@ const BY_NAME: Record<string, { status: number; code: string; error: string }> =
     code: 'CERTIFICATE_ALREADY_LIVE',
     error: 'A live certificate already exists for this decision',
   },
+  CertificateTemplateRequiredError: {
+    status: 409,
+    code: 'CERTIFICATE_TEMPLATE_REQUIRED',
+    error: 'Publish a certificate template before generating a certificate.',
+  },
+  // Logo type or size check. One fixed phrase covers both cases.
+  CertificateTemplateInputError: {
+    status: 400,
+    code: 'CERTIFICATE_TEMPLATE_INPUT',
+    error: 'Logo must be a PNG or JPEG under 512 KB.',
+  },
   FormTokenError: {
     status: 404,
     code: 'FORM_TOKEN_INVALID',

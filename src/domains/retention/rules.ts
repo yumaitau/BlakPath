@@ -73,6 +73,7 @@ export const RETENTION_RESOURCE_TYPES = [
   'vote',
   'decision',
   'certificate',
+  'certificate_template',
   'export',
   'import',
   'break_glass_request',

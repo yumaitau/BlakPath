@@ -23,7 +23,9 @@ export const GET = tenantHandler(async function GET(): Promise<Response> {
 export const POST = tenantHandler(async function POST(
   request: NextRequest,
 ): Promise<Response> {
-  const { userId } = await requirePlatformOperator(STEP_UP_ROUTES['POST /api/break-glass']);
+  const { userId } = await requirePlatformOperator(
+    STEP_UP_ROUTES['POST /api/break-glass'],
+  );
   const body: unknown = await request.json();
   const row = await requestBreakGlass({
     requestedByUserId: userId,

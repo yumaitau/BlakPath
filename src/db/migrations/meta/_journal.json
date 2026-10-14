@@ -302,6 +302,20 @@
       "when": 1792013522530,
       "tag": "0042_organisation_agreement",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1792018425496,
+      "tag": "0043_certificate_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1792021431790,
+      "tag": "0044_break_glass_review",
+      "breakpoints": true
     }
   ]
 }

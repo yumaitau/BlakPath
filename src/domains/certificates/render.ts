@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import * as fontkitNamespace from '@pdf-lib/fontkit';
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
 import { toBuffer as qrPng } from 'qrcode';
+import { formatAbn } from './template';
 
 /**
  * Certificate PDF rendering.
@@ -13,6 +14,11 @@ import { toBuffer as qrPng } from 'qrcode';
  * (WinAnsi cannot encode characters such as ŋ). Every run is wrapped or
  * shrunk inside the margin, and the verify URL is printed on its own line
  * with a QR code.
+ *
+ * The organisation may author the body wording, logo and signatory (a
+ * `certificate_templates` version). The meeting date, resolution date and ABN
+ * are facts already on the organisation or the human decision. The title and
+ * footer stay platform text an organisation cannot remove.
  */
 
 export const CERTIFICATE_PAGE_WIDTH_PT = 595.28;
@@ -40,7 +46,25 @@ export interface CertificateRenderInput {
   verifyUrl: string;
   /** Optional organisation brand colour (hex, e.g. "#7a4a2b") for the heading. */
   brandColor?: string | null;
+  /** Stored ABN. Omitted from the page when absent. */
+  abn?: string | null;
+  /** Organisation-authored body. Platform intro text when absent. */
+  wording?: string | null;
+  /** Organisation-authored signatory. The block is omitted when absent. */
+  signatoryName?: string | null;
+  signatoryRole?: string | null;
+  /** ISO date of the committee meeting, when the decision was tied to one. */
+  meetingOn?: string | null;
+  /** ISO date the authorised human finalised the decision. */
+  resolutionOn?: string | null;
+  /** PNG logo bytes. */
+  logoPng?: Uint8Array | null;
+  /** JPEG logo bytes (used only when no PNG is given). */
+  logoJpeg?: Uint8Array | null;
 }
+
+const LOGO_MAX_HEIGHT = 64;
+const LOGO_MAX_WIDTH = 180;
 
 type Ink = ReturnType<typeof rgb>;
 type FontkitInstance = Parameters<PDFDocument['registerFontkit']>[0];
@@ -182,9 +206,26 @@ function drawLines(
   return cursor;
 }
 
+const LAYOUT_OVERFLOW = 'Certificate layout does not fit on one page.';
+
 /** Render the certificate to PDF bytes. Pure aside from pdf-lib and font IO. */
 export async function renderCertificatePdf(
   input: CertificateRenderInput,
+): Promise<Buffer> {
+  // Long organisation wording steps down in size before the page overflows.
+  for (let wordingSize = 12; ; wordingSize -= 1) {
+    try {
+      return await renderAt(input, wordingSize);
+    } catch (error) {
+      const overflow = error instanceof Error && error.message === LAYOUT_OVERFLOW;
+      if (!overflow || wordingSize <= 8) throw error;
+    }
+  }
+}
+
+async function renderAt(
+  input: CertificateRenderInput,
+  wordingSize: number,
 ): Promise<Buffer> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(loadFontkit());
@@ -216,7 +257,7 @@ export async function renderCertificatePdf(
 
   const guard = (y: number) => {
     if (y < contentFloor) {
-      throw new Error('Certificate layout does not fit on one page.');
+      throw new Error(LAYOUT_OVERFLOW);
     }
   };
 
@@ -234,7 +275,9 @@ export async function renderCertificatePdf(
     });
   };
 
-  const left = (
+  const leftAt = (
+    x: number,
+    maxWidth: number,
     text: string,
     font: PDFFont,
     preferred: number,
@@ -243,27 +286,67 @@ export async function renderCertificatePdf(
     color: Ink,
     mode: 'wrap' | 'shrink-then-wrap',
   ) => {
-    const laid = layoutText(text, font, contentWidth, preferred, min, mode);
-    return drawLines(
-      page,
-      laid.lines,
-      font,
-      laid.size,
-      y,
-      color,
-      () => CERTIFICATE_MARGIN_PT,
-    );
+    const laid = layoutText(text, font, maxWidth, preferred, min, mode);
+    return drawLines(page, laid.lines, font, laid.size, y, color, () => x);
   };
 
+  const left = (
+    text: string,
+    font: PDFFont,
+    preferred: number,
+    min: number,
+    y: number,
+    color: Ink,
+    mode: 'wrap' | 'shrink-then-wrap',
+  ) =>
+    leftAt(
+      CERTIFICATE_MARGIN_PT,
+      contentWidth,
+      text,
+      font,
+      preferred,
+      min,
+      y,
+      color,
+      mode,
+    );
+
   let y = height - CERTIFICATE_MARGIN_PT - 18;
+  const logoBytes = input.logoPng ?? input.logoJpeg ?? null;
+  if (logoBytes) {
+    const image = input.logoPng
+      ? await doc.embedPng(input.logoPng)
+      : await doc.embedJpg(logoBytes);
+    const scale = Math.min(
+      LOGO_MAX_WIDTH / image.width,
+      LOGO_MAX_HEIGHT / image.height,
+      1,
+    );
+    const w = image.width * scale;
+    const h = image.height * scale;
+    page.drawImage(image, { x: (width - w) / 2, y: y - h + 18, width: w, height: h });
+    y -= h + 6;
+  }
   y = centered(input.organisationName, title, 18, 12, y, brand);
   guard(y);
+  const abn = formatAbn(input.abn);
+  if (abn) {
+    y = centered(`ABN ${abn}`, body, 10, 8, y, muted);
+    guard(y);
+  }
   y -= SECTION_GAP;
   y = centered('Confirmation of Aboriginality', title, 24, 16, y, ink);
   guard(y);
   y -= SECTION_GAP;
-  y = left(INTRO, body, 12, 9, y, muted, 'wrap');
-  guard(y);
+  const wording = input.wording?.trim() ? input.wording : INTRO;
+  for (const paragraph of wording.split('\n')) {
+    if (!paragraph.trim()) {
+      y -= LINE_GAP * 2;
+      continue;
+    }
+    y = left(paragraph, body, wordingSize, Math.min(9, wordingSize), y, muted, 'wrap');
+    guard(y);
+  }
   y -= SECTION_GAP;
   y = centered(input.applicantName, title, 20, 11, y, ink);
   guard(y);
@@ -272,8 +355,10 @@ export async function renderCertificatePdf(
   const fields: Array<[string, string]> = [
     ['Certificate reference', input.reference],
     ['Issued on', input.issuedOn],
-    ['Verification code', input.verificationCode],
   ];
+  if (input.meetingOn) fields.push(['Meeting date', input.meetingOn]);
+  if (input.resolutionOn) fields.push(['Resolution date', input.resolutionOn]);
+  fields.push(['Verification code', input.verificationCode]);
   for (const [label, value] of fields) {
     const labelMax = VALUE_X - CERTIFICATE_MARGIN_PT - 12;
     const valueMax = width - CERTIFICATE_MARGIN_PT - VALUE_X;
@@ -314,6 +399,19 @@ export async function renderCertificatePdf(
     width: QR_SIZE,
     height: QR_SIZE,
   });
+
+  // Organisation-authored signatory sits beside the QR code.
+  if (input.signatoryName?.trim()) {
+    const x = CERTIFICATE_MARGIN_PT + QR_SIZE + 24;
+    const maxWidth = width - CERTIFICATE_MARGIN_PT - x;
+    let sy = y - 8 - 12;
+    sy = leftAt(x, maxWidth, 'Authorised signatory', body, 10, 8, sy, muted, 'wrap');
+    sy = leftAt(x, maxWidth, input.signatoryName, title, 12, 8, sy, ink, 'wrap');
+    if (input.signatoryRole?.trim()) {
+      sy = leftAt(x, maxWidth, input.signatoryRole, body, 11, 8, sy, ink, 'wrap');
+    }
+    guard(sy);
+  }
 
   let footerY = footerTop;
   for (const line of footer.lines) {

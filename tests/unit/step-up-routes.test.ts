@@ -10,6 +10,7 @@ vi.mock('@/lib/auth/session', async () => {
 
 import { StepUpRequiredError } from '@/lib/auth/session';
 import { POST as revokeCertificate } from '@/app/api/certificates/[id]/revoke/route';
+import { POST as reissueCertificate } from '@/app/api/certificates/[id]/reissue/route';
 import { GET as downloadEvidence } from '@/app/api/evidence/[id]/download/route';
 import { GET as readMeetingPack } from '@/app/api/meetings/[id]/pack/route';
 import { POST as denyBreakGlass } from '@/app/api/break-glass/[id]/deny/route';
@@ -66,6 +67,11 @@ describe('listed routes require a fresh session', () => {
     await expectStale(
       revokeCertificate(post() as never, params),
       STEP_UP_ROUTES['POST /api/certificates/[id]/revoke'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      reissueCertificate(post(), params),
+      STEP_UP_ROUTES['POST /api/certificates/[id]/reissue'],
     );
     requireRecentAuth.mockClear();
     await expectStale(

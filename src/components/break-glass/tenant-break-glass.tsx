@@ -206,7 +206,11 @@ export function TenantBreakGlass({
                     <Button
                       type="button"
                       variant="destructive"
-                      disabled={!hydrated || busyId === item.id || !(denyReason[item.id] ?? '').trim()}
+                      disabled={
+                        !hydrated ||
+                        busyId === item.id ||
+                        !(denyReason[item.id] ?? '').trim()
+                      }
                       onClick={() =>
                         void run(item.id, () =>
                           postJson(`/api/break-glass/${item.id}/deny`, reauthenticate, {

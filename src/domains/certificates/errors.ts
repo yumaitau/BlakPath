@@ -12,3 +12,27 @@ export class CertificateConflictError extends Error {
     this.name = 'CertificateConflictError';
   }
 }
+
+/**
+ * Generate or re-issue was asked before the organisation published a template.
+ * Mapped by name in `src/lib/http/error-response.ts`; carries no applicant detail.
+ */
+export class CertificateTemplateRequiredError extends Error {
+  readonly code = 'CERTIFICATE_TEMPLATE_REQUIRED';
+  constructor() {
+    super('Publish a certificate template before generating a certificate.');
+    this.name = 'CertificateTemplateRequiredError';
+  }
+}
+
+/**
+ * Logo bytes failed the type or size check. The route returns a fixed phrase
+ * (see `error-response.ts`), never this message.
+ */
+export class CertificateTemplateInputError extends Error {
+  readonly code = 'CERTIFICATE_TEMPLATE_INPUT';
+  constructor(message: string) {
+    super(message);
+    this.name = 'CertificateTemplateInputError';
+  }
+}

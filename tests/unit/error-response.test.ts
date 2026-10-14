@@ -22,7 +22,11 @@ import {
   ConcurrencyConflictError,
 } from '@/lib/concurrency/error';
 import { TenantKeyUnavailableError } from '@/lib/encryption/errors';
-import { CertificateConflictError } from '@/domains/certificates/errors';
+import {
+  CertificateConflictError,
+  CertificateTemplateInputError,
+  CertificateTemplateRequiredError,
+} from '@/domains/certificates/errors';
 import { DecisionWorkflowError } from '@/domains/decisions/errors';
 import {
   OrganisationActivationError,
@@ -164,6 +168,16 @@ describe('errorResponse', () => {
         new CertificateConflictError(),
         409,
         'A live certificate already exists for this decision',
+      ],
+      [
+        new CertificateTemplateRequiredError(),
+        409,
+        'Publish a certificate template before generating a certificate.',
+      ],
+      [
+        new CertificateTemplateInputError('Logo must be a PNG or JPEG.'),
+        400,
+        'Logo must be a PNG or JPEG under 512 KB.',
       ],
       [new OrganisationUnavailableError(), 403, 'Forbidden'],
       [new ConcurrencyConflictError(), 409, CONCURRENCY_CONFLICT_MESSAGE],
