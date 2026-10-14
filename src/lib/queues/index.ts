@@ -117,7 +117,9 @@ export async function addJob<T extends TenantJob>(
   // `ExtractNameType` for the job name resolves to `string` rather than an
   // unresolved conditional over the generic parameter.
   const queue = getQueue(name);
-  const job = await queue.add(jobName, safe, options);
+  // BullMQ refuses custom ids containing `:` (it reserves them for repeat jobs).
+  const jobId = options.jobId?.replaceAll(':', '-');
+  const job = await queue.add(jobName, safe, jobId ? { ...options, jobId } : options);
   logger.debug(
     {
       queue: name,

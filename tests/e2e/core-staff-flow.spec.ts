@@ -126,9 +126,12 @@ test('staff can select a tenant, validate input, and start and find an applicati
     page.getByRole('heading', { name: 'Applications', exact: true }),
   ).toBeVisible();
 
+  // Search is a server-side blind-index lookup submitted with the form.
   await page.getByLabel('Search applications').fill('definitely-no-match');
+  await page.getByLabel('Search applications').press('Enter');
+  await expect(page).toHaveURL(/\/applications\?q=definitely-no-match$/);
   await expect(page.getByText('No applications match this search.')).toBeVisible();
-  await page.getByLabel('Search applications').clear();
+  await page.goto('/applications');
 
   const applicantName = `E2E case record ${Date.now()}`;
   await page.getByLabel('Name as provided').fill(applicantName);
@@ -141,6 +144,7 @@ test('staff can select a tenant, validate input, and start and find an applicati
 
   await page.getByRole('link', { name: 'Applications' }).first().click();
   await page.getByLabel('Search applications').fill(applicantName);
+  await page.getByLabel('Search applications').press('Enter');
   const applicationLink = page.getByRole('link', { name: new RegExp(applicantName) });
   await expect(applicationLink).toContainText('High priority');
   await expectNoSeriousAccessibilityViolations(page);
