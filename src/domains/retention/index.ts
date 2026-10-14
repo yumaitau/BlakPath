@@ -7,11 +7,17 @@
  *   - `sweep`   — the worker-side purge/anonymise pass (fail-safe, audited).
  */
 export {
+  ANONYMISED_PLACEHOLDER,
+  HARD_DELETE_GRACE_DAYS,
+  MIN_RETENTION_DAYS,
   RETENTION_ACTIONS,
   RETENTION_RESOURCE_TYPES,
   dueForRetention,
+  hasDisposalAuthority,
   isExpired,
+  isOfficialApplicationStatus,
   isRetentionResourceType,
+  officialRecordBlocksDisposal,
   retentionCutoff,
   type RetentionAction,
   type RetentionResourceType,
@@ -30,10 +36,17 @@ export {
   listHolds,
   listPolicies,
   placeHold,
+  previewRetention,
   queueRetentionSweep,
   releaseHold,
+  RetentionTargetError,
   type LegalHoldRow,
   type RetentionPolicyRow,
 } from './service';
 
-export { processRetentionSweep, type SweepInput } from './sweep';
+export {
+  previewRetentionSweep,
+  processRetentionSweep,
+  type RetentionPreviewItem,
+  type SweepInput,
+} from './sweep';

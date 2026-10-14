@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import tls from 'node:tls';
 import { afterAll, describe, expect, it } from 'vitest';
 import postgres from 'postgres';
+import { DEFAULT_LOCK_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS } from '@/db/migrator';
 import {
   databaseSslMode,
   MIGRATION_TIMEOUTS,
@@ -134,6 +135,12 @@ describe('postgres connection options', () => {
     });
     expect(migration.max).toBe(1);
     expect(migration.connection).toMatchObject(MIGRATION_TIMEOUTS);
+    expect(MIGRATION_TIMEOUTS.lock_timeout).toBe(DEFAULT_LOCK_TIMEOUT_MS);
+    expect(MIGRATION_TIMEOUTS.statement_timeout).toBe(DEFAULT_STATEMENT_TIMEOUT_MS);
+    // The release migrate Job builds its client from the shared verified options.
+    expect(
+      readFileSync(join(import.meta.dirname, '../../src/db/migrate.ts'), 'utf8'),
+    ).toMatch(/postgresClientOptions\(\{\s*role: 'migrate'/);
     expect(postgresSsl('postgres://app:secret@localhost/blakpath')).toBe(false);
   });
 

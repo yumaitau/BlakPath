@@ -57,6 +57,11 @@ export const STAFF_TOOL_LINKS = [
     label: 'Retention',
     anyOf: ['retention:manage'],
   },
+  {
+    href: '/audit',
+    label: 'Audit trail',
+    anyOf: ['audit:view'],
+  },
 ] as const satisfies readonly StaffToolLink[];
 
 export function visibleStaffTools(

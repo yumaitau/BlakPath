@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import type { Options } from 'postgres';
+import { DEFAULT_LOCK_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS } from './migrator';
 
 /**
  * Public Amazon RDS global CA bundle, baked into the web and worker images.
@@ -17,7 +18,8 @@ export const RDS_CA_BUNDLE_PATH = join(process.cwd(), 'certs', 'rds-global-bundl
  * set_config) pins the session for the rest of its life, which defeats
  * multiplexing. Startup parameters do not. Web and worker share one set so
  * proxy backends stay interchangeable. SHOW from an app connection is non-zero.
- * Migrations get a longer statement cap so a single DDL statement can finish.
+ * Migrations use the migrator's defaults (src/db/migrator.ts): a short lock
+ * wait and a long statement cap so a single DDL statement can finish.
  */
 export const SESSION_TIMEOUTS = {
   statement_timeout: 60_000,
@@ -26,8 +28,8 @@ export const SESSION_TIMEOUTS = {
 } as const;
 
 export const MIGRATION_TIMEOUTS = {
-  statement_timeout: 600_000,
-  lock_timeout: 30_000,
+  statement_timeout: DEFAULT_STATEMENT_TIMEOUT_MS,
+  lock_timeout: DEFAULT_LOCK_TIMEOUT_MS,
   idle_in_transaction_session_timeout: 120_000,
 } as const;
 

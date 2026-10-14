@@ -10,10 +10,13 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
     '/api/memberships',
     '/api/membership-invitations',
     '/api/reports/exports',
+    '/api/audit/events',
+    '/api/audit/events/export',
     '/api/keys',
     '/api/webhooks',
     '/api/retention/holds',
     '/api/retention/policies',
+    '/api/retention/preview',
   ];
 
   for (const path of protectedGets) {
