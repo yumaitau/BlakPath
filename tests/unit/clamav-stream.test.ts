@@ -129,14 +129,20 @@ describe('scanStream (clamd INSTREAM)', () => {
       n >= 1024 * 1024 ? 'INSTREAM size limit exceeded. ERROR' : null,
     );
     let produced = 0;
-    await expect(
-      scanStream(
-        lazyBytes(MAX_EVIDENCE_BYTES, (n) => {
-          produced = n;
-        }),
-        { host: '127.0.0.1', port: clamd.port },
-      ),
-    ).rejects.toBeInstanceOf(ClamAvProtocolError);
+    const outcome = await scanStream(
+      lazyBytes(MAX_EVIDENCE_BYTES, (n) => {
+        produced = n;
+      }),
+      { host: '127.0.0.1', port: clamd.port },
+    ).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    // clamd closes after rejecting, so the reply can race our next write and
+    // surface as a reset. Either way the scan fails secure without a verdict.
+    expect(
+      outcome instanceof ClamAvProtocolError || outcome instanceof ClamAvUnavailableError,
+    ).toBe(true);
     expect(produced).toBeLessThan(MAX_EVIDENCE_BYTES);
   });
 
