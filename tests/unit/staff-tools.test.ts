@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONSENT_READ_PERMISSIONS } from '@/domains/consent/permissions';
 import { parseApplicationImportLines } from '@/domains/imports/parse-lines';
-import { REPRESENTATIVE_ACCESS_PERMISSIONS } from '@/domains/representatives/permissions';
+import { REPRESENTATIVE_LIST_PERMISSIONS } from '@/domains/representatives/permissions';
 import { STAFF_TOOL_LINKS, visibleStaffTools } from '@/lib/navigation/staff-tools';
 import { permissionsForRole } from '@/lib/permissions/roles';
 
@@ -30,6 +30,7 @@ describe('staff tool navigation', () => {
     );
     expect(intake).not.toContain('Webhooks');
 
+    expect(labelsFor('applicant')).not.toContain('Representatives');
     expect(labelsFor('platform-operator')).toEqual([]);
     expect(visibleStaffTools(new Set())).toEqual([]);
   });
@@ -40,7 +41,7 @@ describe('staff tool navigation', () => {
       (link) => link.href === '/representatives',
     );
     expect(consents?.anyOf).toEqual(CONSENT_READ_PERMISSIONS);
-    expect(representatives?.anyOf).toEqual(REPRESENTATIVE_ACCESS_PERMISSIONS);
+    expect(representatives?.anyOf).toEqual(REPRESENTATIVE_LIST_PERMISSIONS);
   });
 });
 

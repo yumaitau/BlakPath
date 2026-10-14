@@ -88,19 +88,16 @@ const serverSchema = z
     CLAMAV_HOST: z.string().default('localhost'),
     CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
 
-    // Email (SMTP; Mailpit locally)
+    // Email. Exactly one production sender: the SES v2 API under the workload
+    // role (`EMAIL_TRANSPORT=ses`), tagged with a configuration set whose
+    // bounce/complaint events reach POST /api/email/events via SNS. `smtp`
+    // is the local/CI catch-all (Mailpit) and is unauthenticated by design:
+    // there is no static mail credential path. See docs/adr/0090.
+    EMAIL_TRANSPORT: z.enum(['smtp', 'ses']).default('smtp'),
+    SES_CONFIGURATION_SET: z.string().min(1).max(64).optional(),
     SMTP_HOST: z.string().default('localhost'),
     SMTP_PORT: z.coerce.number().int().positive().default(1025),
-    SMTP_USER: z.string().optional(),
-    SMTP_PASSWORD: z.string().optional(),
     SMTP_FROM: z.string().default('BlakPath <no-reply@blakpath.local>'),
-    // PaperBoy transactional email (https://paperboy.yumait.au).
-    // Placeholder wiring: the sender posts JSON to
-    // `{PAPERBOY_URL}/api/v1/emails` with `Authorization: Bearer
-    // <PAPERBOY_API_KEY>`. Unset locally; required in production where
-    // PaperBoy replaces direct SES SMTP.
-    PAPERBOY_URL: z.string().url().optional(),
-    PAPERBOY_API_KEY: z.string().min(1).optional(),
     // Shared secret for POST /api/email/events. Header
     // `x-email-webhook-secret` only. Unset locally; required in production.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),

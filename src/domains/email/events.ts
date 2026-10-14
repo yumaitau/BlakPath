@@ -3,12 +3,18 @@ import { z } from 'zod';
 /**
  * SES notifications that may suppress an address.
  *
+ * Two SES shapes reach POST /api/email/events:
+ *   - configuration-set event publishing (the production path): `eventType`;
+ *   - identity feedback notifications (legacy): `notificationType`.
+ * Both are normalised to `notificationType`.
+ *
  * Only a permanent bounce or a complaint. Transient and undetermined bounces
  * are ignored so a temporary delivery failure does not block later mail.
  */
 
 const sesMessageSchema = z.object({
-  notificationType: z.string(),
+  eventType: z.string().optional(),
+  notificationType: z.string().optional(),
   mail: z.object({ messageId: z.string().optional() }).optional(),
   bounce: z
     .object({
@@ -23,12 +29,18 @@ const sesMessageSchema = z.object({
     .optional(),
 });
 
-export type SesEvent = z.infer<typeof sesMessageSchema>;
+export type SesEvent = Omit<
+  z.infer<typeof sesMessageSchema>,
+  'eventType' | 'notificationType'
+> & { notificationType: string };
 
 export function parseSesEvent(raw: string): SesEvent | null {
   try {
     const parsed = sesMessageSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) return null;
+    const { eventType, notificationType, ...rest } = parsed.data;
+    const type = eventType ?? notificationType;
+    return type ? { ...rest, notificationType: type } : null;
   } catch {
     return null;
   }

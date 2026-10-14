@@ -1,5 +1,5 @@
 import { CONSENT_READ_PERMISSIONS } from '@/domains/consent/permissions';
-import { REPRESENTATIVE_ACCESS_PERMISSIONS } from '@/domains/representatives/permissions';
+import { REPRESENTATIVE_LIST_PERMISSIONS } from '@/domains/representatives/permissions';
 import type { Permission } from '@/lib/permissions/catalog';
 
 /**
@@ -35,7 +35,7 @@ export const STAFF_TOOL_LINKS = [
   {
     href: '/representatives',
     label: 'Representatives',
-    anyOf: REPRESENTATIVE_ACCESS_PERMISSIONS,
+    anyOf: REPRESENTATIVE_LIST_PERMISSIONS,
   },
   {
     href: '/settings/api-keys',

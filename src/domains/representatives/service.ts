@@ -6,7 +6,10 @@ import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
-import { REPRESENTATIVE_ACCESS_PERMISSIONS } from './permissions';
+import {
+  REPRESENTATIVE_ACCESS_PERMISSIONS,
+  REPRESENTATIVE_LIST_PERMISSIONS,
+} from './permissions';
 
 /**
  * Representative access — consent-backed, time-boxed, revocable.
@@ -193,7 +196,7 @@ export async function revokeRepresentativeAccess(id: string): Promise<Representa
 /** List representative authorisations in the active organisation. */
 export async function listRepresentativeAuthorisations(): Promise<RepresentativeRow[]> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), REPRESENTATIVE_ACCESS_PERMISSIONS);
+  requireAny(subjectFromContext(ctx), REPRESENTATIVE_LIST_PERMISSIONS);
   const scope = currentScope();
   return scope.db
     .select()

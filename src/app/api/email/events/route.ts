@@ -18,6 +18,10 @@ import { parseSesEvent, suppressionTargets } from '@/domains/email/events';
 /**
  * POST /api/email/events — SES bounce/complaint events via SNS.
  *
+ * Production source: the SES configuration set (SES_CONFIGURATION_SET) event
+ * destination → SNS topic → this route. Only permanent bounces and complaints
+ * suppress (see `parseSesEvent`).
+ *
  * Authentication is the SNS message signature (certificate from
  * `sns.<region>.amazonaws.com`) plus an exact `TopicArn` match against
  * `EMAIL_SNS_TOPIC_ARN`. The shared secret is accepted only from the
