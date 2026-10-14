@@ -6,6 +6,9 @@ export const ADMIN_EMAIL = 'admin@blakpath.local';
 export const ADMIN_PASSWORD = 'blakpath-dev-admin-2026';
 export const APPLICANT_EMAIL = 'staff@blakpath.local';
 export const APPLICANT_PASSWORD = 'blakpath-dev-staff-2026';
+/** Seeded applicant-only account. Distinct from the spare staff account above. */
+export const PORTAL_APPLICANT_EMAIL = 'applicant@blakpath.local';
+export const PORTAL_APPLICANT_PASSWORD = 'blakpath-dev-applicant-2026';
 
 let selectedAdminCookies:
   | Awaited<ReturnType<ReturnType<Page['context']>['cookies']>>
@@ -70,6 +73,24 @@ export async function selectDevelopmentOrganisation(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   selectedAdminCookies = await page.context().cookies();
+}
+
+/** Sign in as the seeded applicant. Lands on the portal, never the staff shell. */
+export async function signInAsPortalApplicant(page: Page): Promise<void> {
+  await isolateSignInClient(page);
+  await page.goto('/sign-in');
+  await page.getByLabel('Email').fill(PORTAL_APPLICANT_EMAIL);
+  await page.getByLabel('Password').fill(PORTAL_APPLICANT_PASSWORD);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/(?:select-organisation|portal)/, { timeout: 30_000 });
+  if (/\/select-organisation/.test(page.url())) {
+    await page.getByRole('button', { name: /BlakPath Development Organisation/ }).click();
+  }
+  await expect(page).toHaveURL(/\/portal$/);
+  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toHaveCount(
+    0,
+  );
+  await expect(page.getByRole('navigation', { name: 'Your application' })).toBeVisible();
 }
 
 export async function signInAndSelectOrganisation(page: Page): Promise<void> {

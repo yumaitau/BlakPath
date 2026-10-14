@@ -215,15 +215,18 @@ test('a linked applicant uploads evidence into quarantine without download acces
   await applicantPage.getByLabel('Email').fill(APPLICANT_EMAIL);
   await applicantPage.getByLabel('Password').fill(APPLICANT_PASSWORD);
   await applicantPage.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(applicantPage).toHaveURL(/\/(?:select-organisation|dashboard)$/);
-  if (/\/select-organisation$/.test(applicantPage.url())) {
+  await expect(applicantPage).toHaveURL(/\/(?:select-organisation|portal)/);
+  if (/\/select-organisation/.test(applicantPage.url())) {
     await applicantPage
       .getByRole('button', { name: /BlakPath Development Organisation/ })
       .click();
   }
-  await expect(applicantPage).toHaveURL(/\/dashboard$/);
-  await applicantPage.goto('/applications');
+  await expect(applicantPage).toHaveURL(/\/portal$/);
+  await expect(
+    applicantPage.getByRole('navigation', { name: 'Primary navigation' }),
+  ).toHaveCount(0);
   await applicantPage.getByRole('link', { name: new RegExp(applicantName) }).click();
+  await expect(applicantPage).toHaveURL(/\/portal\/[0-9a-f-]+$/);
 
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -246,10 +249,9 @@ test('a linked applicant uploads evidence into quarantine without download acces
 
   await expect(
     applicantPage.getByText(
-      'Evidence uploaded to quarantine. It cannot be opened until the scan is clean.',
+      'Your file has been sent. It is checked for safety before the organisation can open it.',
     ),
   ).toBeVisible();
-  await expect(applicantPage.getByText('Quarantined', { exact: true })).toBeVisible();
   await expect(applicantPage.getByRole('link', { name: 'Download' })).toHaveCount(0);
 
   const deniedDownload = await applicantPage.request.get(

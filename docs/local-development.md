@@ -83,11 +83,13 @@ reject `UPDATE`, `DELETE` and `TRUNCATE` on `audit_events` and
 `audit_integrity_checkpoints`, including for the table owner. A superuser can
 disable those triggers; the application role must not be able to.
 
-The non-production seed prints two synthetic test accounts. The administrator
+The non-production seed prints synthetic test accounts. The administrator
 combines the operational roles needed to exercise every staff screen locally.
 The spare staff account starts with no organisation membership so the Playwright
-suite can verify role assignment, suspension, restoration and revocation. These
-development-only role combinations are never a production onboarding model.
+suite can verify role assignment, suspension, restoration and revocation. The
+applicant account holds only the applicant role and is used by the portal
+suite. These development-only role combinations are never a production
+onboarding model.
 
 Working on the schema:
 

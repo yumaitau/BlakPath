@@ -16,6 +16,7 @@ import {
   applicationStatusHistory,
   clients,
   membershipRoles,
+  organisations,
   memberships,
   roles,
   teamMemberships,
@@ -32,6 +33,9 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { isPubliclyAcceptingApplications } from '@/domains/organisations/public-applications';
+import { applicantMayActOnCase } from '@/lib/auth/landing';
+import { isApplicantOnlyRoleSet } from '@/lib/permissions/roles';
 import { applicationIntakeAuditMeta } from './audit-meta';
 import { applicationSearchMac } from '@/lib/encryption/blind-index';
 import {
@@ -336,10 +340,35 @@ export async function createApplication(
   const input = createApplicationSchema.parse(rawInput);
   const scope = currentScope();
 
+  const applicantOnly = isApplicantOnlyRoleSet(ctx.roles);
+
+  // Applicant accounts can start a matter only when the organisation has
+  // opened public applications. Staff intake is unchanged when the flag is off.
+  if (applicantOnly) {
+    const [org] = await scope.db
+      .select({
+        status: organisations.status,
+        publicApplicationsOpen: organisations.publicApplicationsOpen,
+      })
+      .from(organisations)
+      .where(eq(organisations.id, scope.organisationId))
+      .limit(1);
+    if (!org || !isPubliclyAcceptingApplications(org)) {
+      await recordAudit({
+        action: 'application.created',
+        resourceType: 'application',
+        result: 'denied',
+        reason: 'application.public_intake_closed',
+      });
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+  }
+
   // Optional client link must belong to this tenant, else the matter could
-  // silently attach to another tenant's person record.
+  // silently attach to another tenant's person record. Applicants cannot
+  // attach a client or name a different person as the applicant.
   let clientId: string | null = null;
-  if (input.clientId) {
+  if (!applicantOnly && input.clientId) {
     const [client] = await scope.db
       .select({ id: clients.id })
       .from(clients)
@@ -378,9 +407,9 @@ export async function createApplication(
           id,
           reference,
           applicantName,
-          applicantUserId: input.applicantUserId ?? null,
+          applicantUserId: applicantOnly ? ctx.userId : (input.applicantUserId ?? null),
           clientId,
-          priority: input.priority,
+          priority: applicantOnly ? 'normal' : input.priority,
           intake: sealed.intake ?? null,
           referenceBidx,
           applicantNameBidx,
@@ -409,7 +438,7 @@ export async function createApplication(
         resourceId: id,
         result: 'success',
         after: {
-          data: { reference, status: 'draft', priority: input.priority },
+          data: { reference, status: 'draft', priority: created.priority },
           allow: ['reference', 'status', 'priority'],
         },
       },
@@ -567,6 +596,13 @@ export async function assignApplication(
   });
 }
 
+/** An applicant-only actor tried to move a matter they are not named on. */
+class ApplicantNotOwnerError extends AuthorizationError {
+  constructor() {
+    super('POLICY_DENIED');
+  }
+}
+
 /**
  * Write a workflow transition on `executor` without auditing.
  *
@@ -589,6 +625,13 @@ export async function applyApplicationTransition(
   const loaded = await loadApplicationClaimOn(executor, id);
   if (!loaded) throw new AuthorizationError('POLICY_DENIED');
   const existing = loaded.row;
+
+  // Applicant-only actors cannot move someone else's matter, even if a
+  // permission key such as application:create would otherwise match. The
+  // caller audits the refusal after the transaction rolls back.
+  if (!applicantMayActOnCase(ctx.roles, ctx.userId, existing.applicantUserId)) {
+    throw new ApplicantNotOwnerError();
+  }
 
   const from = existing.status as ApplicationStatus;
   const to = nextStatus(action, from);
@@ -692,11 +735,24 @@ export async function transitionApplication(
   action: ApplicationAction,
   rawInput: TransitionApplicationInput = {},
 ): Promise<ApplicationRow> {
-  const applied = await currentScope().db.transaction(async (tx) => {
-    const result = await applyApplicationTransition(tx, id, action, rawInput);
-    await recordApplicationTransitionAudit(action, result, tx);
-    return result;
-  });
+  let applied: AppliedApplicationTransition;
+  try {
+    applied = await currentScope().db.transaction(async (tx) => {
+      const result = await applyApplicationTransition(tx, id, action, rawInput);
+      await recordApplicationTransitionAudit(action, result, tx);
+      return result;
+    });
+  } catch (error) {
+    if (!(error instanceof ApplicantNotOwnerError)) throw error;
+    await recordAudit({
+      action: TRANSITIONS[action].audit,
+      resourceType: 'application',
+      resourceId: id,
+      result: 'denied',
+      reason: 'application.applicant_not_owner',
+    });
+    throw error;
+  }
   const [opened] = await openApplicationRows(applied.row.organisationId, [applied.row]);
   return must(opened, 'application');
 }
@@ -735,8 +791,11 @@ export async function listApplications(
     }
   }
 
-  // Narrow to own/assigned/team unless the actor may read the whole tenant.
-  if (!readsAllApplications(subject)) {
+  // Applicant-only accounts see their own matters and nothing else. Staff
+  // without read-any still see own, assigned, and team matters.
+  if (isApplicantOnlyRoleSet(ctx.roles)) {
+    filters.push(eq(applications.applicantUserId, subject.userId));
+  } else if (!readsAllApplications(subject)) {
     filters.push(
       or(
         eq(applications.applicantUserId, subject.userId),

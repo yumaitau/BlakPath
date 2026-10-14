@@ -7,9 +7,11 @@ import {
   signInPath,
 } from '@/lib/auth/return-to';
 import { getServerSession, type ServerSession } from '@/lib/auth/session';
+import { isApplicantOnlyRoleSet } from '@/lib/permissions/roles';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,
+  listRoleSlugsForUserOrganisation,
   organisationAccessForUser,
   type UserMembership,
 } from './memberships';
@@ -66,5 +68,12 @@ export async function loadStaffShell(): Promise<StaffShellData> {
   if (!organisations.some((org) => org.organisationId === activeOrganisationId)) {
     redirect(selectOrganisationPath(currentPath));
   }
+  // An applicant-only membership never receives staff navigation, even on a
+  // direct /dashboard request. Redirect before the MFA gate and the shell.
+  const roleSlugs = await listRoleSlugsForUserOrganisation(
+    session.user.id,
+    activeOrganisationId,
+  );
+  if (isApplicantOnlyRoleSet(roleSlugs)) redirect('/portal');
   return { unavailable: false, session, organisations, activeOrganisationId };
 }

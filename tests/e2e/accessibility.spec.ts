@@ -26,6 +26,7 @@ test('public and authentication journeys meet automated WCAG checks', async ({
     ['/key-custody', 'Key custody'],
     ['/support', 'Support'],
     ['/organisations', 'Find an organisation'],
+    ['/organisations/dev-org/apply', 'Start an application'],
     ['/verify', 'Check a certificate'],
     ['/sign-in', 'Sign in'],
     ['/sign-up', 'BlakPath is invite-only'],

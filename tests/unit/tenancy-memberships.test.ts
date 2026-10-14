@@ -7,8 +7,11 @@ vi.mock('@/db/client', async () => {
   return { db: scriptedDatabase() };
 });
 
-const { getActiveOrganisationId, listMembershipsForUser } =
-  await import('@/lib/tenancy/memberships');
+const {
+  getActiveOrganisationId,
+  listMembershipsForUser,
+  listRoleSlugsForUserOrganisation,
+} = await import('@/lib/tenancy/memberships');
 
 beforeEach(() => {
   script.reset();
@@ -52,5 +55,20 @@ describe('organisation selection reads', () => {
     const empty = { session: {} } as ServerSession;
     expect(getActiveOrganisationId(selected)).toBe('org-1');
     expect(getActiveOrganisationId(empty)).toBeNull();
+  });
+});
+
+describe('active membership role slugs', () => {
+  it('returns every role slug on the membership, and none without one', async () => {
+    script.results.push([{ slug: 'applicant' }, { slug: 'case-officer' }]);
+    await expect(listRoleSlugsForUserOrganisation('user-1', 'org-1')).resolves.toEqual([
+      'applicant',
+      'case-officer',
+    ]);
+
+    script.results.push([]);
+    await expect(listRoleSlugsForUserOrganisation('user-1', 'org-2')).resolves.toEqual(
+      [],
+    );
   });
 });

@@ -7,7 +7,11 @@ import { decideDevSeed } from '@/db/seeds/dev-seed-policy';
 import { env } from '@/lib/env';
 import {
   accounts,
+  applicationNotes,
+  applicationStatusHistory,
+  applications,
   certificateTemplates,
+  evidenceRequests,
   memberships,
   membershipRoles,
   organisations,
@@ -354,6 +358,226 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
   console.info(
     `         pending:  ${pendingMfaEmail} / ${pendingMfaPassword} (no second factor)`,
   );
+
+  await seedApplicantPortalFixture({
+    organisationId,
+    adminUserId: userId,
+    applicantRoleId: roleIdBySlug.get('applicant'),
+  });
+}
+
+/**
+ * Non-production applicant account plus one own case and one other case.
+ * The portal end-to-end test uses these references. Re-running the seed does
+ * not duplicate them.
+ */
+async function seedApplicantPortalFixture(input: {
+  organisationId: string;
+  adminUserId: string;
+  applicantRoleId: string | undefined;
+}): Promise<void> {
+  // Seal applicant data under the dev organisation key, like the services do.
+  const { sealApplicationFields, sealNoteBody } =
+    await import('@/lib/encryption/tenant-fields');
+  const must = (value: string | undefined): string => {
+    if (!value) throw new Error('Seed applicant name was not sealed');
+    return value;
+  };
+  const applicantEmail = 'applicant@blakpath.local';
+  const applicantPassword = 'blakpath-dev-applicant-2026';
+  const [existingApplicant] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, applicantEmail))
+    .limit(1);
+  const applicantUserId = existingApplicant?.id ?? uuidv7();
+  if (!existingApplicant) {
+    await db.insert(users).values({
+      id: applicantUserId,
+      name: 'Dev Applicant',
+      email: applicantEmail,
+      emailVerified: true,
+    });
+    await db.insert(accounts).values({
+      id: uuidv7(),
+      userId: applicantUserId,
+      providerId: 'credential',
+      accountId: applicantUserId,
+      password: await argon2Hash(applicantPassword, ARGON2_OPTIONS),
+    });
+  }
+
+  const [existingMembership] = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, input.organisationId),
+        eq(memberships.userId, applicantUserId),
+      ),
+    )
+    .limit(1);
+  const membershipId = existingMembership?.id ?? uuidv7();
+  if (!existingMembership) {
+    await db.insert(memberships).values({
+      id: membershipId,
+      organisationId: input.organisationId,
+      userId: applicantUserId,
+      status: 'active',
+    });
+  }
+  if (!input.applicantRoleId) {
+    throw new Error('Seed requires the applicant system role.');
+  }
+  await db
+    .insert(membershipRoles)
+    .values({ id: uuidv7(), membershipId, roleId: input.applicantRoleId })
+    .onConflictDoNothing({
+      target: [membershipRoles.membershipId, membershipRoles.roleId],
+    });
+
+  const [ownCase] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.organisationId, input.organisationId),
+        eq(applications.reference, 'APP-OWN-CASE'),
+      ),
+    )
+    .limit(1);
+  if (!ownCase) {
+    const applicationId = uuidv7();
+    const sealed = await sealApplicationFields(input.organisationId, applicationId, {
+      applicantName: 'Dev Applicant',
+      reference: 'APP-OWN-CASE',
+    });
+    await db.insert(applications).values({
+      id: applicationId,
+      organisationId: input.organisationId,
+      reference: 'APP-OWN-CASE',
+      applicantUserId,
+      applicantName: must(sealed.applicantName),
+      referenceBidx: sealed.referenceBidx,
+      applicantNameBidx: sealed.applicantNameBidx,
+      applicantNameTokenBidx: sealed.applicantNameTokenBidx,
+      status: 'awaiting_evidence',
+      createdByUserId: input.adminUserId,
+      submittedAt: new Date('2026-09-02T01:00:00.000Z'),
+    });
+    await db.insert(applicationStatusHistory).values([
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: null,
+        toStatus: 'draft',
+        action: 'create',
+        actorUserId: applicantUserId,
+        createdAt: new Date('2026-09-01T01:00:00.000Z'),
+      },
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: 'draft',
+        toStatus: 'submitted',
+        action: 'submit',
+        actorUserId: applicantUserId,
+        createdAt: new Date('2026-09-02T01:00:00.000Z'),
+      },
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: 'submitted',
+        toStatus: 'awaiting_evidence',
+        action: 'request_evidence',
+        actorUserId: input.adminUserId,
+        createdAt: new Date('2026-09-03T01:00:00.000Z'),
+      },
+    ]);
+    const sharedNoteId = uuidv7();
+    const staffNoteId = uuidv7();
+    await db.insert(applicationNotes).values([
+      {
+        id: sharedNoteId,
+        organisationId: input.organisationId,
+        applicationId,
+        authorUserId: input.adminUserId,
+        body: await sealNoteBody(
+          input.organisationId,
+          sharedNoteId,
+          'Please bring a birth certificate if you have one.',
+        ),
+        visibility: 'shared',
+      },
+      {
+        id: staffNoteId,
+        organisationId: input.organisationId,
+        applicationId,
+        authorUserId: input.adminUserId,
+        body: await sealNoteBody(
+          input.organisationId,
+          staffNoteId,
+          'Internal staffing note not for the applicant.',
+        ),
+        visibility: 'staff',
+      },
+    ]);
+    await db.insert(evidenceRequests).values({
+      id: uuidv7(),
+      organisationId: input.organisationId,
+      applicationId,
+      requestedByUserId: input.adminUserId,
+      description: 'A photo of a birth certificate, if you have one.',
+      status: 'open',
+    });
+  }
+
+  const [otherCase] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.organisationId, input.organisationId),
+        eq(applications.reference, 'APP-OTHER-CASE'),
+      ),
+    )
+    .limit(1);
+  if (!otherCase) {
+    const otherId = uuidv7();
+    const sealed = await sealApplicationFields(input.organisationId, otherId, {
+      applicantName: 'Someone Else',
+      reference: 'APP-OTHER-CASE',
+    });
+    await db.insert(applications).values({
+      id: otherId,
+      organisationId: input.organisationId,
+      reference: 'APP-OTHER-CASE',
+      applicantUserId: input.adminUserId,
+      applicantName: must(sealed.applicantName),
+      referenceBidx: sealed.referenceBidx,
+      applicantNameBidx: sealed.applicantNameBidx,
+      applicantNameTokenBidx: sealed.applicantNameTokenBidx,
+      status: 'submitted',
+      createdByUserId: input.adminUserId,
+    });
+  }
+
+  await db
+    .insert(organisations)
+    .values({
+      id: uuidv7(),
+      legalName: 'Closed Directory Organisation',
+      slug: 'closed-org',
+      status: 'active',
+      publicApplicationsOpen: false,
+    })
+    .onConflictDoNothing({ target: organisations.slug });
+
+  console.info(`         applicant: ${applicantEmail} / ${applicantPassword}`);
+  console.info('         portal:    APP-OWN-CASE (own) and APP-OTHER-CASE (not theirs)');
 }
 
 async function main(): Promise<void> {

@@ -6,6 +6,7 @@ import { OrganisationPicker } from '@/components/tenancy/organisation-picker';
 import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { POST_SIGN_IN_PATH } from '@/lib/auth/landing';
 import { safeReturnTo, signInPath } from '@/lib/auth/return-to';
 import { getServerSession } from '@/lib/auth/session';
 import {
@@ -22,14 +23,20 @@ export const metadata: Metadata = {
  * A pre-tenant route, intentionally outside the guarded staff route group.
  * `returnTo` (the page a fresh or expired session was heading for) is
  * validated, then used as the destination once an organisation is chosen.
+ * `choose=1` shows the picker even when an organisation is already active.
  */
 export default async function SelectOrganisationPage({
   searchParams,
 }: {
-  searchParams: Promise<{ returnTo?: string | string[] }>;
+  searchParams: Promise<{ returnTo?: string | string[]; choose?: string }>;
 }) {
-  const requested = (await searchParams).returnTo;
-  const returnTo = safeReturnTo(typeof requested === 'string' ? requested : null);
+  const { returnTo: requested, choose } = await searchParams;
+  // No requested page: /home sends applicant-only accounts to the portal and
+  // everyone else to the dashboard.
+  const returnTo = safeReturnTo(
+    typeof requested === 'string' ? requested : null,
+    POST_SIGN_IN_PATH,
+  );
   const session = await getServerSession();
   if (!session) {
     return (
@@ -51,6 +58,7 @@ export default async function SelectOrganisationPage({
   const organisations = await listMembershipsForUser(session.user.id);
   const activeOrganisationId = getActiveOrganisationId(session);
   if (
+    choose !== '1' &&
     activeOrganisationId &&
     organisations.some((org) => org.organisationId === activeOrganisationId)
   ) {

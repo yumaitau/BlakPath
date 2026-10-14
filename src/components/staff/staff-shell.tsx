@@ -14,7 +14,7 @@ import {
   Users,
 } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 import { NotificationBell } from '@/components/notifications/notification-bell';
@@ -82,7 +82,6 @@ export function StaffShell({
   tools: readonly { href: string; label: string }[];
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [switching, setSwitching] = useState(false);
   const current = organisations.find(
     (org) => org.organisationId === activeOrganisationId,
@@ -98,8 +97,9 @@ export function StaffShell({
         body: JSON.stringify({ organisationId }),
       });
       if (!response.ok) return;
-      router.push('/dashboard');
-      router.refresh();
+      // Full navigation so an applicant-only organisation never paints the
+      // staff shell that is already on screen.
+      window.location.assign('/home');
     } finally {
       setSwitching(false);
     }

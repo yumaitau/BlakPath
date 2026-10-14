@@ -120,7 +120,10 @@ link again with `resend-invite` and the same slug and operator email.
 --confirm-production example-ac`. It refuses while any of the three is
    missing. An organisation admin can instead `POST /api/organisation/activation`
    (step-up), which checks the key only. Then open `publicApplicationsOpen`
-   when ready. Platform operators suspend, close or reactivate with
+   when ready. Opening that flag lists the organisation in the public
+   directory and lets invited members start an application. Applicant-facing
+   copy still needs community-partner review (`docs/applicant-portal.md`).
+   Platform operators suspend, close or reactivate with
    `POST /api/admin/organisations/{id}/status` (recent sign-in); the change is
    appended to the platform audit chain, and a move to `active` still needs a
    validated key.
