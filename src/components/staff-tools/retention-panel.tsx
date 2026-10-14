@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
@@ -44,6 +45,7 @@ export function RetentionPanel({
   holds: readonly LegalHoldItem[];
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [resourceType, setResourceType] =
     useState<(typeof RESOURCE_TYPES)[number]['value']>('application');
   const [retentionDays, setRetentionDays] = useState('365');
@@ -73,6 +75,7 @@ export function RetentionPanel({
 
   return (
     <div className="grid gap-10">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       {error ? (
         <Alert role="alert" tone="destructive" title="Retention change not saved">
           {error}
@@ -180,7 +183,13 @@ export function RetentionPanel({
                   onClick={() => {
                     void run(
                       policy.id,
-                      () => staffJson(`/api/retention/policies/${policy.id}`, 'DELETE'),
+                      () =>
+                        staffJson(
+                          `/api/retention/policies/${policy.id}`,
+                          'DELETE',
+                          undefined,
+                          () => stepUp.request(),
+                        ),
                       'Retention policy removed.',
                     );
                   }}
@@ -290,7 +299,13 @@ export function RetentionPanel({
                     onClick={() => {
                       void run(
                         hold.id,
-                        () => staffJson(`/api/retention/holds/${hold.id}`, 'DELETE'),
+                        () =>
+                          staffJson(
+                            `/api/retention/holds/${hold.id}`,
+                            'DELETE',
+                            undefined,
+                            () => stepUp.request(),
+                          ),
                         'Legal hold released.',
                       );
                     }}

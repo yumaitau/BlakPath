@@ -14,7 +14,7 @@ import { loadToolPage } from '@/lib/staff/load-tool-page';
 export const metadata: Metadata = { title: 'Webhooks — BlakPath' };
 
 const description =
-  'Tell another system when human work moves forward. Notices carry record ids, not personal stories. The signing secret lets the receiver check that a notice came from BlakPath.';
+  'Tell another system when human work moves forward. Notices carry record ids, not personal stories. The signing secret, shown once when an endpoint is added, lets the receiver check that a notice came from BlakPath.';
 
 export default async function WebhooksPage() {
   const loaded = await loadToolPage('/settings/webhooks', async () => {
@@ -26,7 +26,6 @@ export default async function WebhooksPage() {
           id: endpoint.id,
           url: endpoint.url,
           events: stringList(endpoint.events),
-          secret: endpoint.secret,
           active: endpoint.active,
           deliveries: deliveries.slice(0, 8).map((delivery) => ({
             id: delivery.id,

@@ -2,10 +2,11 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { staffJson } from '@/components/staff-tools/request';
+import { staffDownload, staffJson } from '@/components/staff-tools/request';
 import {
   formatStaffDate,
   humanStatus,
@@ -34,6 +35,7 @@ export function ReportsPanel({
   canExport: boolean;
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [type, setType] =
     useState<(typeof REPORT_OPTIONS)[number]['value']>('applications');
   const [busy, setBusy] = useState(false);
@@ -42,6 +44,7 @@ export function ReportsPanel({
 
   return (
     <div className="grid gap-8">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       {canExport ? (
         <form
           className="grid gap-4"
@@ -51,7 +54,9 @@ export function ReportsPanel({
             setError(null);
             setMessage(null);
             try {
-              await staffJson('/api/reports/exports', 'POST', { type });
+              await staffJson('/api/reports/exports', 'POST', { type }, () =>
+                stepUp.request(),
+              );
               setMessage(
                 'Export requested. It will appear in the list when the file is ready.',
               );
@@ -96,7 +101,7 @@ export function ReportsPanel({
       )}
 
       {error ? (
-        <Alert role="alert" tone="destructive" title="Export not requested">
+        <Alert role="alert" tone="destructive" title="Export not completed">
           {error}
         </Alert>
       ) : null}
@@ -127,12 +132,32 @@ export function ReportsPanel({
                   </span>
                 </span>
                 {item.status === 'ready' && canExport ? (
-                  <a
-                    className="text-primary text-sm font-semibold underline-offset-4 hover:underline focus-visible:outline-none"
-                    href={`/api/reports/exports/${item.id}/download`}
+                  <button
+                    type="button"
+                    className="text-primary text-left text-sm font-semibold underline-offset-4 hover:underline disabled:opacity-60"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      setError(null);
+                      setMessage(null);
+                      try {
+                        await staffDownload(
+                          `/api/reports/exports/${item.id}/download`,
+                          () => stepUp.request(),
+                        );
+                      } catch (caught) {
+                        setError(
+                          caught instanceof Error
+                            ? caught.message
+                            : 'That file could not be downloaded.',
+                        );
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
                   >
                     Download {humanStatus(item.type)} CSV
-                  </a>
+                  </button>
                 ) : null}
               </li>
             ))}

@@ -5,8 +5,8 @@ import type { NextConfig } from 'next';
  *
  * Security posture: strict headers are applied globally. Sensitive routes
  * (evidence, certificates) additionally set no-store cache headers at the
- * route-handler level. A Content-Security-Policy nonce is injected by
- * `src/middleware.ts`; the header below is the static fallback baseline.
+ * route-handler level. The per-request Content-Security-Policy nonce is set
+ * by `src/proxy.ts`. The headers below are the non-CSP baseline.
  */
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
@@ -28,7 +28,19 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
-  serverExternalPackages: ['@node-rs/argon2', 'postgres', 'ioredis', 'bullmq'],
+  serverExternalPackages: [
+    '@node-rs/argon2',
+    'postgres',
+    'ioredis',
+    'bullmq',
+    '@pdf-lib/fontkit',
+    'qrcode',
+  ],
+  // Noto Sans files are read from disk when a certificate is rendered.
+  outputFileTracingIncludes: {
+    '/api/certificates': ['./src/domains/certificates/fonts/**/*'],
+    '/api/certificates/route': ['./src/domains/certificates/fonts/**/*'],
+  },
   experimental: {
     // Server Actions are used sparingly; keep body limits tight.
     serverActions: {

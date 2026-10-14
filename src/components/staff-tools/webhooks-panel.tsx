@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
@@ -21,7 +22,6 @@ export interface WebhookEndpointItem {
   id: string;
   url: string;
   events: readonly string[];
-  secret: string;
   active: boolean;
   deliveries: readonly WebhookDeliveryItem[];
 }
@@ -36,6 +36,7 @@ const EVENT_OPTIONS = [
 
 export function WebhooksPanel({ items }: { items: readonly WebhookEndpointItem[] }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<readonly string[]>([]);
   const [secret, setSecret] = useState<string | null>(null);
@@ -45,6 +46,7 @@ export function WebhooksPanel({ items }: { items: readonly WebhookEndpointItem[]
 
   return (
     <div className="grid gap-8">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <form
         className="grid gap-4"
         onSubmit={async (event) => {
@@ -54,10 +56,12 @@ export function WebhooksPanel({ items }: { items: readonly WebhookEndpointItem[]
           setMessage(null);
           setSecret(null);
           try {
-            const created = await staffJson<{ secret: string }>('/api/webhooks', 'POST', {
-              url,
-              events,
-            });
+            const created = await staffJson<{ secret: string }>(
+              '/api/webhooks',
+              'POST',
+              { url, events },
+              () => stepUp.request(),
+            );
             setSecret(created.secret);
             setUrl('');
             setEvents([]);
@@ -150,12 +154,6 @@ export function WebhooksPanel({ items }: { items: readonly WebhookEndpointItem[]
                     'No events'}
                   {item.active ? '' : ' · inactive'}
                 </p>
-                <details className="mt-3">
-                  <summary className="cursor-pointer text-sm font-semibold">
-                    Show signing secret
-                  </summary>
-                  <p className="mt-2 font-mono text-sm break-all">{item.secret}</p>
-                </details>
                 {item.deliveries.length > 0 ? (
                   <ul
                     className="mt-3 space-y-1 text-xs"

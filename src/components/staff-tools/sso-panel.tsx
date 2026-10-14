@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
@@ -19,6 +20,7 @@ export interface SsoProviderItem {
 
 export function SsoPanel({ items }: { items: readonly SsoProviderItem[] }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [providerKey, setProviderKey] = useState('');
   const [issuer, setIssuer] = useState('');
   const [clientId, setClientId] = useState('');
@@ -29,6 +31,7 @@ export function SsoPanel({ items }: { items: readonly SsoProviderItem[] }) {
 
   return (
     <div className="grid gap-8">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <form
         className="grid gap-4"
         onSubmit={async (event) => {
@@ -37,12 +40,12 @@ export function SsoPanel({ items }: { items: readonly SsoProviderItem[] }) {
           setError(null);
           setMessage(null);
           try {
-            await staffJson('/api/sso/providers', 'POST', {
-              providerKey,
-              issuer,
-              clientId,
-              domain,
-            });
+            await staffJson(
+              '/api/sso/providers',
+              'POST',
+              { providerKey, issuer, clientId, domain },
+              () => stepUp.request(),
+            );
             setProviderKey('');
             setIssuer('');
             setClientId('');

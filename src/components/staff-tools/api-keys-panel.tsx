@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
@@ -32,6 +33,7 @@ export function ApiKeysPanel({
   scopes: readonly ApiKeyScopeOption[];
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [name, setName] = useState('');
   const [selected, setSelected] = useState<readonly string[]>([]);
   const [expiresInDays, setExpiresInDays] = useState('365');
@@ -48,6 +50,7 @@ export function ApiKeysPanel({
 
   return (
     <div className="grid gap-8">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <form
         className="grid gap-4"
         onSubmit={async (event) => {
@@ -57,11 +60,16 @@ export function ApiKeysPanel({
           setMessage(null);
           setSecret(null);
           try {
-            const created = await staffJson<{ key: string }>('/api/keys', 'POST', {
-              name,
-              scopes: selected,
-              expiresInDays: Number(expiresInDays),
-            });
+            const created = await staffJson<{ key: string }>(
+              '/api/keys',
+              'POST',
+              {
+                name,
+                scopes: selected,
+                expiresInDays: Number(expiresInDays),
+              },
+              () => stepUp.request(),
+            );
             setSecret(created.key);
             setName('');
             setSelected([]);
