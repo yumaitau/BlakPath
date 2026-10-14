@@ -13,6 +13,7 @@ const config = [
       '.next/**',
       'dist/**',
       'node_modules/**',
+      'coverage/**',
       'src/db/migrations/**',
       'playwright-report/**',
       'test-results/**',
