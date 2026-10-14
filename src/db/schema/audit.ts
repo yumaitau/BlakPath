@@ -52,7 +52,10 @@ export const auditEvents = pgTable(
     resourceType: text('resource_type').notNull(),
     resourceId: text('resource_id'),
     result: auditResult('result').notNull(),
-    /** Human-readable reason, especially for `denied`/`failure` outcomes. */
+    /**
+     * Coded reason (`code` or `code:recordId`). Free text is not stored here;
+     * `recordId` points at the mutable row that holds it.
+     */
     reason: text('reason'),
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
@@ -126,6 +129,11 @@ export const breakGlassRequests = pgTable(
     /** Narrowed scope of what may be accessed. */
     scope: text('scope').notNull(),
     status: breakGlassStatus('status').notNull().default('requested'),
+    /**
+     * Free-text explanation when a request is denied. Mutable, so it can be
+     * corrected or erased. The audit trail stores `break_glass.denied` only.
+     */
+    denialReason: text('denial_reason'),
     approvedByUserId: refId('approved_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),

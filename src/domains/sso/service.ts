@@ -52,7 +52,7 @@ export async function createSsoBinding(
     resourceType: 'organisation',
     resourceId: scope.organisationId,
     result: 'success',
-    reason: `sso binding created for ${input.providerKey}`,
+    reason: 'sso.binding_created',
   });
   return row;
 }
@@ -120,7 +120,7 @@ export async function setSsoBindingEnabled(
     resourceType: 'organisation',
     resourceId: scope.organisationId,
     result: 'success',
-    reason: `sso binding ${enabled ? 'enabled' : 'disabled'} for ${binding.providerKey}`,
+    reason: enabled ? 'sso.binding_enabled' : 'sso.binding_disabled',
   });
   return row;
 }

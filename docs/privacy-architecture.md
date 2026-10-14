@@ -20,11 +20,15 @@ on automation.
   organisation-authored config (terminology, guidance, branding) — never for data
   other modules must query, and never to smuggle in identity judgements.
 - **Audit stores metadata, not payloads.** `beforeMeta`/`afterMeta` are
-  allowlisted, and a denylist blocks secrets
-  (`src/domains/audit/hash.ts`, `docs/audit-log-design.md`). Evidence content
-  is not written there. The event row **does** store `ipAddress` and
-  `userAgent`, so the trail is not free of personal data. Removing that is
-  #80. It is not done.
+  allowlisted and capture changed field names, statuses and ids. A denylist
+  (`src/domains/audit/hash.ts`) blocks secrets, names, contact details, notes
+  and file names, so form answers and evidence content are not written there.
+  `reason` is a code, with free text left on a mutable row
+  (`docs/audit-log-design.md`). Retention can anonymise the application row
+  without leaving the applicant's name in `audit_events`, because the trail
+  never received it. The trail itself is not edited. The event row **does**
+  still store `ipAddress` and `userAgent`, so the trail is not entirely free
+  of personal data.
 - **Ids don't leak counts.** UUIDv7 identifiers are non-sequential and
   public-safe, so exposing an id never reveals how many records exist
   (`src/db/schema/_helpers.ts`).
