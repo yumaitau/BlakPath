@@ -108,6 +108,13 @@ spec:
         - name: config
           configMap:
             name: blakpath-clamav-config
+        # Root filesystem is read-only. clamd and freshclam write only the
+        # socket and initial freshclam config (/tmp), logs and the signature
+        # volume.
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
       containers:
         - name: clamav
           image: clamav/clamav-debian:1.4_base@sha256:66ea2d47620f5458702e31d793999b8f05cdd93327336136c36ef6dc52483217
@@ -134,6 +141,10 @@ spec:
               readOnly: true
             - name: signatures
               mountPath: /var/lib/clamav
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /var/log/clamav
           # No liveness probe. ConcurrentDatabaseReload is off, so a signature
           # reload stops answering PING until it finishes. Failing liveness
           # there would restart the pod and drop the database we just updated.
@@ -164,6 +175,7 @@ spec:
               memory: 4Gi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
   volumeClaimTemplates:
