@@ -23,6 +23,7 @@ test('public and authentication journeys meet automated WCAG checks', async ({
     ['/', 'A clearer path'],
     ['/accessibility', 'Accessibility'],
     ['/privacy', 'Privacy'],
+    ['/key-custody', 'Key custody'],
     ['/support', 'Support'],
     ['/organisations', 'Find an organisation'],
     ['/verify', 'Check a certificate'],

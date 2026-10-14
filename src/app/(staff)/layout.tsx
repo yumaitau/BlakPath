@@ -12,29 +12,22 @@ import {
 import { getOrganisationKey } from '@/domains/organisation-keys';
 import { getServerSession } from '@/lib/auth/session';
 import { clientIp } from '@/lib/http/client-ip';
-import {
-  getActiveOrganisationId,
-  listMembershipsForUser,
-} from '@/lib/tenancy/memberships';
+import { loadStaffShell } from '@/lib/tenancy/staff-shell';
 
 /**
  * Authenticated staff shell. This is the UI guard as well as the navigation
  * surface: no staff route renders until the session, active membership and
  * staff second-factor policy have been checked against the database.
+ *
+ * A tenant key that is not active locks every page here. The encryption-keys
+ * settings page lives in the `(key-custody)` group so an administrator can
+ * still see the key's status and check it while records are locked.
  */
 export default async function StaffLayout({ children }: { children: ReactNode }) {
   const session = await getServerSession();
   if (!session) redirect('/sign-in');
 
-  const activeOrganisationId = getActiveOrganisationId(session);
-  if (!activeOrganisationId) redirect('/select-organisation');
-
-  const organisations = await listMembershipsForUser(session.user.id);
-  // A stale session can name a membership that was revoked after sign-in. Treat
-  // it exactly like no selection, instead of rendering a misleading shell.
-  if (!organisations.some((org) => org.organisationId === activeOrganisationId)) {
-    redirect('/select-organisation');
-  }
+  const { organisations, activeOrganisationId } = await loadStaffShell();
 
   if (await membershipRequiresStaffMfa(session.user.id, activeOrganisationId)) {
     const h = await headers();
@@ -42,7 +35,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
       await requireStaffMfa(session.user.id, {
         organisationId: activeOrganisationId,
         sessionId: session.session.id,
-        ipAddress: clientIp({ headers: h }) ?? undefined,
+        ipAddress: clientIp({ headers: h }),
         userAgent: h.get('user-agent'),
       });
     } catch (error) {

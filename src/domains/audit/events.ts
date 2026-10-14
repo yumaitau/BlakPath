@@ -260,6 +260,8 @@ export type AuditAction =
   | 'key.replacement_started'
   | 'key.escrow_opted_in'
   | 'key.escrow_withdrawn'
+  | 'key.health_checked'
+  | 'key.viewed'
   // Field encryption backfill. Counts and table names only.
   | 'encryption.backfill_batch'
   | 'encryption.backfill_completed'

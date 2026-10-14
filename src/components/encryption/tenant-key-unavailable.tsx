@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Alert } from '@/components/ui/alert';
 import type { OrganisationKeyStatus } from '@/domains/organisation-keys';
 import { TENANT_KEY_UNAVAILABLE_MESSAGE } from '@/lib/encryption/errors';
@@ -17,6 +18,16 @@ export function TenantKeyUnavailable({ status }: { status: LockedKeyStatus }) {
         <p className="mt-2">
           Nothing was shown. Other organisations are unaffected.
           <span className="sr-only"> Key status: {status}.</span>
+        </p>
+        <p className="mt-2">
+          Organisation administrators can see the key&apos;s status and check it on{' '}
+          <Link
+            href="/settings/encryption-keys"
+            className="text-primary underline underline-offset-4"
+          >
+            Encryption keys
+          </Link>
+          .
         </p>
       </Alert>
     </div>

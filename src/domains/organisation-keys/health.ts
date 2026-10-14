@@ -1,9 +1,15 @@
+import { timingSafeEqual } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { db, type Database } from '@/db/client';
+import { recordPlatformAudit } from '@/domains/audit';
 import { membershipRoles, memberships, organisationKeys, roles } from '@/db/schema';
 import { createNotification } from '@/domains/notifications';
 import { KEY_VALIDATION_PURPOSE } from '@/lib/encryption/key-handshake';
-import { asKmsKeyAccessError, type KeyProvider } from '@/lib/encryption/key-provider';
+import {
+  asKmsKeyAccessError,
+  type KeyProvider,
+  type KmsAccessErrorName,
+} from '@/lib/encryption/key-provider';
 import { KmsKeyProvider } from '@/lib/encryption/kms-provider';
 import { createKeyProvider } from '@/lib/encryption/provider';
 import { env } from '@/lib/env';
@@ -16,6 +22,7 @@ import {
   type KeyHealthResult,
 } from '@/lib/encryption/key-health';
 import {
+  getOrganisationKey,
   markOrganisationKeyUnavailable,
   saveKeyHealthObservation,
   setOrganisationKeyStatus,
@@ -325,4 +332,87 @@ export async function sweepOrganisationKeyHealth(
     pause: options.pause ?? (async () => {}),
     resume: options.resume ?? (async () => {}),
   });
+}
+
+export const KEY_HEALTH_PURPOSE = 'key_health';
+
+export type KeyHealthFailure = KmsAccessErrorName | 'no_key' | 'mismatch' | 'error';
+
+export interface OrganisationKeyHealthResult {
+  readonly ok: boolean;
+  readonly checkedAt: Date;
+  readonly failure: KeyHealthFailure | null;
+}
+
+export interface OrganisationKeyHealthOptions {
+  readonly provider?: KeyProvider;
+  readonly database?: Database;
+}
+
+/**
+ * Wrap a throwaway data key under the organisation's key and unwrap it again.
+ * The encryption context purpose is `key_health`, so CloudTrail can tell a
+ * settings check from a data operation.
+ */
+export async function checkOrganisationKeyHealth(
+  organisationId: string,
+  options: OrganisationKeyHealthOptions = {},
+): Promise<OrganisationKeyHealthResult> {
+  const database = options.database ?? db;
+  const row = await getOrganisationKey(organisationId, database);
+  if (!row) return { ok: false, checkedAt: new Date(), failure: 'no_key' };
+
+  const provider = options.provider ?? createKeyProvider();
+  const context = {
+    org_id: row.organisationId,
+    purpose: KEY_HEALTH_PURPOSE,
+  } as const;
+  let failure: KeyHealthFailure | null = null;
+  let generated: Buffer | null = null;
+  let unwrapped: Buffer | null = null;
+  try {
+    const out = await provider.generateDataKey({
+      keyArn: row.kmsKeyArn,
+      encryptionContext: context,
+    });
+    generated = out.plaintext;
+    unwrapped = await provider.decrypt({
+      keyArn: row.kmsKeyArn,
+      ciphertextBlob: out.ciphertextBlob,
+      encryptionContext: context,
+    });
+    const sameKey = out.keyId === row.kmsKeyArn;
+    const sameDek =
+      generated.length === unwrapped.length && timingSafeEqual(generated, unwrapped);
+    if (!sameKey || !sameDek) failure = 'mismatch';
+  } catch (error) {
+    const access = asKmsKeyAccessError(error);
+    failure = access?.kmsError ?? 'error';
+    if (access) {
+      await markOrganisationKeyUnavailable(organisationId, access.kmsError, database);
+    } else {
+      logger.warn({ err: error }, 'tenant key health check failed');
+    }
+  } finally {
+    generated?.fill(0);
+    unwrapped?.fill(0);
+  }
+
+  const checkedAt = new Date();
+  await recordPlatformAudit({
+    action: 'key.health_checked',
+    resourceType: 'organisation_key',
+    resourceId: row.id,
+    result: failure ? 'failure' : 'success',
+    reason: failure,
+    after: {
+      data: {
+        organisationId: row.organisationId,
+        keyVersion: row.keyVersion,
+        kmsKeyArn: row.kmsKeyArn,
+      },
+      allow: ['organisationId', 'keyVersion', 'kmsKeyArn'],
+    },
+  });
+  return { ok: failure === null, checkedAt, failure };
 }
