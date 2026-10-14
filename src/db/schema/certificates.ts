@@ -47,8 +47,18 @@ export const certificates = pgTable(
     pdfObjectKey: text('pdf_object_key'),
     /** SHA-256 of the rendered PDF bytes, for tamper-evidence. */
     sha256: text('sha256'),
-    /** Canonical signed payload version (v1 schema below). */
+    /**
+     * Canonical signed payload version.
+     * `1` seals reference, parties and outcome. `2` also seals a salted holder-name
+     * hash and the PDF SHA-256.
+     */
     payloadVersion: text('payload_version').notNull().default('1'),
+    /** Random salt for the holder hashes sealed with payload version 2. */
+    holderBindingSalt: text('holder_binding_salt'),
+    /** Salted hash of the name printed on the certificate. Null until bound. */
+    holderNameHash: text('holder_name_hash'),
+    /** Salted hash of a date of birth recorded at intake, when there was one. */
+    holderDobHash: text('holder_dob_hash'),
     /** SHA-256 hex of the canonical signed payload. */
     payloadHash: text('payload_hash'),
     /** Base64 digital signature over the canonical payload (KMS in prod). */

@@ -199,7 +199,10 @@ the CoA key. Private key material never leaves KMS.
 ## CoA signing key (KMS)
 
 Certificates are sealed with an asymmetric KMS key and verified publicly
-against its public key — private key material never leaves KMS.
+against its public key — private key material never leaves KMS. Payload version
+2 also seals a salted hash of the holder name and the PDF SHA-256. Public
+verification can check a name the verifier types; it never displays that name.
+Version 1 seals continue to verify.
 
 1. Create the key: RSA_2048 (or ECC_NIST_P256), usage SIGN_VERIFY, alias
    `alias/blakpath-coa-signing`, ap-southeast-2.
