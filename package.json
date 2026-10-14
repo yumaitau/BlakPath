@@ -52,6 +52,7 @@
     "test:e2e": "playwright test",
     "test:live": "bash scripts/verify-live-stack.sh",
     "release:check": "tsx scripts/check-production-readiness.ts",
+    "release:check:bundle": "node scripts/build-release-check.mjs",
     "test:restore": "bash scripts/verify-restore-drill.sh",
     "key-ceremony": "tsx scripts/key-ceremony.ts",
     "screenshot": "tsx scripts/capture-readme-screenshots.ts",
@@ -115,7 +116,7 @@
   "devDependencies": {
     "@playwright/test": "^1.48.0",
     "@tailwindcss/postcss": "^4.0.0",
-    "@testing-library/dom": "10.4.1",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.0.1",
     "@types/node": "^24.19.2",
     "@types/qrcode": "^1.5.6",

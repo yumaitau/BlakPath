@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { SessionWatch } from '@/components/auth/session-watch';
 import { TenantKeyUnavailable } from '@/components/encryption/tenant-key-unavailable';
 import { StaffShell } from '@/components/staff/staff-shell';
 import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
@@ -11,7 +12,7 @@ import {
   StaffMfaRequiredError,
 } from '@/lib/auth/staff-policy';
 import { getOrganisationKey } from '@/domains/organisation-keys';
-import { getServerSession } from '@/lib/auth/session';
+import { env } from '@/lib/env';
 import { clientIp } from '@/lib/http/client-ip';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { visibleStaffTools } from '@/lib/navigation/staff-tools';
@@ -27,14 +28,11 @@ import { loadStaffShell } from '@/lib/tenancy/staff-shell';
  * still see the key's status and check it while records are locked.
  */
 export default async function StaffLayout({ children }: { children: ReactNode }) {
-  const session = await getServerSession();
-  if (!session) redirect('/sign-in');
-
   const shell = await loadStaffShell();
   // A suspended or closed organisation is refused before the MFA and key
   // checks. The message does not name the status.
   if (shell.unavailable) return <OrganisationUnavailable canSwitch={shell.canSwitch} />;
-  const { organisations, activeOrganisationId } = shell;
+  const { session, organisations, activeOrganisationId } = shell;
 
   if (await membershipRequiresStaffMfa(session.user.id, activeOrganisationId)) {
     const h = await headers();
@@ -73,6 +71,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
       <main id="main-content" tabIndex={-1} className="flex-1">
         {locked ? <TenantKeyUnavailable status={locked} /> : children}
       </main>
+      <SessionWatch idleTimeoutMinutes={env.STAFF_IDLE_TIMEOUT_MINUTES} />
     </div>
   );
 }

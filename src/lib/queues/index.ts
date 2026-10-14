@@ -1,6 +1,7 @@
 import { Queue, type JobsOptions, type QueueOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
+import { malwareScanJobOptions } from '@/lib/queues/scan-policy';
 import { tenantJobSchema } from './tenant-job';
 
 /**
@@ -48,11 +49,15 @@ const defaultJobOptions: JobsOptions = {
   removeOnFail: { age: 7 * 24 * 3600 },
 };
 
-const queueOptions: QueueOptions = {
-  connection,
-  prefix: 'bp:queue',
-  defaultJobOptions,
-};
+function optionsFor(name: QueueName): QueueOptions {
+  return {
+    connection,
+    prefix: 'bp:queue',
+    // Scans outlive a short ClamAV gap. Other queues keep the short default.
+    defaultJobOptions:
+      name === QueueName.MalwareScan ? malwareScanJobOptions : defaultJobOptions,
+  };
+}
 
 const registry = new Map<QueueName, Queue>();
 
@@ -62,7 +67,7 @@ export function getQueue<T extends TenantJob = TenantJob>(
 ): Queue<T, unknown, string> {
   const existing = registry.get(name);
   if (existing) return existing as Queue<T, unknown, string>;
-  const queue = new Queue<T, unknown, string>(name, queueOptions);
+  const queue = new Queue<T, unknown, string>(name, optionsFor(name));
   registry.set(name, queue as Queue);
   return queue;
 }

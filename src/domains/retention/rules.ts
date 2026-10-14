@@ -20,6 +20,24 @@ export type RetentionResourceType = (typeof RETENTION_RESOURCE_TYPES)[number];
 export const RETENTION_ACTIONS = ['purge', 'anonymise'] as const;
 export type RetentionAction = (typeof RETENTION_ACTIONS)[number];
 
+/**
+ * Shortest period a policy may set. One day is not a disposal floor: a recorded
+ * matter must survive long enough for a human to correct a mistake. Jurisdiction
+ * schedules that require longer (or permanent) retention are a records-manager
+ * decision on top of this floor.
+ */
+export const MIN_RETENTION_DAYS = 30;
+
+/**
+ * After a purge tombstone (`deletedAt`), the row stays recoverable for this
+ * long. The hard-delete pass then removes it. Object bytes are removed at
+ * purge time; this grace covers the database row only.
+ */
+export const HARD_DELETE_GRACE_DAYS = 30;
+
+/** Stable replacement for personal text. The sweep key is `anonymisedAt`, not this string. */
+export const ANONYMISED_PLACEHOLDER = '[retained-anonymised]';
+
 export function isRetentionResourceType(value: string): value is RetentionResourceType {
   return (RETENTION_RESOURCE_TYPES as readonly string[]).includes(value);
 }
@@ -46,4 +64,39 @@ export function dueForRetention(input: {
 }): boolean {
   if (input.isHeld) return false;
   return isExpired(input.recordDate, input.retentionDays, input.now);
+}
+
+/** A non-empty disposal authority reference is the interim gate for official records. */
+export function hasDisposalAuthority(ref: string | null | undefined): boolean {
+  return typeof ref === 'string' && ref.trim().length > 0;
+}
+
+/**
+ * `decided` records that authorised humans have recorded an outcome. It is a
+ * process state, not a machine determination of Aboriginality.
+ */
+export function isOfficialApplicationStatus(status: string): boolean {
+  return status === 'decided';
+}
+
+/**
+ * Refuse disposal when the matter is an official record and the policy carries
+ * no disposal authority reference. A finalised decision or an issued
+ * certificate (anything other than a draft) is an official record even when
+ * the application status has not yet moved to `decided`.
+ */
+export function officialRecordBlocksDisposal(input: {
+  applicationStatus: string | null;
+  hasFinalisedDecision: boolean;
+  hasIssuedCertificate: boolean;
+  disposalAuthorityRef: string | null | undefined;
+}): boolean {
+  if (hasDisposalAuthority(input.disposalAuthorityRef)) return false;
+  if (
+    input.applicationStatus !== null &&
+    isOfficialApplicationStatus(input.applicationStatus)
+  ) {
+    return true;
+  }
+  return input.hasFinalisedDecision || input.hasIssuedCertificate;
 }

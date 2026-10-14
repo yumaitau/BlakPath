@@ -11,6 +11,7 @@ const config = [
   {
     ignores: [
       '.next/**',
+      'dist/**',
       'node_modules/**',
       'coverage/**',
       'src/db/migrations/**',
