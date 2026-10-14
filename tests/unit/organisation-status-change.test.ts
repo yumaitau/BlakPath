@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const selected: unknown[][] = [];
 let updates = 0;
+let rolledBack = 0;
 
 vi.mock('@/db/client', () => {
   function makeChain(next: () => unknown): unknown {
@@ -17,16 +18,25 @@ vi.mock('@/db/client', () => {
     return chain;
   }
 
-  return {
-    db: {
-      select: () => makeChain(() => selected.shift() ?? []),
-      update: () =>
-        makeChain(() => {
-          updates += 1;
-          return [];
-        }),
+  const db = {
+    select: () => makeChain(() => selected.shift() ?? []),
+    update: () =>
+      makeChain(() => {
+        updates += 1;
+        return [];
+      }),
+    // The status write and its audit share one transaction. A throw inside the
+    // callback stands for Postgres rolling both back.
+    transaction: async (fn: (tx: unknown) => unknown) => {
+      try {
+        return await fn(db);
+      } catch (error) {
+        rolledBack += 1;
+        throw error;
+      }
     },
   };
+  return { db };
 });
 
 vi.mock('@/domains/audit/service', () => ({
@@ -60,6 +70,7 @@ const base = {
 beforeEach(() => {
   selected.length = 0;
   updates = 0;
+  rolledBack = 0;
   vi.mocked(recordPlatformAudit).mockReset();
   vi.mocked(getOrganisationKey).mockReset();
   vi.mocked(recordPlatformAudit).mockResolvedValue({
@@ -114,13 +125,16 @@ describe('setOrganisationStatus', () => {
     expect(event).not.toHaveProperty('organisationId');
   });
 
-  it('restores the previous status when the platform audit append fails', async () => {
+  it('rolls the status back with the transaction when the platform audit append fails', async () => {
     selected.push([{ id: 'org-1', status: 'active' }]);
     vi.mocked(recordPlatformAudit).mockRejectedValueOnce(new Error('audit down'));
     await expect(setOrganisationStatus({ ...base, status: 'closed' })).rejects.toThrow(
       'audit down',
     );
-    expect(updates).toBe(2);
+    expect(updates).toBe(1);
+    expect(rolledBack).toBe(1);
+    // The audit joined the status write's transaction.
+    expect(vi.mocked(recordPlatformAudit).mock.calls[0]?.[1]).toBeDefined();
   });
 
   it('refuses to reactivate without a validated tenant key', async () => {
