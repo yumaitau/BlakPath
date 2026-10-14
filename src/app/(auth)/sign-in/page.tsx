@@ -9,14 +9,17 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { authClient, signIn } from '@/lib/auth/client';
+import { parseSignInReason, safeReturnTo, type SignInReason } from '@/lib/auth/return-to';
 import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /**
  * Email + password sign-in.
  *
- * On success we redirect to `/dashboard`. If the account has two-factor
- * enabled, the better-auth client's `onTwoFactorRedirect` hook takes over and
- * routes to `/sign-in/two-factor`, so we do not navigate ourselves in that
+ * On success we return to `returnTo` (the page an expired session was on, or an
+ * invitation link) when it is a safe in-app path, else `/dashboard`. If the
+ * account has two-factor enabled, the better-auth client's
+ * `onTwoFactorRedirect` hook takes over and routes to `/sign-in/two-factor`
+ * (carrying `returnTo`), so we do not navigate ourselves in that
  * case — we simply keep the button in its pending state until the redirect
  * happens.
  *
@@ -27,16 +30,28 @@ import { useHydrated } from '@/lib/hooks/use-hydrated';
 const GENERIC_ERROR =
   'Those sign-in details didn’t match. Check your email and password and try again.';
 
+const REASON_NOTICE: Record<SignInReason, { title: string; body: string }> = {
+  expired: {
+    title: 'Your session has ended',
+    body: 'Sign in again to continue where you left off.',
+  },
+  idle: {
+    title: 'You were signed out after a period of inactivity',
+    body: 'Sign in again to continue where you left off.',
+  },
+};
+
+function readReason(): SignInReason | null {
+  return parseSignInReason(new URLSearchParams(window.location.search).get('reason'));
+}
+
 /** One message for every SSO failure: nothing about bindings or accounts leaks. */
 const SSO_ERROR =
   'Single sign-on isn’t available for this account right now. Sign in with your password instead.';
 
-/** Keep invitation sign-in continuity without accepting arbitrary redirect URLs. */
+/** Return to the requested in-app page without accepting arbitrary redirect URLs. */
 function safeReturnPath(): string {
-  const requested = new URLSearchParams(window.location.search).get('returnTo');
-  return requested && /^\/join\/[A-Za-z0-9_-]{20,200}$/.test(requested)
-    ? requested
-    : '/dashboard';
+  return safeReturnTo(new URLSearchParams(window.location.search).get('returnTo'));
 }
 
 const noSubscription = () => () => {};
@@ -65,6 +80,11 @@ export default function SignInPage() {
   useEffect(() => {
     if (error) emailRef.current?.focus();
   }, [error]);
+
+  // The query string is not available during prerender: the server snapshot
+  // is "no notice" and the browser fills it in after hydration.
+  const reason = useSyncExternalStore(noSubscription, readReason, () => null);
+  const notice = reason ? REASON_NOTICE[reason] : null;
 
   const ssoFailed = useSsoFailed();
   const shownError = error ?? (ssoFailed ? SSO_ERROR : null);
@@ -131,6 +151,12 @@ export default function SignInPage() {
 
   return (
     <AuthCard title="Sign in" subtitle="Sign in to your organisation to continue.">
+      {notice && !shownError ? (
+        <Alert tone="info" title={notice.title}>
+          {notice.body}
+        </Alert>
+      ) : null}
+
       {shownError ? (
         <Alert tone="destructive" role="alert" title="We couldn’t sign you in">
           {shownError}

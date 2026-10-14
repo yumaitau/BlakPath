@@ -79,8 +79,8 @@ rewritten with them. Two records are kept:
 
 - `audit_integrity_checkpoints` is an in-database note of a verified period
   (`organisationId`, `periodStart`, `periodEnd`, `eventCount`, `startHash`,
-  `endHash`, `verifiedAt` / `verifiedBy`). It is useful to operators. It is not
-  the trust root.
+  `endHash`, `verifiedAt` / `verifiedBy`). It bounds the scheduled re-walk. It
+  is not the trust root.
 - Once a day the worker writes one **signed chain-head anchor** per chain
   (each active organisation, plus the platform chain) to the
   `S3_BUCKET_AUDIT_ANCHORS` bucket. The object is
@@ -89,11 +89,30 @@ rewritten with them. Two records are kept:
   Object Lock **compliance** retention and a KMS signature
   (`AUDIT_ANCHOR_SIGNING_KEY_ID`). Local development signs with HMAC.
 
-**Verification** re-walks the chain and then requires every stored anchor's
-head to still be the hash at that event count. A shorter chain, or a chain
-whose hashes were recomputed, fails. The worker raises `audit_integrity_failure`
-and does not publish a replacement anchor. Authorised users can also trigger
-verification via `audit:verify` (`docs/authorization-matrix.md`).
+**Verification** reads the chain in keyset pages ordered by `(timestamp, id)`,
+the same total order used when appending. Only one page is resident, so a
+multi-million-event chain stays inside a fixed memory ceiling. Each `hash` is
+recomputed and every `prevHash` must link to the previous event.
+
+- The scheduled job resumes after the latest checkpoint for that chain instead
+  of re-walking from genesis. It re-checks the checkpoint's tip (it must still
+  exist and still recompute), then verifies only events strictly after it.
+- It then compares the whole chain to every stored anchor without loading it:
+  one count gives the absolute chain length through the verified tip, and one
+  ranked query reads the stored hash at each anchored position. A shorter
+  chain, or a chain whose hashes were recomputed, fails even when a forged
+  checkpoint was appended for the rewritten tip.
+- Only a run that passes both checks inserts the next checkpoint. A divergent
+  or anchor-mismatched chain writes nothing, logs `signal=audit_integrity_failure`
+  with `alert=true`, and publishes no replacement anchor. An unchanged tip keeps
+  the existing checkpoint as the resume point (no zero-length checkpoint).
+- `infra/aws/operational-alerts.example.yaml` turns that signal into the
+  `AuditIntegrityFailures` metric and the `blakpath-audit-integrity-failure`
+  alarm.
+- Incremental runs do not recompute rows before the latest checkpoint. An
+  in-place edit of an old row that leaves its stored `hash` untouched is caught
+  only by a full walk: `verifyChain` still walks a full chain, or an explicit
+  slice, for restore drills (`scripts/verify-restored-data.ts`).
 
 The first anchor is the baseline. Take it before the organisation records
 production decisions. Later anchors must stay monotonic and must link to the

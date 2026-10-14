@@ -3,6 +3,7 @@ import type { Job } from 'bullmq';
 import type { Logger } from 'pino';
 import { QueueName, type TenantJob } from '@/lib/queues';
 import { processEvidenceScan } from '@/domains/evidence';
+import { sweepEvidenceScans } from '@/domains/evidence/sweep';
 import { processWebhookDelivery } from '@/domains/webhooks';
 import { processExport } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
@@ -20,11 +21,8 @@ import {
   runBackfillBatch,
 } from '@/lib/encryption/backfill';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
-import { createCheckpoint, verifyChain } from '@/domains/audit';
-import { settleAuditChain } from '@/domains/audit/anchor';
-import { createS3AuditAnchorStore } from '@/domains/audit/anchor-s3';
-import { loadAnchorSigner } from '@/domains/audit/anchor-sign';
 import { processOrganisationKeyRewrap } from '@/domains/organisation-keys/rewrap-job';
+import { isPlatformAuditJob, processAuditVerifyJob } from './audit-verify';
 import { acceptTenantJob } from './tenant-job';
 
 /**
@@ -62,6 +60,14 @@ export type ProcessorFn = (job: Job<TenantJob>, logger: Logger) => Promise<void>
  */
 const malwareScanProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
+  if (job.name === 'sweep') {
+    const result = await sweepEvidenceScans({ organisationId, correlationId });
+    logger.info(
+      { jobId: job.id, organisationId, ...result },
+      'evidence scan sweep finished',
+    );
+    return;
+  }
   const evidenceId = (job.data as { evidenceId?: unknown }).evidenceId;
   if (typeof evidenceId !== 'string' || evidenceId.length === 0) {
     // A malformed payload is a bug, not a transient fault — do not retry forever.
@@ -178,54 +184,22 @@ const notificationProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Audit-verify processor. Re-walks one chain and compares it to the signed
- * heads stored outside the database. A clean chain is a NORMAL result and must
- * not throw (throwing would trigger pointless retries and alarm noise). A
- * store outage still throws so the anchor write can be retried.
+ * Audit-verify processor. Pages the tenant or platform chain from the latest
+ * checkpoint, compares it to the signed heads stored outside the database, and
+ * checkpoints only a chain that passes both. Divergence or an anchor mismatch
+ * emits `audit_integrity_failure` (metric + alarm) and does not throw: the
+ * chain will not heal on retry. A store outage throws so the job retries.
  */
 const auditVerifyProcessor: ProcessorFn = async (job, logger) => {
   const data = job.data as TenantJob & { platformChain?: boolean };
-  const platformChain = data.platformChain === true;
-  const organisationId = platformChain ? null : data.organisationId;
-  const { correlationId } = data;
-  const result = await verifyChain(organisationId);
-  const outcome = await settleAuditChain({
-    organisationId,
-    chain: result,
-    store: createS3AuditAnchorStore(),
-    signer: loadAnchorSigner(),
-  });
-  if (outcome.status === 'divergence' || outcome.status === 'anchor_mismatch') {
-    // Integrity failure is a serious, actionable signal — log it loudly, but do
-    // not throw: the chain will not "heal" on retry.
-    logger.error(
-      {
-        signal: 'audit_integrity_failure',
-        alert: true,
-        jobId: job.id,
-        organisationId,
-        correlationId,
-        eventId: result.divergence?.eventId ?? null,
-        index: result.divergence?.index ?? null,
-        reason: result.divergence?.reason ?? outcome.reason,
-        eventCount: result.eventCount,
-        anchorDay: outcome.day,
-      },
-      'audit chain verification FAILED',
-    );
-    return;
-  }
-  if (outcome.status === 'anchored') {
-    await createCheckpoint({ organisationId });
-  }
-  logger.info(
+  await processAuditVerifyJob(
     {
-      jobId: job.id,
-      organisationId,
-      eventCount: result.eventCount,
-      anchor: outcome.status,
+      organisationId: data.organisationId,
+      correlationId: data.correlationId,
+      platformChain: isPlatformAuditJob(job.queueName, data),
+      ...(job.id !== undefined ? { jobId: job.id } : {}),
     },
-    'audit chain verified clean',
+    logger,
   );
 };
 
@@ -361,6 +335,23 @@ function withActiveTenant(processor: ProcessorFn): ProcessorFn {
 }
 
 /**
+ * The scheduler's platform audit job carries the `platform` sentinel, not a
+ * tenant id, so the active-organisation gate would always drop it. Route only
+ * that exact payload to the null-organisation chain; everything else on the
+ * queue still goes through `withActiveTenant`.
+ */
+function withAuditChain(processor: ProcessorFn): ProcessorFn {
+  const tenant = withActiveTenant(processor);
+  return async (job, logger) => {
+    if (isPlatformAuditJob(job.queueName, job.data)) {
+      await processor(job, logger);
+      return;
+    }
+    await tenant(job, logger);
+  };
+}
+
+/**
  * Map of queue name -> processor. The bootstrap creates one BullMQ Worker per
  * entry, so this registry is the single source of truth for what the worker
  * runs. Register processors through `withActiveTenant` — a raw processor would
@@ -370,7 +361,7 @@ export const PROCESSORS: Readonly<Record<QueueName, ProcessorFn>> = {
   [QueueName.MalwareScan]: withActiveTenant(malwareScanProcessor),
   [QueueName.Email]: withActiveTenant(emailProcessor),
   [QueueName.Notification]: withActiveTenant(notificationProcessor),
-  [QueueName.AuditVerify]: withActiveTenant(auditVerifyProcessor),
+  [QueueName.AuditVerify]: withAuditChain(auditVerifyProcessor),
   [QueueName.Retention]: withActiveTenant(retentionProcessor),
   [QueueName.Export]: withActiveTenant(exportProcessor),
   [QueueName.Webhook]: withActiveTenant(webhookProcessor),
