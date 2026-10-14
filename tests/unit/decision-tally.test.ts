@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DECISION_OUTCOMES,
   canFinalise,
+  canProposeOnCase,
   canVote,
   canWithdraw,
   indicativeResult,
@@ -19,6 +20,23 @@ function votes(...choices: VoteChoice[]) {
 }
 
 describe('decision status rules', () => {
+  it('proposes only once the case is ready for or in committee', () => {
+    expect(canProposeOnCase('ready_for_committee')).toBe(true);
+    expect(canProposeOnCase('in_committee')).toBe(true);
+    for (const status of [
+      'draft',
+      'submitted',
+      'intake_review',
+      'awaiting_evidence',
+      'in_review',
+      'decided',
+      'withdrawn',
+      'closed',
+    ]) {
+      expect(canProposeOnCase(status)).toBe(false);
+    }
+  });
+
   it('only a proposed decision can be voted/finalised/withdrawn', () => {
     expect(canVote('proposed')).toBe(true);
     expect(canFinalise('proposed')).toBe(true);

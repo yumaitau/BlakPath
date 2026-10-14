@@ -1,14 +1,19 @@
 import { Queue, type JobsOptions, type QueueOptions } from 'bullmq';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
+import { malwareScanJobOptions } from '@/lib/queues/scan-policy';
+import { tenantJobSchema } from './tenant-job';
 
 /**
  * BullMQ queue factory.
  *
  * Every background job operates on behalf of exactly one organisation. Its
- * payload MUST carry `organisationId` so the worker can establish a verified
- * TenantContext before touching data — a job with no tenant is rejected at
- * enqueue time. Job payloads must never embed applicant PII or evidence
+ * payload MUST carry `organisationId`. The shape is checked at enqueue and
+ * parsed again when the worker consumes the job, which also checks that the
+ * organisation is active before any tenant scope is opened. Payloads carry
+ * ids only (`organisationId`, `correlationId`, an optional `cursor`, and
+ * fields ending in `Id`). Field contents stay in the database under the
+ * tenant key. Job payloads must never embed applicant PII or evidence
  * content; pass opaque ids and let the worker fetch tenant-scoped rows.
  */
 
@@ -22,6 +27,9 @@ export enum QueueName {
   Export = 'export',
   Webhook = 'webhook',
   Reminder = 'reminder',
+  EncryptionBackfill = 'encryption-backfill',
+  KeyHealth = 'key-health',
+  KeyRewrap = 'key-rewrap',
 }
 
 /** Base shape every job payload must satisfy: it is bound to one tenant. */
@@ -41,11 +49,15 @@ const defaultJobOptions: JobsOptions = {
   removeOnFail: { age: 7 * 24 * 3600 },
 };
 
-const queueOptions: QueueOptions = {
-  connection,
-  prefix: 'bp:queue',
-  defaultJobOptions,
-};
+function optionsFor(name: QueueName): QueueOptions {
+  return {
+    connection,
+    prefix: 'bp:queue',
+    // Scans outlive a short ClamAV gap. Other queues keep the short default.
+    defaultJobOptions:
+      name === QueueName.MalwareScan ? malwareScanJobOptions : defaultJobOptions,
+  };
+}
 
 const registry = new Map<QueueName, Queue>();
 
@@ -55,7 +67,7 @@ export function getQueue<T extends TenantJob = TenantJob>(
 ): Queue<T, unknown, string> {
   const existing = registry.get(name);
   if (existing) return existing as Queue<T, unknown, string>;
-  const queue = new Queue<T, unknown, string>(name, queueOptions);
+  const queue = new Queue<T, unknown, string>(name, optionsFor(name));
   registry.set(name, queue as Queue);
   return queue;
 }
@@ -66,15 +78,22 @@ export function getQueue<T extends TenantJob = TenantJob>(
  * @throws when `organisationId` (or `correlationId`) is missing so a
  * mis-constructed job can never run without a tenant context.
  */
+const JOB_FIELD = /^(organisationId|correlationId|cursor)$|^[A-Za-z]+Id$/;
+
 export function assertTenantJob<T extends TenantJob>(payload: T): T {
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Job payload must be an object');
+  const parsed = tenantJobSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(
+      'Job payload is missing a valid organisationId or correlationId — refusing to enqueue',
+    );
   }
-  if (!payload.organisationId) {
-    throw new Error('Job payload is missing organisationId — refusing to enqueue');
-  }
-  if (!payload.correlationId) {
-    throw new Error('Job payload is missing correlationId — refusing to enqueue');
+  for (const [key, value] of Object.entries(payload)) {
+    if (!JOB_FIELD.test(key)) {
+      throw new Error(`Job payload field ${key} is not an id — refusing to enqueue`);
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new Error(`Job payload field ${key} must be a non-empty string`);
+    }
   }
   return payload;
 }
@@ -103,7 +122,9 @@ export async function addJob<T extends TenantJob>(
   // `ExtractNameType` for the job name resolves to `string` rather than an
   // unresolved conditional over the generic parameter.
   const queue = getQueue(name);
-  const job = await queue.add(jobName, safe, options);
+  // BullMQ refuses custom ids containing `:` (it reserves them for repeat jobs).
+  const jobId = options.jobId?.replaceAll(':', '-');
+  const job = await queue.add(jobName, safe, jobId ? { ...options, jobId } : options);
   logger.debug(
     {
       queue: name,

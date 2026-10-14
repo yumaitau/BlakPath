@@ -1,5 +1,5 @@
 {
-  "id": "4d329507-a004-4d1d-8657-2abaf16e53bf",
+  "id": "b76854e1-4ba5-4e09-97ec-9bce58b81107",
   "prevId": "e1a6652d-3756-465e-ac7c-9ed3d84da830",
   "version": "7",
   "dialect": "postgresql",
@@ -193,6 +193,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "aaguid": {
+          "name": "aaguid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -379,6 +385,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "verified": {
+          "name": "verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "failed_verification_count": {
+          "name": "failed_verification_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -453,6 +479,13 @@
         },
         "is_platform_operator": {
           "name": "is_platform_operator",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "two_factor_enabled": {
+          "name": "two_factor_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -5158,171 +5191,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.meeting_attendance": {
-      "name": "meeting_attendance",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organisation_id": {
-          "name": "organisation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "meeting_id": {
-          "name": "meeting_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "present": {
-          "name": "present",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "attested_by_user_id": {
-          "name": "attested_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "meeting_attendance_org_meeting_idx": {
-          "name": "meeting_attendance_org_meeting_idx",
-          "columns": [
-            {
-              "expression": "organisation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "meeting_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "meeting_attendance_meeting_user_unique": {
-          "name": "meeting_attendance_meeting_user_unique",
-          "columns": [
-            {
-              "expression": "meeting_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "meeting_attendance_organisation_id_organisations_id_fk": {
-          "name": "meeting_attendance_organisation_id_organisations_id_fk",
-          "tableFrom": "meeting_attendance",
-          "tableTo": "organisations",
-          "columnsFrom": [
-            "organisation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "meeting_attendance_meeting_id_meetings_id_fk": {
-          "name": "meeting_attendance_meeting_id_meetings_id_fk",
-          "tableFrom": "meeting_attendance",
-          "tableTo": "meetings",
-          "columnsFrom": [
-            "meeting_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "meeting_attendance_user_id_users_id_fk": {
-          "name": "meeting_attendance_user_id_users_id_fk",
-          "tableFrom": "meeting_attendance",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "meeting_attendance_attested_by_user_id_users_id_fk": {
-          "name": "meeting_attendance_attested_by_user_id_users_id_fk",
-          "tableFrom": "meeting_attendance",
-          "tableTo": "users",
-          "columnsFrom": [
-            "attested_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.meetings": {
       "name": "meetings",
       "schema": "",
@@ -5374,48 +5242,6 @@
         "notes": {
           "name": "notes",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "minutes": {
-          "name": "minutes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "minutes_recorded_by_user_id": {
-          "name": "minutes_recorded_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "minutes_recorded_at": {
-          "name": "minutes_recorded_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "quorum_present": {
-          "name": "quorum_present",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "quorum_note": {
-          "name": "quorum_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "quorum_attested_by_user_id": {
-          "name": "quorum_attested_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "quorum_attested_at": {
-          "name": "quorum_attested_at",
-          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -5509,32 +5335,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "meetings_minutes_recorded_by_user_id_users_id_fk": {
-          "name": "meetings_minutes_recorded_by_user_id_users_id_fk",
-          "tableFrom": "meetings",
-          "tableTo": "users",
-          "columnsFrom": [
-            "minutes_recorded_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "meetings_quorum_attested_by_user_id_users_id_fk": {
-          "name": "meetings_quorum_attested_by_user_id_users_id_fk",
-          "tableFrom": "meetings",
-          "tableTo": "users",
-          "columnsFrom": [
-            "quorum_attested_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "meetings_created_by_user_id_users_id_fk": {

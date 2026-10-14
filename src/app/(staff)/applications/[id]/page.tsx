@@ -12,6 +12,19 @@ import {
   type PanelCertificate,
   type PanelDecision,
 } from '@/components/certificates/certificate-panel';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
+import {
+  CorrespondencePanel,
+  type CorrespondenceCertificateOption,
+  type CorrespondenceDecisionOption,
+  type CorrespondenceEvidenceOption,
+  type CorrespondenceLetter,
+  type CorrespondenceTemplateOption,
+} from '@/components/correspondence/correspondence-panel';
+import {
+  CaseFormResponses,
+  type CaseFormResponseView,
+} from '@/components/forms/case-form-responses';
 import {
   availableActions,
   getApplicationCaseRecord,
@@ -20,13 +33,21 @@ import {
 } from '@/domains/applications';
 import { listCertificates } from '@/domains/certificates';
 import {
+  CORRESPONDENCE_KINDS,
+  listCorrespondence,
+  listTemplates,
+  maySendKind,
+} from '@/domains/correspondence';
+import {
   actorConflictedOnApplication,
   getDecisionWithVotes,
   listDecisions,
 } from '@/domains/decisions';
 import { listMeetingsForApplication } from '@/domains/meetings';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
-import { listReviewsForApplication } from '@/domains/reviews';
+import { listResponsesForApplication } from '@/domains/forms';
+import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
+import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
@@ -37,6 +58,16 @@ interface LoadedData {
   governance: CaseGovernanceWorkspaceProps;
   decisions: PanelDecision[];
   certificates: PanelCertificate[];
+  correspondence: {
+    allowedKinds: string[];
+    canManageTemplates: boolean;
+    letters: CorrespondenceLetter[];
+    templates: CorrespondenceTemplateOption[];
+    decisions: CorrespondenceDecisionOption[];
+    evidenceRequests: CorrespondenceEvidenceOption[];
+    certificates: CorrespondenceCertificateOption[];
+  };
+  formResponses: CaseFormResponseView[];
 }
 
 const actionLabels: Record<string, string> = {
@@ -62,17 +93,46 @@ export default async function ApplicationDetailPage({
   let data: LoadedData | null = null;
 
   try {
+    // A malformed id cannot exist: refuse it like any unreadable record.
+    if (!isRecordId(id)) throw new AuthorizationError('POLICY_DENIED');
     data = await withRequestTenant(async (ctx) => {
-      const [record, evidence, evidenceRequests, reviews, decisions, certificates] =
-        await Promise.all([
-          getApplicationCaseRecord(id),
-          listForApplication(id),
-          listRequestsForApplication(id),
-          listReviewsForApplication(id),
-          listDecisions(id),
-          listCertificates(id),
-        ]);
+      const [
+        record,
+        evidence,
+        evidenceRequests,
+        reviews,
+        decisions,
+        certificates,
+        formResponses,
+      ] = await Promise.all([
+        getApplicationCaseRecord(id),
+        listForApplication(id),
+        listRequestsForApplication(id),
+        listReviewsForApplication(id),
+        listDecisions(id),
+        listCertificates(id),
+        listResponsesForApplication(id),
+      ]);
       const subject = subjectFromContext(ctx);
+      const allowedKinds = CORRESPONDENCE_KINDS.filter((kind) =>
+        maySendKind(kind, subject.permissions),
+      );
+      const canManageTemplates = hasPermission(
+        subject,
+        'correspondence:manage-templates',
+      );
+      const [letters, templates] = await Promise.all([
+        hasAny(subject, [
+          'correspondence:send',
+          'application:read-any',
+          'application:read-assigned',
+        ])
+          ? listCorrespondence(id)
+          : Promise.resolve([]),
+        allowedKinds.length > 0 || canManageTemplates
+          ? listTemplates()
+          : Promise.resolve([]),
+      ]);
       const application = record.application;
       const [decisionDetails, actorConflicted, agendaMeetings] = await Promise.all([
         Promise.all(decisions.map((decision) => getDecisionWithVotes(decision.id))),
@@ -102,6 +162,8 @@ export default async function ApplicationDetailPage({
             classification: item.classification,
             sizeBytes: item.sizeBytes,
             createdAt: item.createdAt.toISOString(),
+            receiptChannel: item.receiptChannel,
+            receivedOn: item.receivedOn,
           })),
           evidenceRequests: evidenceRequests.map((request) => ({
             id: request.id,
@@ -128,25 +190,41 @@ export default async function ApplicationDetailPage({
             assign: hasPermission(subject, 'application:assign'),
             requestEvidence: hasPermission(subject, 'evidence:request'),
             downloadEvidence: hasPermission(subject, 'evidence:download'),
+            classifyEvidence: hasPermission(subject, 'evidence:classify'),
             addNote: hasAny(subject, [
               'application:read-any',
               'application:read-assigned',
               'application:update-intake',
             ]),
             uploadEvidence:
-              application.applicantUserId === ctx.userId &&
-              hasPermission(subject, 'evidence:upload-own'),
+              (application.applicantUserId === ctx.userId &&
+                hasPermission(subject, 'evidence:upload-own')) ||
+              hasPermission(subject, 'evidence:upload-on-behalf'),
+            // Receipt fields when this is not the applicant uploading their own file.
+            uploadOnBehalf:
+              hasPermission(subject, 'evidence:upload-on-behalf') &&
+              !(
+                application.applicantUserId === ctx.userId &&
+                hasPermission(subject, 'evidence:upload-own')
+              ),
           },
         },
         governance: {
           applicationId: id,
           applicationStatus: application.status,
-          reviews: reviews.map((review) => ({
-            id: review.id,
-            status: review.status,
-            content: review.content,
-            createdAt: review.createdAt.toISOString(),
-          })),
+          reviews: await Promise.all(
+            reviews.map(async (review) => ({
+              id: review.id,
+              status: review.status,
+              content: review.content,
+              createdAt: review.createdAt.toISOString(),
+              comments: (await listReviewComments(review.id)).map((comment) => ({
+                id: comment.id,
+                body: comment.body,
+                createdAt: comment.createdAt.toISOString(),
+              })),
+            })),
+          ),
           decisions: decisionDetails.map(({ decision, votes, tally }) => ({
             id: decision.id,
             status: decision.status,
@@ -184,27 +262,76 @@ export default async function ApplicationDetailPage({
           decisionId: certificate.decisionId,
           revokedReason: certificate.revokedReason,
         })),
+        correspondence: {
+          allowedKinds: [...allowedKinds],
+          canManageTemplates,
+          letters: letters.map((letter) => ({
+            id: letter.id,
+            kind: letter.kind,
+            channel: letter.channel,
+            status: letter.status,
+            subject: letter.renderedSubject ?? letter.subjectTemplate,
+            body: letter.renderedBody,
+            emailText: letter.emailText,
+            sentAt: letter.sentAt?.toISOString() ?? null,
+            createdAt: letter.createdAt.toISOString(),
+            recipientEmail: letter.recipientEmail,
+          })),
+          templates: templates
+            .filter((template) => template.active)
+            .map((template) => ({
+              id: template.id,
+              name: template.name,
+              kind: template.kind,
+            })),
+          decisions: decisions.map((decision) => ({
+            id: decision.id,
+            status: decision.status,
+            finalOutcome: decision.finalOutcome,
+          })),
+          evidenceRequests: evidenceRequests.map((request) => ({
+            id: request.id,
+            description: request.description,
+            status: request.status,
+            dueAt: request.dueAt?.toISOString() ?? null,
+          })),
+          certificates: certificates.map((certificate) => ({
+            id: certificate.id,
+            reference: certificate.reference,
+            status: certificate.status,
+          })),
+        },
+        formResponses: formResponses.map((response) => ({
+          id: response.id,
+          formId: response.formId,
+          formTitle: response.formTitle,
+          fields: response.fields,
+          respondentName: response.respondentName,
+          respondentEmail: response.respondentEmail,
+          submittedAt: response.submittedAt.toISOString(),
+          answers: response.answers,
+        })),
       };
     });
-  } catch {
+  } catch (error) {
+    // Missing and forbidden are deliberately indistinguishable (same 403
+    // state); expired sessions redirect and outages reach the 500 page.
+    await handlePageError(error);
     data = null;
   }
 
   if (!data) {
     return (
-      <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
-        <h1 className="text-xl font-semibold">Application unavailable</h1>
-        <p className="text-muted-foreground mt-2">
+      <ForbiddenNotice
+        title="Application unavailable"
+        backHref="/applications"
+        backLabel="Return to applications"
+      >
+        <p>
           This application does not exist, is outside your organisation, or your role does
           not allow you to view it.
         </p>
-        <Link
-          className="text-primary mt-4 inline-block font-semibold underline-offset-4 hover:underline"
-          href="/applications"
-        >
-          Return to applications
-        </Link>
-      </div>
+      </ForbiddenNotice>
     );
   }
 
@@ -221,6 +348,8 @@ export default async function ApplicationDetailPage({
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">{data.reference}</h1>
       </header>
 
+      <CaseFormResponses responses={data.formResponses} />
+
       <ApplicationCaseWorkspace
         key={`case:${data.workspace.status}`}
         {...data.workspace}
@@ -236,6 +365,8 @@ export default async function ApplicationDetailPage({
         decisions={data.decisions}
         certificates={data.certificates}
       />
+
+      <CorrespondencePanel applicationId={id} {...data.correspondence} />
     </div>
   );
 }

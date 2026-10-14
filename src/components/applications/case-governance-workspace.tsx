@@ -4,16 +4,24 @@ import { CheckCircle2, CircleDot, LockKeyhole, Vote } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+
+interface GovernanceComment {
+  id: string;
+  body: string;
+  createdAt: string;
+}
 
 interface GovernanceReview {
   id: string;
   status: string;
   content: string;
   createdAt: string;
+  comments: GovernanceComment[];
 }
 
 interface GovernanceDecision {
@@ -101,6 +109,13 @@ function label(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function displayDate(value: string): string {
+  return new Intl.DateTimeFormat('en-AU', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
+
 const outcomeOptions = [
   { value: 'confirmed', label: 'Confirmed' },
   { value: 'not_confirmed', label: 'Not confirmed' },
@@ -123,6 +138,7 @@ export function CaseGovernanceWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [reviewContent, setReviewContent] = useState('');
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [proposedOutcome, setProposedOutcome] = useState('deferred');
   const [rationale, setRationale] = useState('');
   const [voteChoice, setVoteChoice] = useState('abstain');
@@ -150,10 +166,12 @@ export function CaseGovernanceWorkspace({
         body: JSON.stringify(body),
       });
       if (!response.ok) {
+        const conflict = await readConflictMessage(response);
         setError(
-          response.status === 403
-            ? 'Your role does not allow that action, or the record is no longer available.'
-            : 'That record could not be saved. Refresh the case and try again.',
+          conflict ??
+            (response.status === 403
+              ? 'Your role does not allow that action, or the record is no longer available.'
+              : 'That record could not be saved. Refresh the case and try again.'),
         );
         return false;
       }
@@ -174,7 +192,7 @@ export function CaseGovernanceWorkspace({
   const canProposeDecision =
     permissions.proposeDecision &&
     !actorConflicted &&
-    applicationStatus === 'in_committee' &&
+    ['ready_for_committee', 'in_committee'].includes(applicationStatus) &&
     !decisions.some((decision) => decision.status === 'proposed');
   const meetingRequired = Boolean(lockedMeetingId) || agendaMeetings.length > 0;
   const meetingPayload = lockedMeetingId || meetingId || undefined;
@@ -212,6 +230,11 @@ export function CaseGovernanceWorkspace({
             <h3 id="reviews-heading" className="text-lg font-semibold">
               Staff reviews
             </h3>
+            {permissions.createReview ? (
+              <p className="text-muted-foreground mt-2 text-sm">
+                Comments can be added to a draft review. They stay part of the human record.
+              </p>
+            ) : null}
             {reviews.length === 0 ? (
               <p className="text-muted-foreground mt-2 text-sm">
                 No review has been recorded. Once the case reaches review, an authorised
@@ -258,6 +281,68 @@ export function CaseGovernanceWorkspace({
                       ) : null}
                     </div>
                     <p className="mt-3 text-sm whitespace-pre-wrap">{review.content}</p>
+                    {review.comments.length === 0 ? (
+                      <p className="text-muted-foreground mt-3 text-sm">
+                        No comments on this review.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2" aria-label="Review comments">
+                        {review.comments.map((comment) => (
+                          <li key={comment.id} className="text-sm">
+                            <p className="whitespace-pre-wrap">{comment.body}</p>
+                            <p className="text-muted-foreground mt-1 text-xs">
+                              {displayDate(comment.createdAt)}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {permissions.createReview && review.status === 'draft' ? (
+                      <form
+                        className="mt-4"
+                        onSubmit={async (event) => {
+                          event.preventDefault();
+                          const saved = await send(
+                            `comment:${review.id}`,
+                            `/api/reviews/${review.id}/comments`,
+                            'POST',
+                            { body: commentDrafts[review.id] ?? '' },
+                            'Comment added to the draft review.',
+                          );
+                          if (saved) {
+                            setCommentDrafts((current) => ({
+                              ...current,
+                              [review.id]: '',
+                            }));
+                          }
+                        }}
+                      >
+                        <Label htmlFor={`review-comment-${review.id}`}>
+                          Comment on this review
+                        </Label>
+                        <Textarea
+                          id={`review-comment-${review.id}`}
+                          className="mt-2"
+                          value={commentDrafts[review.id] ?? ''}
+                          maxLength={5000}
+                          required
+                          onChange={(event) =>
+                            setCommentDrafts((current) => ({
+                              ...current,
+                              [review.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <Button
+                          className="mt-3"
+                          type="submit"
+                          size="sm"
+                          disabled={busy !== null}
+                        >
+                          {busy === `comment:${review.id}` ? 'Adding…' : 'Add comment'}
+                        </Button>
+                      </form>
+                    ) : null}
                   </li>
                 ))}
               </ul>

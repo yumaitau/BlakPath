@@ -235,8 +235,8 @@ export function MeetingCalendar({
       try {
         const res = await fetch('/api/calendar/import', {
           method: 'POST',
-          headers: { 'Content-Type': 'text/calendar' },
-          body: text,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ics: text }),
         });
         if (!res.ok) {
           setImportMessage('Import failed. Check the file and your permissions.');

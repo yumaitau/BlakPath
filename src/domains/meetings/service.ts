@@ -22,6 +22,7 @@ import {
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { transitionApplication } from '@/domains/applications';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { logger } from '@/lib/observability/logger';
 import { buildIcs, parseIcs, type IcsEvent } from '@/lib/calendar/ics';
 import {
@@ -143,31 +144,36 @@ export async function createMeeting(rawInput: CreateMeetingInput): Promise<Meeti
 
   const input = createMeetingSchema.parse(rawInput);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(meetings)
-    .values(
-      scope.insertValues({
-        title: input.title,
-        scheduledStart: input.scheduledStart,
-        scheduledEnd: input.scheduledEnd ?? null,
-        location: input.location ?? null,
-        notes: input.notes ?? null,
-        createdByUserId: ctx.userId,
-        status: 'scheduled',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'meeting');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(meetings)
+      .values(
+        scope.insertValues({
+          title: input.title,
+          scheduledStart: input.scheduledStart,
+          scheduledEnd: input.scheduledEnd ?? null,
+          location: input.location ?? null,
+          notes: input.notes ?? null,
+          createdByUserId: ctx.userId,
+          status: 'scheduled',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'meeting');
 
-  await recordAudit({
-    action: 'meeting.created',
-    resourceType: 'meeting',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { title: row.title }, allow: ['title'] },
+    await recordAudit(
+      {
+        action: 'meeting.created',
+        resourceType: 'meeting',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { title: row.title }, allow: ['title'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Cancel a scheduled meeting. */
@@ -179,21 +185,26 @@ export async function cancelMeeting(meetingId: string): Promise<MeetingRow> {
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(meetings)
-    .set({ status: 'cancelled' })
-    .where(scope.where(meetings.organisationId, eq(meetings.id, meetingId)))
-    .returning();
-  const row = must(updated[0], 'meeting');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(meetings)
+      .set({ status: 'cancelled' })
+      .where(scope.where(meetings.organisationId, eq(meetings.id, meetingId)))
+      .returning();
+    const row = must(updated[0], 'meeting');
 
-  await recordAudit({
-    action: 'meeting.cancelled',
-    resourceType: 'meeting',
-    resourceId: meetingId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'meeting.cancelled',
+        resourceType: 'meeting',
+        resourceId: meetingId,
+        result: 'success',
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** One meeting the actor may read. Missing and out-of-tenant look the same. */
@@ -262,37 +273,49 @@ export async function addAgendaItem(
     position = last[0] ? last[0].position + 1 : 0;
   }
 
-  const inserted = await scope.db
-    .insert(meetingAgendaItems)
-    .values(
-      scope.insertValues({
-        meetingId,
-        applicationId: input.applicationId,
-        position,
-        notes: input.notes ?? null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'agenda item');
 
-  await recordAudit({
-    action: 'meeting.agenda_changed',
-    resourceType: 'agenda_item',
-    resourceId: row.id,
-    result: 'success',
-    after: {
-      data: { meetingId, applicationId: input.applicationId },
-      allow: ['meetingId', 'applicationId'],
-    },
+  const row = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(meetingAgendaItems)
+      .values(
+        scope.insertValues({
+          meetingId,
+          applicationId: input.applicationId,
+          position,
+          notes: input.notes ?? null,
+        }),
+      )
+      .returning();
+    const insertedRow = must(inserted[0], 'agenda item');
+
+    await recordAudit(
+      {
+        action: 'meeting.agenda_changed',
+        resourceType: 'agenda_item',
+        resourceId: insertedRow.id,
+        result: 'success',
+        after: {
+          data: { meetingId, applicationId: input.applicationId },
+          allow: ['meetingId', 'applicationId'],
+        },
+      },
+      tx,
+    );
+    return insertedRow;
   });
 
   // Best-effort: placing a matter on the agenda advances it into the committee
-  // stage. Only legal from `ready_for_committee`; an application in any other
-  // state simply stays put (agenda management must not fail because of it).
+  // stage. Only legal from `ready_for_committee`. A lost race means another
+  // request already moved it. Either way the agenda item stays.
   try {
     await transitionApplication(input.applicationId, 'schedule_committee');
   } catch (error) {
-    if (!(error instanceof ApplicationWorkflowError)) throw error;
+    if (
+      !(error instanceof ApplicationWorkflowError) &&
+      !(error instanceof ConcurrencyConflictError)
+    ) {
+      throw error;
+    }
     logger.debug(
       { applicationId: input.applicationId, meetingId },
       'agenda add: application not in a schedulable state — leaving status unchanged',
@@ -308,17 +331,22 @@ export async function removeAgendaItem(itemId: string): Promise<void> {
   requirePermission(subjectFromContext(ctx), 'meeting:agenda-manage');
 
   const scope = currentScope();
-  await scope.db
-    .delete(meetingAgendaItems)
-    .where(
-      scope.where(meetingAgendaItems.organisationId, eq(meetingAgendaItems.id, itemId)),
-    );
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .delete(meetingAgendaItems)
+      .where(
+        scope.where(meetingAgendaItems.organisationId, eq(meetingAgendaItems.id, itemId)),
+      );
 
-  await recordAudit({
-    action: 'meeting.agenda_changed',
-    resourceType: 'agenda_item',
-    resourceId: itemId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'meeting.agenda_changed',
+        resourceType: 'agenda_item',
+        resourceId: itemId,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }
 
@@ -406,29 +434,34 @@ export async function declareConflict(
 
   const input = declareConflictSchema.parse(rawInput);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(conflictDeclarations)
-    .values(
-      scope.insertValues({
-        applicationId: input.applicationId,
-        meetingId: input.meetingId ?? null,
-        declaredByUserId: ctx.userId,
-        reason: input.reason ?? null,
-        status: 'declared',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'conflict declaration');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(conflictDeclarations)
+      .values(
+        scope.insertValues({
+          applicationId: input.applicationId,
+          meetingId: input.meetingId ?? null,
+          declaredByUserId: ctx.userId,
+          reason: input.reason ?? null,
+          status: 'declared',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'conflict declaration');
 
-  await recordAudit({
-    action: 'conflict.declared',
-    resourceType: 'conflict',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { applicationId: input.applicationId }, allow: ['applicationId'] },
+    await recordAudit(
+      {
+        action: 'conflict.declared',
+        resourceType: 'conflict',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { applicationId: input.applicationId }, allow: ['applicationId'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Clear a previously declared conflict (agenda managers). */
@@ -437,27 +470,32 @@ export async function clearConflict(conflictId: string): Promise<ConflictRow> {
   requirePermission(subjectFromContext(ctx), 'meeting:agenda-manage');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(conflictDeclarations)
-    .set({ status: 'cleared', clearedByUserId: ctx.userId, clearedAt: new Date() })
-    .where(
-      scope.where(
-        conflictDeclarations.organisationId,
-        eq(conflictDeclarations.id, conflictId),
-      ),
-    )
-    .returning();
-  if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
-  const row = must(updated[0], 'conflict declaration');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(conflictDeclarations)
+      .set({ status: 'cleared', clearedByUserId: ctx.userId, clearedAt: new Date() })
+      .where(
+        scope.where(
+          conflictDeclarations.organisationId,
+          eq(conflictDeclarations.id, conflictId),
+        ),
+      )
+      .returning();
+    if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
+    const row = must(updated[0], 'conflict declaration');
 
-  await recordAudit({
-    action: 'conflict.cleared',
-    resourceType: 'conflict',
-    resourceId: conflictId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'conflict.cleared',
+        resourceType: 'conflict',
+        resourceId: conflictId,
+        result: 'success',
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /* ---------------------------------------------------------------------------
@@ -504,30 +542,35 @@ export async function importMeetingsFromIcs(
   const scope = currentScope();
   let created = 0;
   for (const event of parsed) {
-    const inserted = await scope.db
-      .insert(meetings)
-      .values(
-        scope.insertValues({
-          title: event.summary || 'Imported meeting',
-          scheduledStart: event.start,
-          scheduledEnd: event.end ?? null,
-          location: event.location ?? null,
-          notes: event.description ?? null,
-          createdByUserId: ctx.userId,
-          status: 'scheduled',
-        }),
-      )
-      .returning();
-    const row = must(inserted[0], 'meeting');
-    created += 1;
-    await recordAudit({
-      action: 'meeting.created',
-      resourceType: 'meeting',
-      resourceId: row.id,
-      result: 'success',
-      reason: 'imported from .ics',
-      after: { data: { title: row.title }, allow: ['title'] },
+    await scope.db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(meetings)
+        .values(
+          scope.insertValues({
+            title: event.summary || 'Imported meeting',
+            scheduledStart: event.start,
+            scheduledEnd: event.end ?? null,
+            location: event.location ?? null,
+            notes: event.description ?? null,
+            createdByUserId: ctx.userId,
+            status: 'scheduled',
+          }),
+        )
+        .returning();
+      const row = must(inserted[0], 'meeting');
+      await recordAudit(
+        {
+          action: 'meeting.created',
+          resourceType: 'meeting',
+          resourceId: row.id,
+          result: 'success',
+          reason: 'meeting.imported',
+          after: { data: { title: row.title }, allow: ['title'] },
+        },
+        tx,
+      );
     });
+    created += 1;
   }
 
   return { created };
