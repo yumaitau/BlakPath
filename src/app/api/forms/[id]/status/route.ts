@@ -1,8 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import { closeForm, publishForm } from '@/domains/forms';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * POST /api/forms/[id]/status — transition a form's status.
@@ -15,18 +16,14 @@ const statusSchema = z.object({
   status: z.enum(['published', 'closed']),
 });
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const { status } = statusSchema.parse(await request.json());
-    const form = await withRequestTenant(() =>
-      status === 'published' ? publishForm(id) : closeForm(id),
-    );
-    return NextResponse.json({ form });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const { status } = statusSchema.parse(await request.json());
+  const form = await withRequestTenant(() =>
+    status === 'published' ? publishForm(id) : closeForm(id),
+  );
+  return NextResponse.json({ form });
+});

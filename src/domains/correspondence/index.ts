@@ -66,6 +66,7 @@ export {
   sendEvidenceRequestNotice,
   updateTemplate,
   type CorrespondenceItemRow,
+  type CorrespondenceItemView,
   type CorrespondencePreview,
   type CorrespondenceTemplateRow,
   type PublicCorrespondenceView,

@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 import { seedStarterTemplates } from '@/domains/correspondence';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 
 /** Copy built-in starters the organisation does not already have. */
-export async function POST(): Promise<Response> {
-  try {
-    const templates = await withRequestTenant(() => seedStarterTemplates());
-    return NextResponse.json({ templates }, { status: 201 });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const POST = tenantHandler(async function POST(): Promise<Response> {
+  const templates = await withRequestTenant(() => seedStarterTemplates());
+  return NextResponse.json({ templates }, { status: 201 });
+});

@@ -3,16 +3,21 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { withStepUp } from '@/lib/auth/step-up-flow';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /**
  * Staff correspondence on one case.
  *
  * Prepare stores a draft. Send is a second action. Outcome letters can be
  * prepared before a decision is finalised, but Send is refused until then.
+ * Send and Notify release information to the applicant and need a fresh
+ * sign-in; the step-up dialog retries once after re-authentication.
  */
 
 export interface CorrespondenceLetter {
@@ -81,6 +86,8 @@ export function CorrespondencePanel({
   certificates: CorrespondenceCertificateOption[];
 }) {
   const router = useRouter();
+  const hydrated = useHydrated();
+  const stepUp = useStepUp();
   const [kind, setKind] = useState(allowedKinds[0] ?? 'general');
   const [channel, setChannel] = useState<'email' | 'letter'>('email');
   const [templateId, setTemplateId] = useState('');
@@ -161,19 +168,32 @@ export function CorrespondencePanel({
 
   const send = (id: string) =>
     run('send:' + id, () =>
-      fetch(`/api/applications/${applicationId}/correspondence/${id}/send`, {
-        method: 'POST',
-      }),
+      withStepUp(
+        () =>
+          fetch(`/api/applications/${applicationId}/correspondence/${id}/send`, {
+            method: 'POST',
+          }),
+        () => stepUp.request(),
+      ),
     );
 
   const notify = (requestId: string, notifyChannel: 'email' | 'letter') =>
     run('notify:' + requestId, () =>
-      fetch(`/api/applications/${applicationId}/evidence-requests/${requestId}/notify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel: notifyChannel }),
-      }),
+      withStepUp(
+        () =>
+          fetch(
+            `/api/applications/${applicationId}/evidence-requests/${requestId}/notify`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ channel: notifyChannel }),
+            },
+          ),
+        () => stepUp.request(),
+      ),
     );
+
+  const locked = !hydrated || busy !== null;
 
   return (
     <section aria-labelledby="correspondence-heading" className="flex flex-col gap-6">
@@ -221,6 +241,7 @@ export function CorrespondencePanel({
               <select
                 id="correspondence-kind"
                 className="border-input bg-surface h-11 rounded-md border px-3 text-base"
+                disabled={!hydrated}
                 value={kind}
                 onChange={(event) => {
                   setKind(event.target.value);
@@ -240,6 +261,7 @@ export function CorrespondencePanel({
               <select
                 id="correspondence-channel"
                 className="border-input bg-surface h-11 rounded-md border px-3 text-base"
+                disabled={!hydrated}
                 value={channel}
                 onChange={(event) =>
                   setChannel(event.target.value === 'letter' ? 'letter' : 'email')
@@ -254,6 +276,7 @@ export function CorrespondencePanel({
               <select
                 id="correspondence-template"
                 className="border-input bg-surface h-11 rounded-md border px-3 text-base"
+                disabled={!hydrated}
                 value={templateId}
                 onChange={(event) => setTemplateId(event.target.value)}
               >
@@ -266,6 +289,7 @@ export function CorrespondencePanel({
               </select>
             </div>
             <RelatedSelect
+              disabled={!hydrated}
               kind={kind}
               relatedId={relatedId}
               onChange={setRelatedId}
@@ -279,6 +303,7 @@ export function CorrespondencePanel({
                 id="correspondence-email"
                 type="email"
                 autoComplete="off"
+                disabled={!hydrated}
                 value={recipientEmail}
                 onChange={(event) => setRecipientEmail(event.target.value)}
                 placeholder="Uses the applicant record when left blank"
@@ -292,7 +317,7 @@ export function CorrespondencePanel({
             </p>
           ) : null}
           <div>
-            <Button type="submit" disabled={busy !== null}>
+            <Button type="submit" disabled={locked}>
               {busy === 'prepare' ? 'Preparing…' : 'Prepare letter'}
             </Button>
           </div>
@@ -316,7 +341,7 @@ export function CorrespondencePanel({
           <div className="mt-4">
             <Button
               type="button"
-              disabled={busy !== null}
+              disabled={locked}
               onClick={() => void send(preview.draftId)}
             >
               {busy === `send:${preview.draftId}` ? 'Sending…' : 'Send'}
@@ -351,9 +376,7 @@ export function CorrespondencePanel({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={
-                      busy !== null || !request.dueAt || request.status !== 'open'
-                    }
+                    disabled={locked || !request.dueAt || request.status !== 'open'}
                     onClick={() => notify(request.id, channel)}
                   >
                     {busy === `notify:${request.id}` ? 'Sending…' : 'Notify applicant'}
@@ -393,7 +416,7 @@ export function CorrespondencePanel({
                     <Button
                       type="button"
                       size="sm"
-                      disabled={busy !== null}
+                      disabled={locked}
                       onClick={() => send(letter.id)}
                     >
                       {busy === `send:${letter.id}` ? 'Sending…' : 'Send'}
@@ -410,11 +433,13 @@ export function CorrespondencePanel({
           </ul>
         )}
       </div>
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
     </section>
   );
 }
 
 function RelatedSelect({
+  disabled,
   kind,
   relatedId,
   onChange,
@@ -422,6 +447,7 @@ function RelatedSelect({
   evidenceRequests,
   certificates,
 }: {
+  disabled: boolean;
   kind: string;
   relatedId: string;
   onChange: (value: string) => void;
@@ -442,6 +468,7 @@ function RelatedSelect({
       <select
         id="correspondence-related"
         className="border-input bg-surface h-11 rounded-md border px-3 text-base"
+        disabled={disabled}
         value={relatedId}
         onChange={(event) => onChange(event.target.value)}
         required

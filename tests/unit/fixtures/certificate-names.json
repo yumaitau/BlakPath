@@ -1,0 +1,45 @@
+{
+  "note": "Orthographic fixtures for certificate PDF rendering. eng and Galiwin'ku are the public language and place strings named in issue #89. The diacritic string is a synthetic probe (not a person's name). Community review of real test names is still required. Nothing here determines Aboriginality.",
+  "cases": [
+    {
+      "id": "eng",
+      "organisationName": "Yolŋu Matha",
+      "applicantName": "Yolŋu",
+      "reference": "CERT-2026-0E160001",
+      "verificationCode": "Eng014BCase00000000000000000001",
+      "issuedOn": "2026-10-14",
+      "verifyUrl": "https://verify.certificates.community.blakpath.example/verify/Eng014BCase00000000000000000001",
+      "brandColor": "#7a4a2b"
+    },
+    {
+      "id": "apostrophe",
+      "organisationName": "Galiwin'ku",
+      "applicantName": "Galiwin'ku",
+      "reference": "CERT-2026-0A190002",
+      "verificationCode": "GaliwinkuApos000000000000000001",
+      "issuedOn": "2026-10-14",
+      "verifyUrl": "https://verify.certificates.community.blakpath.example/verify/GaliwinkuApos000000000000000001",
+      "brandColor": null
+    },
+    {
+      "id": "diacritics",
+      "organisationName": "People’s Council",
+      "applicantName": "Ŋäṉuṟa Mïḻa",
+      "reference": "CERT-2026-0D1A0003",
+      "verificationCode": "DiacriticProbe000000000000000001",
+      "issuedOn": "2026-10-14",
+      "verifyUrl": "https://verify.certificates.community.blakpath.example/verify/DiacriticProbe000000000000000001",
+      "brandColor": "#not-a-colour"
+    },
+    {
+      "id": "long-name",
+      "organisationName": "Yolŋu Matha Community Council Serving Families Across Homelands",
+      "applicantName": "Yolŋu Applicant With A Long Name That Must Wrap Inside The Certificate Margins And Stay Fully Readable Across Homelands.",
+      "reference": "CERT-2026-01200004",
+      "verificationCode": "LongName120Char00000000000000001",
+      "issuedOn": "2026-10-14",
+      "verifyUrl": "https://verify.certificates.community.blakpath.example/verify/LongName120Char00000000000000001",
+      "brandColor": null
+    }
+  ]
+}

@@ -1,0 +1,434 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath key escrow vault. Deploy ONLY in the dedicated escrow account
+  (AWS Organizations member, ap-southeast-2), never in the workload account.
+  Dual control: officer A alone can enable the escrow key and read deposited
+  packages; officer B alone can decrypt. No workload or application access.
+
+Parameters:
+  WorkloadAccountId:
+    Type: String
+    AllowedPattern: '^\d{12}$'
+    Description: BlakPath production workload account. Denied explicitly as well as implicitly.
+  OfficerAPrincipalArn:
+    Type: String
+    Description: >-
+      IAM user (in this account, hardware MFA) of escrow officer A, who may
+      assume the state-and-retrieve role.
+  OfficerBPrincipalArn:
+    Type: String
+    Description: >-
+      IAM user (in this account, hardware MFA) of escrow officer B, who may
+      assume the decrypt role. Must be a different person from officer A.
+  CeremonyDepositPrincipalArn:
+    Type: String
+    Description: Principal that deposits packages after a ceremony (write-only).
+  EscrowAlertEmail:
+    Type: String
+    Description: Escrow officers' and governance distribution list for every vault action.
+  RetentionYears:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    Description: >-
+      Object Lock compliance retention for deposited packages. Must match the
+      escrow agreement term; it cannot be shortened after deposit.
+
+Rules:
+  DistinctOfficers:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref OfficerAPrincipalArn, !Ref OfficerBPrincipalArn]]
+        AssertDescription: Officer A and officer B must be different principals.
+
+Resources:
+  # Officer roles. No identity policies grant KMS escrow-key access; the key
+  # policy names each role directly, so a vault admin cannot widen it via IAM.
+  OfficerARole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-escrow-officer-a
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Ref OfficerAPrincipalArn }
+            Action: sts:AssumeRole
+            Condition:
+              Bool: { aws:MultiFactorAuthPresent: 'true' }
+      Policies:
+        - PolicyName: RetrievePackages
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:ListBucket]
+                Resource: [!GetAtt PackageBucket.Arn, !Sub '${PackageBucket.Arn}/*']
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !GetAtt StorageKey.Arn
+
+  OfficerBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-escrow-officer-b
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Ref OfficerBPrincipalArn }
+            Action: sts:AssumeRole
+            Condition:
+              Bool: { aws:MultiFactorAuthPresent: 'true' }
+
+  DepositRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-escrow-deposit
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Ref CeremonyDepositPrincipalArn }
+            Action: sts:AssumeRole
+            Condition:
+              Bool: { aws:MultiFactorAuthPresent: 'true' }
+      Policies:
+        - PolicyName: DepositOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${PackageBucket.Arn}/*'
+              - Effect: Allow
+                Action: kms:GenerateDataKey
+                Resource: !GetAtt StorageKey.Arn
+
+  # RSA key used only to decrypt sealed escrow items (RSAES_OAEP_SHA_256).
+  # Its public key is published to ceremonies; the private key never leaves KMS.
+  # It is created enabled so the public key can be exported once. Officer A
+  # then disables it; only officer A can enable it again, for a release or a
+  # drill. CloudFormation cannot change its state after creation.
+  EscrowKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: BlakPath escrow unwrap key (decrypt only, dual control)
+      KeySpec: RSA_4096
+      KeyUsage: ENCRYPT_DECRYPT
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: KeyAdministrationWithoutUse
+            Effect: Allow
+            Principal: { AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root' }
+            Action:
+              - kms:DescribeKey
+              - kms:GetKeyPolicy
+              - kms:PutKeyPolicy
+              - kms:ListResourceTags
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:GetPublicKey
+            Resource: '*'
+          - Sid: OfficerAEnableDisable
+            Effect: Allow
+            Principal: { AWS: !GetAtt OfficerARole.Arn }
+            Action: [kms:EnableKey, kms:DisableKey, kms:DescribeKey, kms:GetPublicKey]
+            Resource: '*'
+          - Sid: OfficerBDecrypt
+            Effect: Allow
+            Principal: { AWS: !GetAtt OfficerBRole.Arn }
+            Action: [kms:Decrypt, kms:DescribeKey]
+            Resource: '*'
+            Condition:
+              StringEquals: { kms:EncryptionAlgorithm: RSAES_OAEP_SHA_256 }
+          - Sid: DenyDecryptExceptOfficerB
+            Effect: Deny
+            Principal: '*'
+            Action: [kms:Decrypt, kms:ReEncrypt*, kms:CreateGrant]
+            Resource: '*'
+            Condition:
+              ArnNotEquals: { aws:PrincipalArn: !GetAtt OfficerBRole.Arn }
+          - Sid: DenyEnableExceptOfficerA
+            Effect: Deny
+            Principal: '*'
+            Action: [kms:EnableKey, kms:DisableKey]
+            Resource: '*'
+            Condition:
+              ArnNotEquals: { aws:PrincipalArn: !GetAtt OfficerARole.Arn }
+          - Sid: DenyOutsideVaultAccount
+            Effect: Deny
+            Principal: '*'
+            Action: kms:*
+            Resource: '*'
+            Condition:
+              StringNotEquals: { aws:PrincipalAccount: !Ref AWS::AccountId }
+              Bool: { aws:PrincipalIsAWSService: 'false' }
+          - Sid: DenyWorkloadAccount
+            Effect: Deny
+            Principal: '*'
+            Action: kms:*
+            Resource: '*'
+            Condition:
+              StringEquals: { aws:PrincipalAccount: !Ref WorkloadAccountId }
+
+  EscrowKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/blakpath-escrow
+      TargetKeyId: !Ref EscrowKey
+
+  # Symmetric key for SSE-KMS on the package bucket and the alert topic. It
+  # protects already-sealed ciphertext; it is not the escrow unwrap key.
+  StorageKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: BlakPath escrow vault storage encryption
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal: { AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root' }
+            Action: kms:*
+            Resource: '*'
+          - Sid: AlertDelivery
+            Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: [kms:GenerateDataKey, kms:Decrypt]
+            Resource: '*'
+          - Sid: DenyOutsideVaultAccount
+            Effect: Deny
+            Principal: '*'
+            Action: kms:*
+            Resource: '*'
+            Condition:
+              StringNotEquals: { aws:PrincipalAccount: !Ref AWS::AccountId }
+              Bool: { aws:PrincipalIsAWSService: 'false' }
+
+  PackageBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: COMPLIANCE
+            Years: !Ref RetentionYears
+      VersioningConfiguration: { Status: Enabled }
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt StorageKey.Arn
+
+  PackageBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PackageBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt PackageBucket.Arn, !Sub '${PackageBucket.Arn}/*']
+            Condition:
+              Bool: { aws:SecureTransport: 'false' }
+          - Sid: DenyOutsideVaultAccount
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt PackageBucket.Arn, !Sub '${PackageBucket.Arn}/*']
+            Condition:
+              StringNotEquals: { aws:PrincipalAccount: !Ref AWS::AccountId }
+              Bool: { aws:PrincipalIsAWSService: 'false' }
+          - Sid: DenyReadExceptOfficerA
+            Effect: Deny
+            Principal: '*'
+            Action: [s3:GetObject, s3:GetObjectVersion]
+            Resource: !Sub '${PackageBucket.Arn}/*'
+            Condition:
+              ArnNotEquals: { aws:PrincipalArn: !GetAtt OfficerARole.Arn }
+          - Sid: DenyOtherStorageKey
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${PackageBucket.Arn}/*'
+            Condition:
+              StringNotEqualsIfExists:
+                s3:x-amz-server-side-encryption-aws-kms-key-id: !GetAtt StorageKey.Arn
+
+  # Audit: every key and package action is logged with integrity validation
+  # and pushed to the alert topic. The runbook relays each step to the client.
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: COMPLIANCE
+            Years: !Ref RetentionYears
+      VersioningConfiguration: { Status: Enabled }
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  TrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt TrailBucket.Arn, !Sub '${TrailBucket.Arn}/*']
+            Condition:
+              Bool: { aws:SecureTransport: 'false' }
+          - Sid: CloudTrailAclCheck
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt TrailBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/blakpath-escrow-vault'
+          - Sid: CloudTrailWrite
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:PutObject
+            Resource: !Sub '${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub 'arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/blakpath-escrow-vault'
+
+  VaultTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: TrailBucketPolicy
+    Properties:
+      TrailName: blakpath-escrow-vault
+      S3BucketName: !Ref TrailBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      EventSelectors:
+        - ReadWriteType: All
+          IncludeManagementEvents: true
+          DataResources:
+            - Type: AWS::S3::Object
+              Values: [!Sub '${PackageBucket.Arn}/']
+
+  EscrowActivityTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: blakpath-escrow-activity
+      KmsMasterKeyId: !Ref StorageKey
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref EscrowAlertEmail
+
+  EscrowActivityTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref EscrowActivityTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref EscrowActivityTopic
+            Condition:
+              ArnEquals: { aws:SourceArn: !GetAtt EscrowActivityRule.Arn }
+
+  # Read-only events (kms:Decrypt, s3:GetObject) need the all-management-events
+  # rule state.
+  EscrowActivityRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Every escrow key, package and officer-role action.
+      State: ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS
+      EventPattern:
+        detail-type: [AWS API Call via CloudTrail]
+        detail:
+          eventSource: [kms.amazonaws.com, s3.amazonaws.com, sts.amazonaws.com]
+          eventName:
+            - Decrypt
+            - EnableKey
+            - DisableKey
+            - PutKeyPolicy
+            - CreateGrant
+            - ScheduleKeyDeletion
+            - CancelKeyDeletion
+            - GetObject
+            - PutObject
+            - AssumeRole
+          resources:
+            ARN:
+              - !GetAtt EscrowKey.Arn
+              - !GetAtt OfficerARole.Arn
+              - !GetAtt OfficerBRole.Arn
+              - !GetAtt DepositRole.Arn
+              - !GetAtt PackageBucket.Arn
+              - prefix: !Sub '${PackageBucket.Arn}/'
+      Targets:
+        - Id: escrow-activity
+          Arn: !Ref EscrowActivityTopic
+
+  # Evidence that nothing outside this account (the zone of trust) can reach
+  # the escrow key or packages. Active findings block a release.
+  VaultAccessAnalyzer:
+    Type: AWS::AccessAnalyzer::Analyzer
+    Properties:
+      AnalyzerName: blakpath-escrow-vault
+      Type: ACCOUNT
+
+Outputs:
+  EscrowKeyArn:
+    Value: !GetAtt EscrowKey.Arn
+  PackageBucketName:
+    Value: !Ref PackageBucket
+  OfficerARoleArn:
+    Value: !GetAtt OfficerARole.Arn
+  OfficerBRoleArn:
+    Value: !GetAtt OfficerBRole.Arn
+  DepositRoleArn:
+    Value: !GetAtt DepositRole.Arn
+  EscrowActivityTopicArn:
+    Value: !Ref EscrowActivityTopic
+  AccessAnalyzerArn:
+    Value: !GetAtt VaultAccessAnalyzer.Arn

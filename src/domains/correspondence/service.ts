@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import { uuidv7 } from 'uuidv7';
 import { db } from '@/db/client';
 import {
   certificates,
@@ -17,6 +18,12 @@ import { getApplication, type ApplicationRow } from '@/domains/applications';
 import { isSuppressed } from '@/domains/email';
 import { env } from '@/lib/env';
 import { queueTenantEmail } from '@/lib/email/queue';
+import {
+  openCorrespondenceItemRows,
+  openTemplateRows,
+  sealCorrespondenceItemText,
+  sealTemplateText,
+} from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import {
   requireAny,
@@ -78,7 +85,27 @@ import {
 export type CorrespondenceTemplateRow = typeof correspondenceTemplates.$inferSelect;
 export type CorrespondenceItemRow = typeof correspondenceItems.$inferSelect;
 
+/**
+ * An opened item for staff. `emailText` is the short notice the applicant was
+ * sent, rebuilt with the link redacted. The delivered copy, with the live link,
+ * stays sealed in `correspondence_messages`.
+ */
+export type CorrespondenceItemView = CorrespondenceItemRow & {
+  readonly emailText: string | null;
+};
+
 const TEMPLATE_READ = ['correspondence:manage-templates', 'correspondence:send'] as const;
+
+/**
+ * Staff who may see letters on a case. `application:read-own` is deliberately
+ * absent: drafts and template text are staff work, and the applicant reads a
+ * sent letter through its link.
+ */
+const CASE_LETTER_READ = [
+  'correspondence:send',
+  'application:read-any',
+  'application:read-assigned',
+] as const;
 
 export interface CorrespondencePreview {
   readonly subject: string;
@@ -332,11 +359,12 @@ export async function listTemplates(): Promise<CorrespondenceTemplateRow[]> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), TEMPLATE_READ);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(correspondenceTemplates)
     .where(scope.where(correspondenceTemplates.organisationId))
     .orderBy(desc(correspondenceTemplates.createdAt));
+  return openTemplateRows(scope.organisationId, rows);
 }
 
 async function nameTaken(name: string, exceptId?: string): Promise<boolean> {
@@ -368,28 +396,44 @@ export async function createTemplate(
   }
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(correspondenceTemplates)
-    .values(
-      scope.insertValues({
-        name: input.name,
-        kind: input.kind,
-        subjectTemplate: input.subjectTemplate,
-        bodyTemplate: input.bodyTemplate,
-        active: true,
-        createdByUserId: ctx.userId,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'correspondence template');
-  await recordAudit({
-    action: 'correspondence.template_created',
-    resourceType: 'correspondence_template',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { kind: row.kind }, allow: ['kind'] },
+  const id = uuidv7();
+  const sealed = await sealTemplateText(scope.organisationId, id, {
+    subjectTemplate: input.subjectTemplate,
+    bodyTemplate: input.bodyTemplate,
   });
-  return row;
+  const row = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(correspondenceTemplates)
+      .values(
+        scope.insertValues({
+          id,
+          name: input.name,
+          kind: input.kind,
+          subjectTemplate: must(sealed.subjectTemplate, 'sealed subject'),
+          bodyTemplate: must(sealed.bodyTemplate, 'sealed body'),
+          active: true,
+          createdByUserId: ctx.userId,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'correspondence template');
+    await recordAudit(
+      {
+        action: 'correspondence.template_created',
+        resourceType: 'correspondence_template',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { kind: created.kind }, allow: ['kind'] },
+      },
+      tx,
+    );
+    return created;
+  });
+  return {
+    ...row,
+    subjectTemplate: input.subjectTemplate,
+    bodyTemplate: input.bodyTemplate,
+  };
 }
 
 export async function updateTemplate(
@@ -419,32 +463,45 @@ export async function updateTemplate(
     throw new CorrespondenceError('duplicate_template_name');
   }
 
-  const updated = await scope.db
-    .update(correspondenceTemplates)
-    .set({
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.subjectTemplate !== undefined
-        ? { subjectTemplate: input.subjectTemplate }
-        : {}),
-      ...(input.bodyTemplate !== undefined ? { bodyTemplate: input.bodyTemplate } : {}),
-      ...(input.active !== undefined ? { active: input.active } : {}),
-    })
-    .where(
-      scope.where(
-        correspondenceTemplates.organisationId,
-        eq(correspondenceTemplates.id, templateId),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'correspondence template');
-  await recordAudit({
-    action: 'correspondence.template_updated',
-    resourceType: 'correspondence_template',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { kind: row.kind, active: row.active }, allow: ['kind', 'active'] },
+  const sealed = await sealTemplateText(scope.organisationId, templateId, {
+    ...(input.subjectTemplate !== undefined
+      ? { subjectTemplate: input.subjectTemplate }
+      : {}),
+    ...(input.bodyTemplate !== undefined ? { bodyTemplate: input.bodyTemplate } : {}),
   });
-  return row;
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(correspondenceTemplates)
+      .set({
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...sealed,
+        ...(input.active !== undefined ? { active: input.active } : {}),
+      })
+      .where(
+        scope.where(
+          correspondenceTemplates.organisationId,
+          eq(correspondenceTemplates.id, templateId),
+        ),
+      )
+      .returning();
+    const changed = must(updated[0], 'correspondence template');
+    await recordAudit(
+      {
+        action: 'correspondence.template_updated',
+        resourceType: 'correspondence_template',
+        resourceId: changed.id,
+        result: 'success',
+        after: {
+          data: { kind: changed.kind, active: changed.active },
+          allow: ['kind', 'active'],
+        },
+      },
+      tx,
+    );
+    return changed;
+  });
+  const [opened] = await openTemplateRows(scope.organisationId, [row]);
+  return must(opened, 'opened correspondence template');
 }
 
 /** Copy built-in starters that this organisation does not already have by name. */
@@ -465,10 +522,11 @@ export async function seedStarterTemplates(): Promise<CorrespondenceTemplateRow[
 
 export async function listCorrespondence(
   applicationId: string,
-): Promise<CorrespondenceItemRow[]> {
-  await getApplication(applicationId);
+): Promise<CorrespondenceItemView[]> {
+  requireAny(subjectFromContext(requireTenantContext()), CASE_LETTER_READ);
+  const { application } = await getApplication(applicationId);
   const scope = currentScope();
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(correspondenceItems)
     .where(
@@ -478,6 +536,27 @@ export async function listCorrespondence(
       ),
     )
     .orderBy(desc(correspondenceItems.createdAt));
+  const opened = await openCorrespondenceItemRows(scope.organisationId, rows);
+  const sentEmail = opened.some(
+    (row) => row.channel === 'email' && row.status === 'sent' && row.portalExpiresAt,
+  );
+  const organisationName = sentEmail
+    ? await loadOrganisationName(scope.organisationId)
+    : '';
+  return opened.map((row) => ({
+    ...row,
+    emailText:
+      row.channel === 'email' && row.status === 'sent' && row.portalExpiresAt
+        ? minimiseEmail({
+            kind: row.kind as CorrespondenceKind,
+            organisationName,
+            applicationReference: application.reference,
+            portalUrl: '[secure link]',
+            expiresOn: formatCorrespondenceDate(row.portalExpiresAt),
+            dueDate: row.dueAt ? formatCorrespondenceDate(row.dueAt) : null,
+          }).text
+        : null,
+  }));
 }
 
 async function loadTemplate(
@@ -494,7 +573,10 @@ async function loadTemplate(
       ),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const row = scope.assertOwned(rows[0]);
+  if (!row) return null;
+  const [opened] = await openTemplateRows(scope.organisationId, [row]);
+  return opened ?? null;
 }
 
 export async function draftCorrespondence(
@@ -502,6 +584,7 @@ export async function draftCorrespondence(
   rawInput: DraftCorrespondenceInput,
 ): Promise<{ item: CorrespondenceItemRow; preview: CorrespondencePreview }> {
   const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'correspondence:send');
   const input = draftCorrespondenceSchema.parse(rawInput);
   assertMaySend(input.kind);
 
@@ -572,38 +655,59 @@ export async function draftCorrespondence(
   });
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(correspondenceItems)
-    .values(
-      scope.insertValues({
-        applicationId,
-        templateId,
-        kind: input.kind,
-        channel: input.channel,
-        status: 'draft',
-        subjectTemplate,
-        bodyTemplate,
-        recipientName: application.applicantName,
-        recipientEmail,
-        decisionId: decision?.id ?? null,
-        evidenceRequestId: evidence?.id ?? null,
-        certificateId: certificate?.id ?? null,
-        dueAt: evidence?.dueAt ?? null,
-        createdByUserId: ctx.userId,
-      }),
-    )
-    .returning();
-  const item = must(inserted[0], 'correspondence');
-  await recordAudit({
-    action: 'correspondence.drafted',
-    resourceType: 'correspondence',
-    resourceId: item.id,
-    result: 'success',
-    after: {
-      data: { kind: item.kind, channel: item.channel, applicationId },
-      allow: ['kind', 'channel', 'applicationId'],
-    },
+  const id = uuidv7();
+  const sealed = await sealCorrespondenceItemText(scope.organisationId, id, {
+    subjectTemplate,
+    bodyTemplate,
+    recipientName: application.applicantName,
+    recipientEmail,
   });
+  const stored = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(correspondenceItems)
+      .values(
+        scope.insertValues({
+          id,
+          applicationId,
+          templateId,
+          kind: input.kind,
+          channel: input.channel,
+          status: 'draft' as const,
+          subjectTemplate: must(sealed.subjectTemplate, 'sealed subject'),
+          bodyTemplate: must(sealed.bodyTemplate, 'sealed body'),
+          recipientName: sealed.recipientName ?? null,
+          recipientEmail: sealed.recipientEmail ?? null,
+          decisionId: decision?.id ?? null,
+          evidenceRequestId: evidence?.id ?? null,
+          certificateId: certificate?.id ?? null,
+          dueAt: evidence?.dueAt ?? null,
+          createdByUserId: ctx.userId,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'correspondence');
+    await recordAudit(
+      {
+        action: 'correspondence.drafted',
+        resourceType: 'correspondence',
+        resourceId: row.id,
+        result: 'success',
+        after: {
+          data: { kind: row.kind, channel: row.channel, applicationId },
+          allow: ['kind', 'channel', 'applicationId'],
+        },
+      },
+      tx,
+    );
+    return row;
+  });
+  const item: CorrespondenceItemRow = {
+    ...stored,
+    subjectTemplate,
+    bodyTemplate,
+    recipientName: application.applicantName,
+    recipientEmail,
+  };
   return { item, preview };
 }
 
@@ -651,9 +755,11 @@ export async function sendCorrespondence(
       ),
     )
     .limit(1);
-  const existing = scope.assertOwned(rows[0]);
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) throw new AuthorizationError('POLICY_DENIED');
+  assertMaySend(owned.kind as CorrespondenceKind);
+  const [existing] = await openCorrespondenceItemRows(scope.organisationId, [owned]);
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
-  assertMaySend(existing.kind as CorrespondenceKind);
 
   const { application } = await getApplication(existing.applicationId);
   const decision = existing.decisionId
@@ -723,48 +829,61 @@ export async function sendCorrespondence(
       key,
       body: pdf,
       contentType: 'application/pdf',
+      organisationId: scope.organisationId,
     });
     pdfObjectKey = key;
   } else if (existing.recipientEmail && (await isSuppressed(existing.recipientEmail))) {
     throw new CorrespondenceError('email_suppressed');
   }
 
-  const redactedEmail =
-    existing.channel === 'email'
-      ? minimiseEmail({
-          kind: existing.kind as CorrespondenceKind,
-          organisationName,
-          applicationReference: application.reference,
-          portalUrl: '[secure link]',
-          expiresOn,
-          dueDate,
-        })
-      : null;
-
-  const updated = await scope.db
-    .update(correspondenceItems)
-    .set({
-      status: 'sent',
-      renderedSubject,
-      renderedBody,
-      emailSubject: redactedEmail?.subject ?? null,
-      emailText: redactedEmail?.text ?? null,
-      portalTokenHash: hashToken(token),
-      portalExpiresAt: expiresAt,
-      pdfObjectKey,
-      sentByUserId: ctx.userId,
-      sentAt: new Date(),
-    })
-    .where(
-      scope.where(
-        correspondenceItems.organisationId,
-        eq(correspondenceItems.id, correspondenceId),
-        eq(correspondenceItems.status, 'draft'),
-      ),
-    )
-    .returning();
-  const item = updated[0];
-  if (!item) {
+  const sentAt = new Date();
+  const sealedText = await sealCorrespondenceItemText(scope.organisationId, existing.id, {
+    renderedSubject,
+    renderedBody,
+  });
+  const sent = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(correspondenceItems)
+      .set({
+        status: 'sent',
+        renderedSubject: sealedText.renderedSubject ?? null,
+        renderedBody: sealedText.renderedBody ?? null,
+        portalTokenHash: hashToken(token),
+        portalExpiresAt: expiresAt,
+        pdfObjectKey,
+        sentByUserId: ctx.userId,
+        sentAt,
+      })
+      .where(
+        scope.where(
+          correspondenceItems.organisationId,
+          eq(correspondenceItems.id, correspondenceId),
+          eq(correspondenceItems.status, 'draft'),
+        ),
+      )
+      .returning();
+    const row = updated[0];
+    if (!row) return null;
+    await recordAudit(
+      {
+        action: 'correspondence.sent',
+        resourceType: 'correspondence',
+        resourceId: row.id,
+        result: 'success',
+        after: {
+          data: {
+            kind: row.kind,
+            channel: row.channel,
+            applicationId: row.applicationId,
+          },
+          allow: ['kind', 'channel', 'applicationId'],
+        },
+      },
+      tx,
+    );
+    return row;
+  });
+  if (!sent) {
     if (pdfObjectKey) {
       await deleteObject({ bucket: EVIDENCE_BUCKET, key: pdfObjectKey }).catch(
         () => undefined,
@@ -773,6 +892,7 @@ export async function sendCorrespondence(
     throw new CorrespondenceError('not_draft');
   }
 
+  let messageId: string | null = null;
   if (existing.channel === 'email' && existing.recipientEmail) {
     const email = minimiseEmail({
       kind: existing.kind as CorrespondenceKind,
@@ -783,13 +903,24 @@ export async function sendCorrespondence(
       dueDate,
     });
     try {
-      await queueTenantEmail({
+      // The delivered copy (with the live link) is sealed in
+      // correspondence_messages; the item keeps only a pointer to it.
+      messageId = await queueTenantEmail({
         organisationId: scope.organisationId,
         correlationId: ctx.correlationId,
         to: existing.recipientEmail,
         subject: email.subject,
         text: email.text,
       });
+      await scope.db
+        .update(correspondenceItems)
+        .set({ messageId })
+        .where(
+          scope.where(
+            correspondenceItems.organisationId,
+            eq(correspondenceItems.id, correspondenceId),
+          ),
+        );
     } catch (err) {
       logger.error(
         { organisationId: scope.organisationId, correspondenceId, err },
@@ -799,20 +930,16 @@ export async function sendCorrespondence(
     }
   }
 
-  await recordAudit({
-    action: 'correspondence.sent',
-    resourceType: 'correspondence',
-    resourceId: item.id,
-    result: 'success',
-    after: {
-      data: {
-        kind: item.kind,
-        channel: item.channel,
-        applicationId: item.applicationId,
-      },
-      allow: ['kind', 'channel', 'applicationId'],
-    },
-  });
+  const item: CorrespondenceItemRow = {
+    ...sent,
+    messageId: messageId ?? sent.messageId,
+    subjectTemplate: existing.subjectTemplate,
+    bodyTemplate: existing.bodyTemplate,
+    renderedSubject,
+    renderedBody,
+    recipientName: existing.recipientName,
+    recipientEmail: existing.recipientEmail,
+  };
   return item;
 }
 
@@ -825,6 +952,7 @@ export async function sendEvidenceRequestNotice(
   evidenceRequestId: string,
   rawInput: NotifyEvidenceRequestInput,
 ): Promise<CorrespondenceItemRow> {
+  requirePermission(subjectFromContext(requireTenantContext()), 'correspondence:send');
   const input = notifyEvidenceRequestSchema.parse(rawInput);
   const { item } = await draftCorrespondence(applicationId, {
     kind: 'evidence_request',
@@ -839,6 +967,7 @@ export async function sendEvidenceRequestNotice(
 export async function getLetterDownloadUrl(
   correspondenceId: string,
 ): Promise<{ url: string; expiresIn: number }> {
+  requireAny(subjectFromContext(requireTenantContext()), CASE_LETTER_READ);
   const scope = currentScope();
   const rows = await scope.db
     .select()
@@ -882,11 +1011,14 @@ async function loadByToken(token: string): Promise<CorrespondenceItemRow | null>
     .from(correspondenceItems)
     .where(eq(correspondenceItems.portalTokenHash, hashToken(token)))
     .limit(1);
-  const row = rows[0];
-  if (!row || row.status !== 'sent' || !row.portalExpiresAt) return null;
-  if (row.portalExpiresAt.getTime() <= Date.now()) return null;
-  if (!row.renderedSubject || !row.renderedBody) return null;
-  return row;
+  const stored = rows[0];
+  if (!stored || stored.status !== 'sent' || !stored.portalExpiresAt) return null;
+  if (stored.portalExpiresAt.getTime() <= Date.now()) return null;
+  if (!stored.renderedSubject || !stored.renderedBody) return null;
+  // No session here: the row's own organisation key opens it. A disabled key
+  // throws, and the page shows the calm "key unavailable" message.
+  const [row] = await openCorrespondenceItemRows(stored.organisationId, [stored]);
+  return row ?? null;
 }
 
 export async function getPublicCorrespondence(

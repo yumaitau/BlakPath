@@ -22,16 +22,42 @@ import { evidenceRequests } from './evidence';
 import { certificates } from './certificates';
 
 /**
- * Correspondence tables.
+ * Outbound tenant email stored so the queue payload can stay an id.
+ *
+ * Recipient, subject and bodies are sealed under the tenant key. This is the
+ * encrypted holding place for those bodies, not a correspondence product.
+ * A case letter sent by email points at its row through
+ * `correspondence_items.message_id`.
+ */
+export const correspondenceMessages = pgTable(
+  'correspondence_messages',
+  {
+    id: primaryId(),
+    organisationId: organisationIdCol().references(() => organisations.id, {
+      onDelete: 'cascade',
+    }),
+    recipient: text('recipient').notNull(),
+    subject: text('subject').notNull(),
+    textBody: text('text_body').notNull(),
+    htmlBody: text('html_body'),
+    ...timestamps,
+  },
+  (table) => [index('correspondence_messages_org_idx').on(table.organisationId)],
+);
+
+/**
+ * Correspondence product tables.
  *
  * An organisation writes its own templates. Staff preview a letter on a case,
  * then explicitly Send it. Nothing here sends an outcome because a decision
  * was finalised. The software never determines Aboriginality; a letter only
  * repeats what authorised people recorded.
  *
- * The bearer link for the applicant is stored as a SHA-256 hash. The rendered
- * letter kept on the case uses a placeholder instead of that link. The email
- * copy stored on the case is the short notice, not the letter detail.
+ * Free text (template text, letter text, recipient) is sealed under the
+ * tenant key; see `src/lib/encryption/inventory.ts`. The bearer link for the
+ * applicant is stored only as a SHA-256 hash, and the letter kept on the case
+ * uses a placeholder instead of that link. The email actually delivered is a
+ * `correspondence_messages` row, not a copy on the item.
  */
 
 export const correspondenceTemplates = pgTable(
@@ -41,9 +67,12 @@ export const correspondenceTemplates = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
+    /** Staff-facing label. Plaintext so the per-organisation unique index works. */
     name: text('name').notNull(),
     kind: correspondenceKind('kind').notNull(),
+    /** Sealed. */
     subjectTemplate: text('subject_template').notNull(),
+    /** Sealed. */
     bodyTemplate: text('body_template').notNull(),
     active: boolean('active').notNull().default(true),
     createdByUserId: refId('created_by_user_id').references(() => users.id, {
@@ -80,17 +109,20 @@ export const correspondenceItems = pgTable(
     kind: correspondenceKind('kind').notNull(),
     channel: correspondenceChannel('channel').notNull(),
     status: correspondenceStatus('status').notNull().default('draft'),
-    /** Template snapshot, so a later template edit does not rewrite the case. */
+    /** Sealed template snapshot, so a later template edit does not rewrite the case. */
     subjectTemplate: text('subject_template').notNull(),
     bodyTemplate: text('body_template').notNull(),
-    /** Letter text as sent. Null while still a draft. Portal link is redacted. */
+    /** Sealed letter text as sent. Null while still a draft. Portal link is redacted. */
     renderedSubject: text('rendered_subject'),
     renderedBody: text('rendered_body'),
-    /** Short email actually queued. Null for printed letters. Link redacted. */
-    emailSubject: text('email_subject'),
-    emailText: text('email_text'),
+    /** Sealed. */
     recipientName: text('recipient_name'),
+    /** Sealed. */
     recipientEmail: text('recipient_email'),
+    /** Sealed email queued for delivery. Null for printed letters. */
+    messageId: refId('message_id').references(() => correspondenceMessages.id, {
+      onDelete: 'set null',
+    }),
     decisionId: refId('decision_id').references(() => decisions.id, {
       onDelete: 'set null',
     }),
@@ -104,7 +136,7 @@ export const correspondenceItems = pgTable(
       onDelete: 'set null',
     }),
     dueAt: timestamp('due_at', { withTimezone: true }),
-    /** SHA-256 of the applicant link. The raw token is never stored. */
+    /** SHA-256 of the applicant link. The raw token is never stored on the item. */
     portalTokenHash: text('portal_token_hash'),
     portalExpiresAt: timestamp('portal_expires_at', { withTimezone: true }),
     /** Object key of the printable PDF. Null for email, and until Send. */
@@ -125,6 +157,16 @@ export const correspondenceItems = pgTable(
     ),
     uniqueIndex('correspondence_items_token_hash_uidx').on(table.portalTokenHash),
   ],
+);
+
+export const correspondenceMessagesRelations = relations(
+  correspondenceMessages,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [correspondenceMessages.organisationId],
+      references: [organisations.id],
+    }),
+  }),
 );
 
 export const correspondenceTemplatesRelations = relations(
@@ -154,6 +196,10 @@ export const correspondenceItemsRelations = relations(correspondenceItems, ({ on
   template: one(correspondenceTemplates, {
     fields: [correspondenceItems.templateId],
     references: [correspondenceTemplates.id],
+  }),
+  message: one(correspondenceMessages, {
+    fields: [correspondenceItems.messageId],
+    references: [correspondenceMessages.id],
   }),
   decision: one(decisions, {
     fields: [correspondenceItems.decisionId],

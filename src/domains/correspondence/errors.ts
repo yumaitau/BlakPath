@@ -41,14 +41,21 @@ const MESSAGES: Record<CorrespondenceErrorCode, string> = {
   letter_not_ready: 'The printed letter is not ready yet.',
 };
 
+/** A merge-field name is safe to echo; anything else is dropped. */
+const SAFE_DETAIL = /^[A-Za-z0-9_.]{1,40}$/;
+
+/**
+ * The message is a fixed phrase, optionally followed by a merge-field name.
+ * `src/lib/http/error-response.ts` returns it as is (matched by name).
+ */
 export class CorrespondenceError extends Error {
   readonly status = 409;
   readonly code: CorrespondenceErrorCode;
 
   constructor(code: CorrespondenceErrorCode, detail?: string) {
     const base = MESSAGES[code];
-    const extra = detail?.trim().slice(0, 40);
-    super(extra ? `${base} (${extra})` : base);
+    const extra = detail?.trim();
+    super(extra && SAFE_DETAIL.test(extra) ? `${base} (${extra})` : base);
     this.name = 'CorrespondenceError';
     this.code = code;
   }

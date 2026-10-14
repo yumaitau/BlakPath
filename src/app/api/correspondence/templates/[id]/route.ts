@@ -1,17 +1,14 @@
 import { NextResponse } from 'next/server';
 import { updateTemplate, type UpdateTemplateInput } from '@/domains/correspondence';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 
-export async function PATCH(
+export const PATCH = tenantHandler(async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const body = (await request.json()) as UpdateTemplateInput;
-    const template = await withRequestTenant(() => updateTemplate(id, body));
-    return NextResponse.json({ template });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const body = (await request.json()) as UpdateTemplateInput;
+  const template = await withRequestTenant(() => updateTemplate(id, body));
+  return NextResponse.json({ template });
+});

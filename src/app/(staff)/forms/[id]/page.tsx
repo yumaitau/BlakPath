@@ -1,17 +1,19 @@
 import Link from 'next/link';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import { FormBuilder } from '@/components/forms/form-builder';
 import {
   FormInvitations,
   type InvitationListItem,
 } from '@/components/forms/form-invitations';
 import { FormStatusControls } from '@/components/forms/form-status-controls';
+import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { parseFieldsJson } from '@/lib/forms/fields';
 import {
   getForm,
   listInvitations,
   listResponses,
-  type FormInvitationRow,
+  type PublicFormInvitation,
   type FormResponseRow,
   type FormRow,
 } from '@/domains/forms';
@@ -21,8 +23,9 @@ import {
  *
  * Loads a form together with its invitations and responses inside a DB-verified
  * tenant context, then renders the builder, the publish/close controls, the
- * invitation manager, and a plain table of submitted responses. A sign-in
- * prompt is shown if the caller is not authenticated.
+ * invitation manager, and a plain table of submitted responses. An expired
+ * session redirects to sign-in; a missing or forbidden form shows the same
+ * non-committal 403 state; anything else surfaces as the 500 error page.
  *
  * PRODUCT INVARIANT: a form collects information a human provides. It never
  * scores, ranks or determines a person's Aboriginality — responses shown here
@@ -31,7 +34,7 @@ import {
 
 interface LoadedForm {
   form: FormRow;
-  invitations: FormInvitationRow[];
+  invitations: PublicFormInvitation[];
   responses: FormResponseRow[];
 }
 
@@ -47,7 +50,7 @@ function answerEntries(answers: unknown): Array<[string, string]> {
   });
 }
 
-function toInvitationListItem(row: FormInvitationRow): InvitationListItem {
+function toInvitationListItem(row: PublicFormInvitation): InvitationListItem {
   return {
     id: row.id,
     recipientName: row.recipientName,
@@ -65,28 +68,30 @@ export default async function FormEditorPage({
   const { id } = await params;
 
   let data: LoadedForm | null = null;
-  let error: string | null = null;
-
-  try {
-    data = await withRequestTenant(async () => ({
-      form: await getForm(id),
-      invitations: await listInvitations(id),
-      responses: await listResponses(id),
-    }));
-  } catch {
-    error = 'Sign in and select your organisation to edit this form.';
+  if (isRecordId(id)) {
+    try {
+      data = await withRequestTenant(async () => ({
+        form: await getForm(id),
+        invitations: await listInvitations(id),
+        responses: await listResponses(id),
+      }));
+    } catch (error) {
+      await handlePageError(error);
+    }
   }
 
-  if (error || !data) {
+  if (!data) {
     return (
-      <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
-        <p className="text-muted-foreground">
-          {error ?? 'This form could not be loaded.'}
+      <ForbiddenNotice
+        title="Form unavailable"
+        backHref="/forms"
+        backLabel="Back to forms"
+      >
+        <p>
+          This form does not exist, is outside your organisation, or your role does not
+          allow you to manage it.
         </p>
-        <Link href="/forms" className="text-primary mt-4 inline-block text-sm underline">
-          Back to forms
-        </Link>
-      </div>
+      </ForbiddenNotice>
     );
   }
 

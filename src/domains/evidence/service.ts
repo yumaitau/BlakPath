@@ -1,21 +1,30 @@
-import { createHash } from 'node:crypto';
+import { createHash, type Hash } from 'node:crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { fileTypeFromBuffer } from 'file-type';
 import { uuidv7 } from 'uuidv7';
 import { evidence, evidenceRequests } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import {
+  recordAudit,
+  type AuditMetaInput,
+  type AuditTransaction,
+} from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
-import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
+import {
+  requireAny,
+  requirePermission,
+  subjectFromContext,
+} from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
-import { addJob, QueueName } from '@/lib/queues';
+import { enqueueMalwareScan } from '@/lib/queues/malware-scan';
 import { logger } from '@/lib/observability/logger';
 import { queueNotification } from '@/domains/notifications';
 import {
   deleteObject,
   EVIDENCE_BUCKET,
-  getObjectBytes,
+  getObjectStream,
+  headObject,
+  isMissingObject,
   moveQuarantineToEvidence,
   objectKey,
   presignDownload,
@@ -23,16 +32,21 @@ import {
   QUARANTINE_BUCKET,
   type PresignedUpload,
 } from '@/lib/storage/s3';
-import { scanBuffer, type ScanVerdict } from '@/lib/scanning/clamav';
+import { scanStream, type ScanVerdict } from '@/lib/scanning/clamav';
 import {
   classifyEvidenceSchema,
+  onBehalfReceiptSchema,
   requestEvidenceSchema,
   requestUploadSchema,
   type ClassifyEvidenceInput,
   type RequestEvidenceInput,
   type RequestUploadInput,
 } from './schemas';
-import { contentTypeAcceptable, isServable } from './status';
+import { detectContentType } from './detect';
+import { EvidenceUploadIncompleteError } from './errors';
+import { quarantineUploadProblem } from './recovery';
+import { isServable, uploadSizeAcceptable, verifiedContentType } from './status';
+import { assertCanCompleteEvidenceUpload, decideEvidenceUpload } from './upload-auth';
 
 /**
  * Evidence service — the tenant-scoped, permission-checked, audited path for
@@ -75,23 +89,38 @@ async function loadEvidence(id: string): Promise<EvidenceRow | null> {
 
 /**
  * Start an upload: create a `pending` evidence record and mint a short-lived
- * presigned PUT into the quarantine bucket. Applicants upload to their OWN
- * application only (`evidence:upload-own`).
+ * presigned PUT into the quarantine bucket.
+ *
+ * Applicants upload to their own application (`evidence:upload-own`). Intake
+ * and case officers may record a file received for an applicant on any
+ * application they can already read (`evidence:upload-on-behalf`), and must
+ * say how and when it arrived. Both paths use this same quarantine key. The
+ * scan does not read the receipt.
  */
 export async function requestUpload(
   applicationId: string,
   rawInput: RequestUploadInput,
 ): Promise<{ evidence: EvidenceRow; upload: PresignedUpload }> {
   const ctx = requireTenantContext();
-  requirePermission(subjectFromContext(ctx), 'evidence:upload-own');
+  const subject = subjectFromContext(ctx);
+  requireAny(subject, ['evidence:upload-own', 'evidence:upload-on-behalf']);
 
   const input = requestUploadSchema.parse(rawInput);
 
-  // Enforce that the actor may see the application AND is its applicant. The
-  // getApplication call applies the read policy and audits the view.
+  // Read policy: own, assigned, team, or any. Audits the view. A caller who
+  // cannot read the case cannot attach evidence to it.
   const detail = await getApplication(applicationId);
-  if (detail.application.applicantUserId !== ctx.userId) {
-    throw new AuthorizationError('POLICY_DENIED');
+  const decision = decideEvidenceUpload(
+    subject,
+    detail.application.applicantUserId === ctx.userId,
+    input,
+  );
+  if (decision.mode === 'receipt-required') {
+    onBehalfReceiptSchema.parse({
+      receiptChannel: input.receiptChannel,
+      receivedOn: input.receivedOn,
+    });
+    throw new AuthorizationError('PERMISSION_DENIED');
   }
 
   const scope = currentScope();
@@ -117,6 +146,8 @@ export async function requestUpload(
         sizeBytes: input.sizeBytes,
         status: 'pending',
         quarantineKey: key,
+        receiptChannel: decision.mode === 'on-behalf' ? decision.receiptChannel : null,
+        receivedOn: decision.mode === 'on-behalf' ? decision.receivedOn : null,
       }),
     )
     .returning();
@@ -135,55 +166,85 @@ export async function requestUpload(
 /**
  * Confirm the bytes have been PUT. Moves the record to `quarantined` and
  * enqueues the malware scan. The scan job is keyed by the evidence id so a
- * duplicate notification cannot double-schedule work.
+ * duplicate notification cannot double-schedule work. A sweeper redrive uses a
+ * fresh id because BullMQ will not replace this one after it fails.
+ *
+ * The quarantine object is stated first. A missing object or a size mismatch
+ * throws and leaves the row `pending`, so a later PUT can still complete.
  */
 export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
   const ctx = requireTenantContext();
-  requirePermission(subjectFromContext(ctx), 'evidence:upload-own');
 
   const existing = await loadEvidence(evidenceId);
-  if (!existing || existing.uploadedByUserId !== ctx.userId) {
-    throw new AuthorizationError('POLICY_DENIED');
-  }
+  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  assertCanCompleteEvidenceUpload(subjectFromContext(ctx), ctx.userId, existing);
   if (existing.status !== 'pending') {
     // Already progressed; return as-is (idempotent).
     return existing;
   }
+  if (!existing.quarantineKey) {
+    throw new EvidenceUploadIncompleteError('missing');
+  }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(evidence)
-    .set({ status: 'quarantined' })
-    .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
-    .returning();
-  const row = must(updated[0], 'evidence');
-
-  await addJob(
-    QueueName.MalwareScan,
-    'scan',
-    {
-      organisationId: scope.organisationId,
-      correlationId: ctx.correlationId,
-      evidenceId,
-    },
-    { jobId: evidenceId },
-  );
-
-  await recordAudit({
-    action: 'evidence.uploaded',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-    after: {
-      data: { applicationId: row.applicationId, fileName: row.fileName },
-      allow: ['applicationId', 'fileName'],
-    },
+  const head = await headObject({
+    bucket: QUARANTINE_BUCKET,
+    key: existing.quarantineKey,
+    organisationId: scope.organisationId,
+  }).catch((err: unknown) => {
+    if (isMissingObject(err)) return null;
+    throw err;
   });
-  await recordAudit({
-    action: 'evidence.scan_started',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
+  const problem = quarantineUploadProblem(existing.sizeBytes, head);
+  if (problem) throw new EvidenceUploadIncompleteError(problem);
+
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({ status: 'quarantined' })
+      .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
+      .returning();
+    const saved = must(updated[0], 'evidence');
+
+    const after: { data: Record<string, unknown>; allow: string[] } = {
+      data: { applicationId: saved.applicationId },
+      allow: ['applicationId'],
+    };
+    // Coded channel and civil date only. Never the file name or free text.
+    if (saved.receiptChannel) {
+      after.data.receiptChannel = saved.receiptChannel;
+      after.data.receivedOn = saved.receivedOn;
+      after.allow.push('receiptChannel', 'receivedOn');
+    }
+    await recordAudit(
+      {
+        action: 'evidence.uploaded',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+        after,
+      },
+      tx,
+    );
+    await recordAudit(
+      {
+        action: 'evidence.scan_started',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+      },
+      tx,
+    );
+    return saved;
+  });
+
+  // Enqueue only after the quarantine and its audit have committed. A lost
+  // enqueue is redriven by the stuck-scan sweeper.
+  await enqueueMalwareScan({
+    organisationId: scope.organisationId,
+    correlationId: ctx.correlationId,
+    evidenceId,
+    jobId: evidenceId,
   });
 
   return row;
@@ -213,7 +274,7 @@ export async function getDownloadUrl(
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'denied',
-      reason: 'evidence not clean or not promoted',
+      reason: 'evidence.not_servable',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
@@ -284,30 +345,38 @@ export async function classifyEvidence(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(evidence)
-    .set({
-      classification: input.classification,
-      classifiedByUserId: ctx.userId,
-      classifiedAt: new Date(),
-    })
-    .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
-    .returning();
-  const row = must(updated[0], 'evidence');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(evidence)
+      .set({
+        classification: input.classification,
+        classifiedByUserId: ctx.userId,
+        classifiedAt: new Date(),
+      })
+      .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
+      .returning();
+    const row = must(updated[0], 'evidence');
 
-  await recordAudit({
-    action: 'evidence.classified',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-    before: {
-      data: { classification: existing.classification },
-      allow: ['classification'],
-    },
-    after: { data: { classification: row.classification }, allow: ['classification'] },
+    await recordAudit(
+      {
+        action: 'evidence.classified',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'success',
+        before: {
+          data: { classification: existing.classification },
+          allow: ['classification'],
+        },
+        after: {
+          data: { classification: row.classification },
+          allow: ['classification'],
+        },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Ask an applicant to supply further evidence on an application. */
@@ -323,31 +392,36 @@ export async function requestFurtherEvidence(
   await getApplication(applicationId);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(evidenceRequests)
-    .values(
-      scope.insertValues({
-        applicationId,
-        requestedByUserId: ctx.userId,
-        description: input.description,
-        dueAt: input.dueAt ?? null,
-        status: 'open',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'evidence request');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(evidenceRequests)
+      .values(
+        scope.insertValues({
+          applicationId,
+          requestedByUserId: ctx.userId,
+          description: input.description,
+          dueAt: input.dueAt ?? null,
+          status: 'open',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'evidence request');
 
-  await recordAudit({
-    action: 'evidence.requested',
-    resourceType: 'evidence',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { applicationId }, allow: ['applicationId'] },
+    await recordAudit(
+      {
+        action: 'evidence.requested',
+        resourceType: 'evidence',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { applicationId }, allow: ['applicationId'] },
+      },
+      tx,
+    );
+
+    // Recording the request does not notify the applicant. A person sends that
+    // notice, with the due date, through correspondence.
+    return row;
   });
-
-  // Recording the request does not notify the applicant. A person sends that
-  // notice, with the due date, through correspondence.
-  return row;
 }
 
 /* ---------------------------------------------------------------------------
@@ -365,23 +439,43 @@ function systemAudit(
   organisationId: string,
   correlationId: string,
   fields: Parameters<typeof recordAudit>[0],
+  tx?: AuditTransaction,
 ) {
-  return recordAudit({
-    ...fields,
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-  });
+  return recordAudit(
+    {
+      ...fields,
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+    },
+    tx,
+  );
+}
+
+/** Pass chunks through unchanged while feeding them to a hash. */
+async function* hashing(
+  source: AsyncIterable<Uint8Array>,
+  hash: Hash,
+): AsyncGenerator<Uint8Array> {
+  for await (const chunk of source) {
+    hash.update(chunk);
+    yield chunk;
+  }
 }
 
 /**
  * Scan a quarantined evidence object and settle its lifecycle. FAIL-SECURE:
  *   - scanner unavailable / error  → audit + THROW (BullMQ retries; stays quarantined);
+ *   - stored size ≠ declared size  → reject (delete, status `rejected`);
  *   - content-type spoofed         → reject (delete, status `rejected`);
  *   - malware found                → reject (delete, status `infected`);
  *   - clean                        → promote to the evidence bucket, status `clean`.
+ *
+ * Every read is pinned to the ETag seen at HeadObject, so the bytes that are
+ * size-checked, type-checked, scanned, hashed and promoted are the same object.
+ * The body is streamed to the scanner; it is never held in memory whole.
  *
  * Runs with an explicit organisation id (no ambient tenant context); all data
  * access goes through `scopeFor(organisationId)` and audit is attributed to the
@@ -425,70 +519,207 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     result: 'success',
   });
 
-  const settle = async (patch: EvidencePatch) => {
-    await scope.db
-      .update(evidence)
-      .set(patch)
-      .where(
-        and(eq(evidence.organisationId, organisationId), eq(evidence.id, evidenceId)),
-      );
+  // The status change and its audit commit or roll back together.
+  const settle = async (
+    patch: EvidencePatch,
+    audit: Parameters<typeof recordAudit>[0],
+  ) => {
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(evidence)
+        .set(patch)
+        .where(
+          and(eq(evidence.organisationId, organisationId), eq(evidence.id, evidenceId)),
+        );
+      await systemAudit(organisationId, correlationId, audit, tx);
+    });
   };
 
-  // Read the bytes; a storage error here should retry, so let it throw.
-  const buffer = await getObjectBytes({ bucket: QUARANTINE_BUCKET, key });
-
-  // Verify the REAL content type from magic bytes before scanning.
-  const detected = (await fileTypeFromBuffer(buffer))?.mime;
-  if (!contentTypeAcceptable(row.declaredContentType, detected)) {
+  const rejectUpload = async (
+    detected: string | null,
+    scanResult: string,
+    reason: string,
+    after: AuditMetaInput,
+  ) => {
     await deleteObject({ bucket: QUARANTINE_BUCKET, key });
-    await settle({
-      status: 'rejected',
-      detectedContentType: detected ?? null,
-      scanResult: 'rejected:content-type',
-      scannedAt: new Date(),
+    await settle(
+      {
+        status: 'rejected',
+        detectedContentType: detected,
+        scanResult,
+        scannedAt: new Date(),
+      },
+      {
+        action: 'evidence.rejected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason,
+        after,
+      },
+    );
+  };
+
+  // A missing quarantine object is terminal, not transient: retrying it only
+  // fills the dead-letter queue. A crash after copy+delete leaves the clean
+  // copy in the evidence bucket (only a clean scan writes there), so settle it
+  // clean. With nothing promoted, reject. Never mark unpromoted bytes clean.
+  const settleMissingQuarantine = async () => {
+    const promoted = await headObject({
+      bucket: EVIDENCE_BUCKET,
+      key,
+      organisationId,
+    }).catch((err: unknown) => {
+      if (isMissingObject(err)) return null;
+      throw err;
     });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.rejected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: `declared ${row.declaredContentType}, detected ${detected ?? 'unknown'}`,
+    if (promoted?.etag && uploadSizeAcceptable(row.sizeBytes, promoted.contentLength)) {
+      const promotedHash = createHash('sha256');
+      const promotedBody = await getObjectStream({
+        bucket: EVIDENCE_BUCKET,
+        key,
+        ifMatch: promoted.etag,
+        organisationId,
+      });
+      try {
+        for await (const chunk of promotedBody) promotedHash.update(chunk as Uint8Array);
+      } finally {
+        promotedBody.destroy();
+      }
+      await settle(
+        {
+          status: 'clean',
+          evidenceKey: key,
+          // Set from the verified type when the object was promoted.
+          detectedContentType: promoted.contentType ?? null,
+          sha256: promotedHash.digest('hex'),
+          scanResult: 'clean',
+          scannedAt: new Date(),
+        },
+        {
+          action: 'evidence.scan_clean',
+          resourceType: 'evidence',
+          resourceId: evidenceId,
+          result: 'success',
+          reason: 'evidence.promoted_object_present',
+        },
+      );
+      return;
+    }
+    await settle(
+      {
+        status: 'rejected',
+        scanResult: 'rejected:missing-object',
+        scannedAt: new Date(),
+      },
+      {
+        action: 'evidence.rejected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason: 'evidence.quarantine_object_missing',
+      },
+    );
+  };
+
+  // Verify the stored size against the declaration; any other storage error
+  // here should retry, so let it throw.
+  const head = await headObject({ bucket: QUARANTINE_BUCKET, key, organisationId }).catch(
+    (err: unknown) => {
+      if (isMissingObject(err)) return null;
+      throw err;
+    },
+  );
+  if (!head) {
+    await settleMissingQuarantine();
+    return;
+  }
+  if (!head.etag || !uploadSizeAcceptable(row.sizeBytes, head.contentLength)) {
+    await rejectUpload(null, 'rejected:size', 'evidence.size_mismatch', {
+      data: {
+        declaredSizeBytes: row.sizeBytes,
+        storedSizeBytes: head.contentLength ?? null,
+      },
+      allow: ['declaredSizeBytes', 'storedSizeBytes'],
     });
     return;
   }
+  const etag = head.etag;
 
-  // Scan. Any scanner unavailability MUST fail (retry) — never promote.
+  // Verify the REAL content type from magic bytes before scanning.
+  const detected = await detectContentType(
+    await getObjectStream({
+      bucket: QUARANTINE_BUCKET,
+      key,
+      ifMatch: etag,
+      organisationId,
+    }),
+  );
+  const verifiedType = verifiedContentType({
+    declared: row.declaredContentType,
+    detected,
+    fileName: row.fileName,
+  });
+  if (!verifiedType) {
+    await rejectUpload(
+      detected ?? null,
+      'rejected:content-type',
+      'evidence.content_type_mismatch',
+      {
+        data: {
+          declaredContentType: row.declaredContentType,
+          detectedContentType: detected ?? 'unknown',
+        },
+        allow: ['declaredContentType', 'detectedContentType'],
+      },
+    );
+    return;
+  }
+
+  // Scan, hashing the same bytes on the way through. Any scanner
+  // unavailability MUST fail (retry) — never promote.
+  const body = await getObjectStream({
+    bucket: QUARANTINE_BUCKET,
+    key,
+    ifMatch: etag,
+    organisationId,
+  });
+  const hash = createHash('sha256');
   let verdict: ScanVerdict;
   try {
-    verdict = await scanBuffer(buffer);
+    verdict = await scanStream(hashing(body, hash));
   } catch (err) {
     await systemAudit(organisationId, correlationId, {
       action: 'evidence.scan_failed',
       resourceType: 'evidence',
       resourceId: evidenceId,
       result: 'failure',
-      reason: 'scanner unavailable',
+      reason: 'evidence.scanner_unavailable',
     });
     // Stays quarantined. Rethrow so BullMQ retries with backoff.
     throw err;
+  } finally {
+    body.destroy();
   }
 
   if (!verdict.clean) {
     await deleteObject({ bucket: QUARANTINE_BUCKET, key });
-    await settle({
-      status: 'infected',
-      detectedContentType: detected ?? null,
-      scanSignature: verdict.signature ?? 'unknown',
-      scanResult: 'infected',
-      scannedAt: new Date(),
-    });
-    await systemAudit(organisationId, correlationId, {
-      action: 'evidence.scan_infected',
-      resourceType: 'evidence',
-      resourceId: evidenceId,
-      result: 'failure',
-      reason: verdict.signature ?? 'malware detected',
-    });
+    await settle(
+      {
+        status: 'infected',
+        detectedContentType: verifiedType,
+        scanSignature: verdict.signature ?? 'unknown',
+        scanResult: 'infected',
+        scannedAt: new Date(),
+      },
+      {
+        action: 'evidence.scan_infected',
+        resourceType: 'evidence',
+        resourceId: evidenceId,
+        result: 'failure',
+        reason: 'evidence.malware_detected',
+      },
+    );
 
     // Let the uploader know, calmly and without file details. Best-effort: a
     // notification failure must never change the fail-secure scan outcome.
@@ -516,23 +747,30 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     return;
   }
 
-  // Clean: hash, promote to the evidence bucket, mark servable.
-  const sha256 = createHash('sha256').update(buffer).digest('hex');
-  await moveQuarantineToEvidence({ organisationId, key });
-  await settle({
-    status: 'clean',
-    evidenceKey: key,
-    detectedContentType: detected ?? null,
-    sha256,
-    scanResult: 'clean',
-    scannedAt: new Date(),
+  // Clean: promote with the verified type as the stored Content-Type.
+  const sha256 = hash.digest('hex');
+  await moveQuarantineToEvidence({
+    organisationId,
+    key,
+    contentType: verifiedType,
+    ifMatch: etag,
   });
-  await systemAudit(organisationId, correlationId, {
-    action: 'evidence.scan_clean',
-    resourceType: 'evidence',
-    resourceId: evidenceId,
-    result: 'success',
-  });
+  await settle(
+    {
+      status: 'clean',
+      evidenceKey: key,
+      detectedContentType: verifiedType,
+      sha256,
+      scanResult: 'clean',
+      scannedAt: new Date(),
+    },
+    {
+      action: 'evidence.scan_clean',
+      resourceType: 'evidence',
+      resourceId: evidenceId,
+      result: 'success',
+    },
+  );
   logger.debug(
     { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },
     'evidence promoted',

@@ -12,7 +12,10 @@ import type { Permission } from './catalog';
  *  - `organisation-admin` administers people and configuration but is given NO
  *    evidence:* and NO decision:* / certificate:* permissions. Running the
  *    organisation must never let one person also handle applicants’ evidence or
- *    determine outcomes.
+ *    determine outcomes. `evidence:upload-on-behalf` is not an exception.
+ *  - `intake-officer` and `case-officer` may record evidence received for an
+ *    applicant (`evidence:upload-on-behalf`) on a case they can already read.
+ *    They record how and when it arrived. They do not decide identity.
  *  - `case-officer` prepares and reviews work but CANNOT `decision:finalise` or
  *    sign certificates — finalising and signing sit with the committee/chair.
  *  - `committee-member` gets `meeting:pack-access` and `decision:vote` but NOT
@@ -98,6 +101,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'application:update-intake',
       'application:assign',
       'evidence:read-assigned',
+      'evidence:upload-on-behalf',
       'evidence:request',
       'correspondence:send',
       'client:create',
@@ -117,6 +121,7 @@ export const SYSTEM_ROLES = Object.freeze({
       'application:read-assigned',
       'application:update-intake',
       'evidence:read-assigned',
+      'evidence:upload-on-behalf',
       'evidence:classify',
       'evidence:download',
       'evidence:request',
@@ -231,6 +236,11 @@ export const SYSTEM_ROLES = Object.freeze({
       'tenant:configure',
       'membership:manage',
       'correspondence:manage-templates',
+      // Transport scopes only. The admin still holds no application, evidence,
+      // decision or certificate read, so a key needs a separate data permission
+      // the issuer themselves holds before a tool can return records.
+      'mcp:read',
+      'mcp:read-pii',
       'report:view',
       'audit:view',
       'break-glass:approve',

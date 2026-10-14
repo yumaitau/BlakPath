@@ -1,4 +1,5 @@
 import { getPublicCorrespondence } from '@/domains/correspondence';
+import { publicKeyDegradation } from '@/lib/encryption/public-degradation';
 
 /**
  * Applicant letter page.
@@ -12,7 +13,21 @@ export default async function PublicCorrespondencePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const letter = await getPublicCorrespondence(token).catch(() => null);
+  const loaded = await getPublicCorrespondence(token).then(
+    (value) => ({ letter: value, unavailable: null }),
+    // A locked tenant key must not look like a bad link.
+    (error: unknown) => ({ letter: null, unavailable: publicKeyDegradation(error) }),
+  );
+  const { letter, unavailable } = loaded;
+
+  if (unavailable) {
+    return (
+      <article className="border-border bg-surface rounded-xl border p-6">
+        <h1 className="text-xl font-semibold">This letter can&apos;t be shown</h1>
+        <p className="text-muted-foreground mt-2 text-sm">{unavailable}</p>
+      </article>
+    );
+  }
 
   if (!letter) {
     return (

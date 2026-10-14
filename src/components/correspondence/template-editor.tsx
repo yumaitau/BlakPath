@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /**
  * Organisation letter templates. Editing a template does not send anything
@@ -44,8 +45,10 @@ const FIELDS = [
 
 export function TemplateEditor({ templates }: { templates: TemplateEditorItem[] }) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const locked = !hydrated || busy !== null;
   const [name, setName] = useState('');
   const [kind, setKind] = useState<string>('general');
   const [subjectTemplate, setSubjectTemplate] = useState('');
@@ -95,7 +98,7 @@ export function TemplateEditor({ templates }: { templates: TemplateEditorItem[] 
         <Button
           type="button"
           variant="outline"
-          disabled={busy !== null}
+          disabled={locked}
           onClick={() => submit('seed', '/api/correspondence/templates/seed', 'POST')}
         >
           {busy === 'seed' ? 'Adding…' : 'Add starter templates'}
@@ -108,7 +111,7 @@ export function TemplateEditor({ templates }: { templates: TemplateEditorItem[] 
             <TemplateForm
               template={template}
               busy={busy === template.id}
-              disabled={busy !== null}
+              disabled={locked}
               onSave={(value) =>
                 submit(
                   template.id,
@@ -151,6 +154,7 @@ export function TemplateEditor({ templates }: { templates: TemplateEditorItem[] 
           <select
             id="template-kind"
             className="border-input bg-surface h-11 rounded-md border px-3 text-base"
+            disabled={!hydrated}
             value={kind}
             onChange={(event) => setKind(event.target.value)}
           >
@@ -185,7 +189,7 @@ export function TemplateEditor({ templates }: { templates: TemplateEditorItem[] 
           />
         </div>
         <div>
-          <Button type="submit" disabled={busy !== null}>
+          <Button type="submit" disabled={locked}>
             {busy === 'create' ? 'Saving…' : 'Save template'}
           </Button>
         </div>
