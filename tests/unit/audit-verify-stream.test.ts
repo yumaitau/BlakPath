@@ -1,6 +1,7 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import type { Logger } from 'pino';
 import { computeEventHash, type HashableAuditEvent } from '@/domains/audit/hash';
@@ -443,8 +444,9 @@ describe('audit chain streaming verification', () => {
     expect(anchors.objects.size).toBe(1);
   });
 
-  it('verifies 5M events under a fixed memory ceiling', () => {
-    const stdout = execFileSync(
+  // Async so the vitest worker keeps answering RPC while the child runs.
+  it('verifies 5M events under a fixed memory ceiling', async () => {
+    const { stdout } = await promisify(execFile)(
       process.execPath,
       [
         '--expose-gc',
