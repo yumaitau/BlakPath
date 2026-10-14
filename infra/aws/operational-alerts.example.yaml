@@ -20,9 +20,15 @@ Mappings:
     Scanner:
       Name: clamav_unavailable
       Metric: ScannerUnavailable
+    SignatureAge:
+      Name: clamav_signature_age
+      Metric: ClamAvSignatureAgeHours
     Readiness:
       Name: readiness_dependency_down
       Metric: ReadinessDependencyFailures
+    KeyHealth:
+      Name: key_health_state_change
+      Metric: KeyHealthStateChanges
 
 Resources:
   ExhaustedJobFilter:
@@ -57,6 +63,16 @@ Resources:
           MetricName: ScannerUnavailable
           MetricValue: '1'
           DefaultValue: 0
+
+  SignatureAgeFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationLogGroupName
+      FilterPattern: '{ $.signal = "clamav_signature_age" }'
+      MetricTransformations:
+        - MetricNamespace: BlakPath/Operations
+          MetricName: ClamAvSignatureAgeHours
+          MetricValue: '$.ageHours'
 
   ReadinessFailureFilter:
     Type: AWS::Logs::MetricFilter
@@ -116,6 +132,22 @@ Resources:
       AlarmActions: [!Ref OnCallTopicArn]
       OKActions: [!Ref OnCallTopicArn]
 
+  SignatureAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-clamav-signature-age
+      AlarmDescription: ClamAV daily signatures are older than 48 hours. Evidence scans are still fail-secure, but detection is stale.
+      Namespace: BlakPath/Operations
+      MetricName: ClamAvSignatureAgeHours
+      Statistic: Maximum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 48
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
   ReadinessFailureAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -127,6 +159,33 @@ Resources:
       Period: 60
       EvaluationPeriods: 3
       Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  KeyHealthFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationLogGroupName
+      FilterPattern: '{ $.signal = "key_health_state_change" && $.alert = true }'
+      MetricTransformations:
+        - MetricNamespace: BlakPath/Operations
+          MetricName: KeyHealthStateChanges
+          MetricValue: '1'
+          DefaultValue: 0
+
+  KeyHealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-key-health-state-change
+      AlarmDescription: A tenant CMK changed state. Records for that organisation stay locked until the key is usable.
+      Namespace: BlakPath/Operations
+      MetricName: KeyHealthStateChanges
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
       AlarmActions: [!Ref OnCallTopicArn]

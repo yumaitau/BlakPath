@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * driving retries on the webhook schedule while a receiver is unreachable.
  */
 
+const SECRET = vi.hoisted(() => 'endpoint-signing-secret');
+
 const state = vi.hoisted(() => ({
   delivery: null as Record<string, unknown> | null,
   endpoint: null as Record<string, unknown> | null,
@@ -51,6 +53,28 @@ vi.mock('@/domains/audit/service', () => ({
   }),
 }));
 
+// The endpoint secret is sealed under the tenant key; open it to the fixture.
+vi.mock('@/lib/encryption/tenant-fields', () => ({
+  openWebhookSecret: vi.fn(async () => SECRET),
+}));
+
+// Skip the DNS-backed destination policy and route the request through the
+// stubbed global fetch so each test controls the receiver.
+vi.mock('@/domains/webhooks/dispatch', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    deliverWebhookRequest: async (
+      url: string,
+      body: string,
+      headers: Record<string, string>,
+    ): Promise<{ status: number }> => {
+      const res = await fetch(url, { method: 'POST', body, headers });
+      return { status: res.status };
+    },
+  };
+});
+
 vi.mock('@/lib/observability/logger', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -59,14 +83,13 @@ const { processWebhookDelivery, verifyPayload, webhookAttemptOffsetMs, MAX_ATTEM
   await import('@/domains/webhooks');
 
 const HOUR = 3_600_000;
-const SECRET = 'endpoint-signing-secret';
 
 beforeEach(() => {
   state.audits = [];
   state.endpoint = {
     id: 'endpoint-1',
     url: 'https://receiver.example/hook',
-    secret: SECRET,
+    secretCiphertext: 'sealed-secret',
     active: true,
     deletedAt: null,
   };
