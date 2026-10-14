@@ -8,6 +8,7 @@ import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
 import { startKeyHealthLoop } from './key-health-loop';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { queueFailureSignal } from './operational-signals';
+import { startSignatureAgeMonitor } from './signature-age-monitor';
 import { startAuthEmailWorker } from './auth-email';
 import { startTenantScheduleSync } from './scheduler';
 import { rememberPausedJob } from './tenant-pause-ledger';
@@ -105,6 +106,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
 let shuttingDown = false;
 let stopTenantScheduleSync: (() => void) | null = null;
+let stopSignatureAgeMonitor: (() => void) | null = null;
 const authEmailWorker = startAuthEmailWorker(connection, workerLogger);
 let stopKeyHealth: (() => void) | null = null;
 
@@ -129,6 +131,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   deadline.unref();
 
   try {
+    stopSignatureAgeMonitor?.();
     stopTenantScheduleSync?.();
     stopKeyHealth?.();
     await Promise.all([authEmailWorker.close(), ...workers.map((w) => w.close())]);
@@ -152,6 +155,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function main(): Promise<void> {
+  stopSignatureAgeMonitor = startSignatureAgeMonitor(workerLogger);
   // Create (or update) the durable per-tenant maintenance schedules before
   // accepting jobs. A startup failure is intentional: a worker without its
   // integrity/retention schedules is not healthy enough to serve.

@@ -22,6 +22,8 @@ with resources owned by the production environment.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
   `key_health_state_change` is one of those signals.
+  `clamav_signature_age` carries `ageHours` and pages when the maximum in an
+  hour is greater than 48.
 - `origin-edge.example.yaml` requests the origin ACM certificate, a regional
   WAFv2 web ACL (managed IP reputation, common, known-bad-inputs and SQLi rule
   groups) and the Authenticated Origin Pull trust store. Copy its outputs into
