@@ -20,9 +20,6 @@ import {
 /** SHA-256 of https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem */
 const RDS_CA_SHA256 = 'fe45bbebf92ad3e27a583bbb2ddd1553c521ed4d49af5514dc0a40372ea5395c';
 
-const CERTIFICATE_ERROR =
-  /unable to verify the first certificate|UNABLE_TO_VERIFY|self-signed certificate|self signed certificate/i;
-
 function selfSignedCert(): { cert: string; key: string; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'blakpath-tls-'));
   const key = join(dir, 'key.pem');
@@ -59,8 +56,8 @@ function listenTls(
     socket.once('data', () => {
       socket.write('S');
       const secure = new tls.TLSSocket(socket, { isServer: true, secureContext });
-      // A client that skips verification finishes the handshake; drop it so the
-      // query fails as a closed connection instead of waiting for Postgres.
+      // Should a client ever finish the handshake, drop it so the query fails
+      // instead of waiting for Postgres.
       secure.on('secure', () => {
         secure.destroy();
       });
@@ -140,7 +137,28 @@ describe('postgres connection options', () => {
     expect(postgresSsl('postgres://app:secret@localhost/blakpath')).toBe(false);
   });
 
-  it('fails the handshake when the server certificate is not in the RDS bundle', async () => {
+  it('always verifies the RDS bundle and hostname for every TLS sslmode', () => {
+    const ca = readRdsCaBundle();
+    for (const sslmode of ['require', 'verify-ca', 'verify-full', 'VERIFY-FULL']) {
+      for (const role of ['web', 'worker', 'migrate'] as const) {
+        const databaseUrl = `postgres://app:secret@db.internal/blakpath?sslmode=${sslmode}`;
+        const { ssl } = postgresClientOptions({ role, poolMax: 1, databaseUrl });
+        expect(ssl).toEqual({ ca, rejectUnauthorized: true, servername: 'db.internal' });
+        // No override: Node's default checkServerIdentity matches the hostname.
+        expect(ssl).not.toHaveProperty('checkServerIdentity');
+      }
+    }
+  });
+
+  it('refuses sslmodes that would skip verification', () => {
+    for (const sslmode of ['prefer', 'allow', 'no-verify']) {
+      expect(() =>
+        postgresSsl(`postgres://app:secret@db.internal/blakpath?sslmode=${sslmode}`),
+      ).toThrow(/verify-full/);
+    }
+  });
+
+  it('refuses a server certificate that is not in the RDS bundle', async () => {
     const generated = selfSignedCert();
     fixtures.push(generated.dir);
     const listener = await listenTls(generated.cert, generated.key);
@@ -149,30 +167,13 @@ describe('postgres connection options', () => {
       ...postgresClientOptions({ role: 'web', poolMax: 1, databaseUrl }),
       connect_timeout: 2,
     });
-    const unverified = postgres(
-      `postgres://blakpath:blakpath@127.0.0.1:${listener.port}/blakpath`,
-      {
-        ssl: { rejectUnauthorized: false },
-        max: 1,
-        prepare: false,
-        connect_timeout: 2,
-      },
-    );
 
     try {
       await expect(verified`select 1`).rejects.toMatchObject({
         code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
       });
-
-      const skipped = await unverified`select 1`.then(
-        () => null,
-        (error: unknown) => error,
-      );
-      expect(skipped).toBeInstanceOf(Error);
-      expect((skipped as Error).message).not.toMatch(CERTIFICATE_ERROR);
     } finally {
       await verified.end({ timeout: 1 }).catch(() => undefined);
-      await unverified.end({ timeout: 1 }).catch(() => undefined);
       await listener.close();
     }
   }, 10_000);
