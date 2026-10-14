@@ -22,6 +22,8 @@ import {
   applications,
   certificates,
   clients,
+  correspondenceItems,
+  correspondenceMessages,
   decisionVotes,
   decisions,
   destructionRegister,
@@ -43,6 +45,8 @@ import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import type { AuditAction, ResourceType } from '@/domains/audit/events';
 import {
   sealApplicationFields,
+  sealCorrespondenceItemText,
+  sealCorrespondenceMessageText,
   sealFamilyFields,
   sealFormResponse,
   sealNoteBody,
@@ -430,7 +434,7 @@ async function applicationObjectTargets(
   organisationId: string,
   applicationId: string,
 ): Promise<ObjectTarget[]> {
-  const [files, pdfs] = await Promise.all([
+  const [files, pdfs, letters] = await Promise.all([
     scope.db
       .select({
         quarantineKey: evidence.quarantineKey,
@@ -452,6 +456,16 @@ async function applicationObjectTargets(
           eq(certificates.applicationId, applicationId),
         ),
       ),
+    // Printed letters carry the applicant's name and the live link.
+    scope.db
+      .select({ pdfObjectKey: correspondenceItems.pdfObjectKey })
+      .from(correspondenceItems)
+      .where(
+        and(
+          eq(correspondenceItems.organisationId, organisationId),
+          eq(correspondenceItems.applicationId, applicationId),
+        ),
+      ),
   ]);
   const targets: ObjectTarget[] = [];
   for (const file of files) {
@@ -461,7 +475,7 @@ async function applicationObjectTargets(
       targets.push({ bucket: QUARANTINE_BUCKET, key: file.quarantineKey });
     }
   }
-  for (const pdf of pdfs) {
+  for (const pdf of [...pdfs, ...letters]) {
     if (pdf.pdfObjectKey)
       targets.push({ bucket: EVIDENCE_BUCKET, key: pdf.pdfObjectKey });
   }
@@ -562,6 +576,76 @@ async function idsFor(
   return rows.map((row) => row.id);
 }
 
+async function correspondenceRows(
+  tx: Tx,
+  organisationId: string,
+  applicationId: string,
+): Promise<Array<{ id: string; messageId: string | null }>> {
+  return tx
+    .select({ id: correspondenceItems.id, messageId: correspondenceItems.messageId })
+    .from(correspondenceItems)
+    .where(
+      and(
+        eq(correspondenceItems.organisationId, organisationId),
+        eq(correspondenceItems.applicationId, applicationId),
+      ),
+    );
+}
+
+/**
+ * Letters on the case and their sealed delivery copies. Text becomes a sealed
+ * placeholder, the recipient is cleared, and the applicant link stops
+ * resolving (its hash and expiry are removed). The PDF object was deleted
+ * before this transaction.
+ */
+async function anonymiseCorrespondence(
+  tx: Tx,
+  organisationId: string,
+  applicationId: string,
+): Promise<void> {
+  for (const row of await correspondenceRows(tx, organisationId, applicationId)) {
+    const sealed = await sealCorrespondenceItemText(organisationId, row.id, {
+      subjectTemplate: ANONYMISED_PLACEHOLDER,
+      bodyTemplate: ANONYMISED_PLACEHOLDER,
+      renderedSubject: ANONYMISED_PLACEHOLDER,
+      renderedBody: ANONYMISED_PLACEHOLDER,
+    });
+    await tx
+      .update(correspondenceItems)
+      .set({
+        ...sealed,
+        recipientName: null,
+        recipientEmail: null,
+        portalTokenHash: null,
+        portalExpiresAt: null,
+        pdfObjectKey: null,
+      })
+      .where(
+        and(
+          eq(correspondenceItems.organisationId, organisationId),
+          eq(correspondenceItems.id, row.id),
+        ),
+      );
+    if (row.messageId) {
+      await tx
+        .update(correspondenceMessages)
+        .set(
+          await sealCorrespondenceMessageText(
+            organisationId,
+            row.messageId,
+            ANONYMISED_PLACEHOLDER,
+          ),
+        )
+        .where(
+          and(
+            eq(correspondenceMessages.organisationId, organisationId),
+            eq(correspondenceMessages.id, row.messageId),
+          ),
+        );
+    }
+  }
+}
+
 async function anonymiseApplication(
   tx: Tx,
   organisationId: string,
@@ -637,6 +721,7 @@ async function anonymiseApplication(
         eq(evidenceRequests.applicationId, applicationId),
       ),
     );
+  await anonymiseCorrespondence(tx, organisationId, applicationId);
   await tx
     .update(reviews)
     .set({ content: ANONYMISED_PLACEHOLDER, version: nextRowVersion() })
@@ -921,6 +1006,16 @@ async function tombstoneApplication(
         ),
       );
   }
+  // A purged case's letter links stop resolving now, not after the grace period.
+  await tx
+    .update(correspondenceItems)
+    .set({ portalTokenHash: null, portalExpiresAt: null })
+    .where(
+      and(
+        eq(correspondenceItems.organisationId, organisationId),
+        eq(correspondenceItems.applicationId, applicationId),
+      ),
+    );
   await tx
     .update(applications)
     .set(versioned())
@@ -953,6 +1048,21 @@ async function hardDeleteApplication(
         and(
           eq(formInvitations.organisationId, organisationId),
           inArray(formInvitations.formId, formIds),
+        ),
+      );
+  }
+  // Letters cascade with the application. Their sealed delivery copies sit in
+  // correspondence_messages (FK points the other way), so delete them here.
+  const messageIds = (await correspondenceRows(tx, organisationId, applicationId))
+    .map((row) => row.messageId)
+    .filter((id): id is string => id !== null);
+  if (messageIds.length > 0) {
+    await tx
+      .delete(correspondenceMessages)
+      .where(
+        and(
+          eq(correspondenceMessages.organisationId, organisationId),
+          inArray(correspondenceMessages.id, messageIds),
         ),
       );
   }

@@ -558,6 +558,34 @@ export async function openCorrespondenceItemRows<
   );
 }
 
+/**
+ * Replacement text for an existing `correspondence_messages` row (retention
+ * anonymise). Recipient, subject and text body are required columns, so the
+ * caller passes a placeholder; the HTML body is cleared.
+ */
+export async function sealCorrespondenceMessageText(
+  organisationId: string,
+  rowId: string,
+  value: string,
+): Promise<{ recipient: string; subject: string; textBody: string; htmlBody: null }> {
+  const scope = await scopeFor(organisationId);
+  const seal = async (column: string) => {
+    const sealed = await sealText(
+      scope,
+      bind('correspondence_messages', column, rowId),
+      value,
+    );
+    if (!sealed) throw new Error('Correspondence fields cannot be empty');
+    return sealed;
+  };
+  return {
+    recipient: await seal('recipient'),
+    subject: await seal('subject'),
+    textBody: await seal('text_body'),
+    htmlBody: null,
+  };
+}
+
 export async function insertSealedCorrespondence(input: {
   organisationId: string;
   recipient: string;
