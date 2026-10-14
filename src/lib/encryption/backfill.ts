@@ -705,50 +705,60 @@ export async function runBackfillBatch(
       scope,
     );
     const moved = advance(position.table, step);
-    const updated = await db
-      .update(encryptionBackfillRuns)
-      .set({
-        cursor: moved.cursor,
-        rowsEncrypted: sql`${encryptionBackfillRuns.rowsEncrypted} + ${step.count}`,
-        status: moved.done ? 'completed' : 'running',
-        finishedAt: moved.done ? new Date() : null,
-      })
-      .where(eq(encryptionBackfillRuns.id, run.id))
-      .returning({ rowsEncrypted: encryptionBackfillRuns.rowsEncrypted });
-    if (step.count > 0) {
-      await recordAudit({
-        action: 'encryption.backfill_batch',
-        resourceType: 'organisation',
-        resourceId: input.organisationId,
-        result: 'success',
-        organisationId: input.organisationId,
-        actorUserId: null,
-        actingRole: 'system',
-        sessionId: null,
-        correlationId: input.correlationId,
-        after: {
-          data: { table: position.table, rowsEncrypted: step.count },
-          allow: ['table', 'rowsEncrypted'],
-        },
-      });
-    }
-    if (moved.done) {
-      await recordAudit({
-        action: 'encryption.backfill_completed',
-        resourceType: 'organisation',
-        resourceId: input.organisationId,
-        result: 'success',
-        organisationId: input.organisationId,
-        actorUserId: null,
-        actingRole: 'system',
-        sessionId: null,
-        correlationId: input.correlationId,
-        after: {
-          data: { rowsEncrypted: updated[0]?.rowsEncrypted ?? step.count },
-          allow: ['rowsEncrypted'],
-        },
-      });
-    }
+    // Progress and its audit commit together. The re-sealed rows above are
+    // idempotent, so a rolled-back batch is simply redone from the old cursor.
+    await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(encryptionBackfillRuns)
+        .set({
+          cursor: moved.cursor,
+          rowsEncrypted: sql`${encryptionBackfillRuns.rowsEncrypted} + ${step.count}`,
+          status: moved.done ? 'completed' : 'running',
+          finishedAt: moved.done ? new Date() : null,
+        })
+        .where(eq(encryptionBackfillRuns.id, run.id))
+        .returning({ rowsEncrypted: encryptionBackfillRuns.rowsEncrypted });
+      if (step.count > 0) {
+        await recordAudit(
+          {
+            action: 'encryption.backfill_batch',
+            resourceType: 'organisation',
+            resourceId: input.organisationId,
+            result: 'success',
+            organisationId: input.organisationId,
+            actorUserId: null,
+            actingRole: 'system',
+            sessionId: null,
+            correlationId: input.correlationId,
+            after: {
+              data: { table: position.table, rowsEncrypted: step.count },
+              allow: ['table', 'rowsEncrypted'],
+            },
+          },
+          tx,
+        );
+      }
+      if (moved.done) {
+        await recordAudit(
+          {
+            action: 'encryption.backfill_completed',
+            resourceType: 'organisation',
+            resourceId: input.organisationId,
+            result: 'success',
+            organisationId: input.organisationId,
+            actorUserId: null,
+            actingRole: 'system',
+            sessionId: null,
+            correlationId: input.correlationId,
+            after: {
+              data: { rowsEncrypted: updated[0]?.rowsEncrypted ?? step.count },
+              allow: ['rowsEncrypted'],
+            },
+          },
+          tx,
+        );
+      }
+    });
     return {
       done: moved.done,
       cursor: moved.cursor,

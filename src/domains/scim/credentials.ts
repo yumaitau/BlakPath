@@ -35,33 +35,39 @@ export async function createScimCredential(
   const expiresAt = new Date(Date.now() + input.expiresInDays * DAY_MS);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(scimCredentials)
-    .values(
-      scope.insertValues({
-        name: input.name,
-        tokenHash: hashScimToken(token),
-        prefix: scimDisplayPrefix(token),
-        allowOrganisationAdmin: input.allowOrganisationAdmin,
-        createdByUserId: ctx.userId,
-        expiresAt,
-      }),
-    )
-    .returning();
-  const credential = must(inserted[0], 'scim credential');
+  const credential = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(scimCredentials)
+      .values(
+        scope.insertValues({
+          name: input.name,
+          tokenHash: hashScimToken(token),
+          prefix: scimDisplayPrefix(token),
+          allowOrganisationAdmin: input.allowOrganisationAdmin,
+          createdByUserId: ctx.userId,
+          expiresAt,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'scim credential');
 
-  await recordAudit({
-    action: 'scim.credential_created',
-    resourceType: 'scim_credential',
-    resourceId: credential.id,
-    result: 'success',
-    after: {
-      data: {
-        prefix: credential.prefix,
-        allowOrganisationAdmin: credential.allowOrganisationAdmin,
+    await recordAudit(
+      {
+        action: 'scim.credential_created',
+        resourceType: 'scim_credential',
+        resourceId: created.id,
+        result: 'success',
+        after: {
+          data: {
+            prefix: created.prefix,
+            allowOrganisationAdmin: created.allowOrganisationAdmin,
+          },
+          allow: ['prefix', 'allowOrganisationAdmin'],
+        },
       },
-      allow: ['prefix', 'allowOrganisationAdmin'],
-    },
+      tx,
+    );
+    return created;
   });
 
   return { credential, token };
@@ -107,28 +113,33 @@ export async function revokeScimCredential(id: string): Promise<ScimCredentialRo
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const scope = currentScope();
-  const updated = await scope.db
-    .update(scimCredentials)
-    .set({ revokedAt: new Date() })
-    .where(
-      scope.where(
-        scimCredentials.organisationId,
-        eq(scimCredentials.id, id),
-        isNull(scimCredentials.revokedAt),
-      ),
-    )
-    .returning();
-  const row = updated[0];
-  if (!row) throw new AuthorizationError('POLICY_DENIED');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(scimCredentials)
+      .set({ revokedAt: new Date() })
+      .where(
+        scope.where(
+          scimCredentials.organisationId,
+          eq(scimCredentials.id, id),
+          isNull(scimCredentials.revokedAt),
+        ),
+      )
+      .returning();
+    const row = updated[0];
+    if (!row) throw new AuthorizationError('POLICY_DENIED');
 
-  await recordAudit({
-    action: 'scim.credential_revoked',
-    resourceType: 'scim_credential',
-    resourceId: id,
-    result: 'success',
-    after: { data: { prefix: row.prefix }, allow: ['prefix'] },
+    await recordAudit(
+      {
+        action: 'scim.credential_revoked',
+        resourceType: 'scim_credential',
+        resourceId: id,
+        result: 'success',
+        after: { data: { prefix: row.prefix }, allow: ['prefix'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /**
@@ -176,23 +187,26 @@ export async function rotateScimCredential(
       )
       .returning();
     const created = must(inserted[0], 'scim credential');
-    return { created, previousId: existing.id };
-  });
 
-  await recordAudit({
-    action: 'scim.credential_rotated',
-    resourceType: 'scim_credential',
-    resourceId: credential.created.id,
-    result: 'success',
-    after: {
-      data: {
-        previousId: credential.previousId,
-        prefix: credential.created.prefix,
-        allowOrganisationAdmin: credential.created.allowOrganisationAdmin,
+    await recordAudit(
+      {
+        action: 'scim.credential_rotated',
+        resourceType: 'scim_credential',
+        resourceId: created.id,
+        result: 'success',
+        after: {
+          data: {
+            previousId: existing.id,
+            prefix: created.prefix,
+            allowOrganisationAdmin: created.allowOrganisationAdmin,
+          },
+          allow: ['previousId', 'prefix', 'allowOrganisationAdmin'],
+        },
       },
-      allow: ['previousId', 'prefix', 'allowOrganisationAdmin'],
-    },
+      tx,
+    );
+    return created;
   });
 
-  return { credential: credential.created, token };
+  return { credential, token };
 }

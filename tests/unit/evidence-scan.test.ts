@@ -24,18 +24,17 @@ vi.mock('@/db/tenant-db', () => ({
       where: () => chain,
       limit: () => Promise.resolve([{ organisationId, ...evidenceRow }]),
     };
-    return {
-      organisationId,
-      db: {
-        select: () => chain,
-        update: () => ({
-          set: (patch: Record<string, unknown>) => {
-            patches.push(patch);
-            return { where: () => Promise.resolve() };
-          },
-        }),
-      },
+    const db = {
+      select: () => chain,
+      update: () => ({
+        set: (patch: Record<string, unknown>) => {
+          patches.push(patch);
+          return { where: () => Promise.resolve() };
+        },
+      }),
+      transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
     };
+    return { organisationId, db };
   },
 }));
 vi.mock('@/domains/audit/service', () => ({ recordAudit: vi.fn(async () => ({})) }));

@@ -147,7 +147,9 @@ or email, keep it running.
 - **E2E** runs under **Playwright** (`pnpm test:e2e`) and covers public/auth
   boundaries, tenant selection, applications, board persistence, meetings
   import/export, the full public-form lifecycle, membership/role changes,
-  account security, sign-out and automated accessibility acceptance.
+  account security, sign-out and automated accessibility acceptance. It starts
+  `next dev` by default. `PLAYWRIGHT_SERVER=production` serves an existing
+  `pnpm build` output with `next start` instead, as CI does.
 - **Live-stack E2E** (`pnpm test:live`) starts a disposable Compose project on
   isolated high ports, migrates and seeds its database, and proves real sign-in,
   MinIO quarantine, ClamAV promotion, worker queues, Mailpit delivery and public

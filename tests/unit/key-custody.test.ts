@@ -11,13 +11,16 @@ const { recordAudit, recordPlatformAudit, select, update } = vi.hoisted(() => ({
   update: vi.fn(),
 }));
 
-vi.mock('@/db/client', () => ({
-  db: {
+vi.mock('@/db/client', () => {
+  const db = {
     select: (...args: unknown[]) => select(...args),
     update: (...args: unknown[]) => update(...args),
     insert: vi.fn(),
-  },
-}));
+    // Writes and their audit share one transaction; run the callback on the mock.
+    transaction: (fn: (tx: unknown) => unknown) => fn(db),
+  };
+  return { db };
+});
 
 vi.mock('@/domains/audit', () => ({
   recordAudit: (...args: unknown[]) => recordAudit(...args),
@@ -224,6 +227,7 @@ describe('tenant-scoped key custody', () => {
     expect(update.mock.results[0]?.value.set).toHaveBeenCalledWith({ status: 'active' });
     expect(recordPlatformAudit).toHaveBeenLastCalledWith(
       expect.objectContaining({ action: 'key.status_changed', result: 'success' }),
+      expect.anything(),
     );
   });
 

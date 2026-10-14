@@ -47,56 +47,66 @@ export async function recordConsent(
     id,
     wordingRows[0]?.consentWording ?? null,
   );
-  const inserted = await scope.db
-    .insert(consentRecords)
-    .values(
-      scope.insertValues({
-        id,
-        subjectUserId: input.subjectUserId,
-        recordedByUserId: ctx.userId,
-        purpose: input.purpose,
-        status: 'granted',
-        expiresAt: input.expiresAt ?? null,
-        notes: input.notes ?? null,
-        wordingSnapshot,
-      }),
-    )
-    .returning();
-  const stored = must(inserted[0], 'consent record');
-  const [row] = await openConsentRows(scope.organisationId, [stored]);
-  const opened = must(row, 'consent record');
-  await recordAudit({
-    action: 'consent.recorded',
-    resourceType: 'consent',
-    resourceId: opened.id,
-    result: 'success',
+  const stored = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(consentRecords)
+      .values(
+        scope.insertValues({
+          id,
+          subjectUserId: input.subjectUserId,
+          recordedByUserId: ctx.userId,
+          purpose: input.purpose,
+          status: 'granted',
+          expiresAt: input.expiresAt ?? null,
+          notes: input.notes ?? null,
+          wordingSnapshot,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'consent record');
+    await recordAudit(
+      {
+        action: 'consent.recorded',
+        resourceType: 'consent',
+        resourceId: created.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return created;
   });
-  return opened;
+  const [row] = await openConsentRows(scope.organisationId, [stored]);
+  return must(row, 'consent record');
 }
 
 export async function withdrawConsent(id: string): Promise<ConsentRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_WRITE_PERMISSIONS);
   const scope = currentScope();
-  const updated = await scope.db
-    .update(consentRecords)
-    .set({ status: 'withdrawn', revokedAt: new Date() })
-    .where(scope.where(consentRecords.organisationId, eq(consentRecords.id, id)))
-    .returning();
-  const stored = updated[0];
-  if (!stored) {
-    const { AuthorizationError } = await import('@/lib/permissions/errors');
-    throw new AuthorizationError('POLICY_DENIED');
-  }
-  const [row] = await openConsentRows(scope.organisationId, [stored]);
-  const opened = must(row, 'consent record');
-  await recordAudit({
-    action: 'consent.withdrawn',
-    resourceType: 'consent',
-    resourceId: id,
-    result: 'success',
+  const stored = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(consentRecords)
+      .set({ status: 'withdrawn', revokedAt: new Date() })
+      .where(scope.where(consentRecords.organisationId, eq(consentRecords.id, id)))
+      .returning();
+    const withdrawn = updated[0];
+    if (!withdrawn) {
+      const { AuthorizationError } = await import('@/lib/permissions/errors');
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+    await recordAudit(
+      {
+        action: 'consent.withdrawn',
+        resourceType: 'consent',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return withdrawn;
   });
-  return opened;
+  const [row] = await openConsentRows(scope.organisationId, [stored]);
+  return must(row, 'consent record');
 }
 
 export async function listConsents(subjectUserId: string): Promise<ConsentRow[]> {
