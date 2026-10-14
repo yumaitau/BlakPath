@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AUDIT_APPEND_ONLY_TRIGGERS } from '@/db/audit-guard';
 import { BreakGlassWriteError } from '@/lib/tenancy/break-glass-write';
 
 /**
@@ -64,9 +65,25 @@ integration('break-glass grant, expiry, review, and read-only scope', () => {
     await runtime.db
       .delete(runtime.schema.breakGlassRequests)
       .where(eq(runtime.schema.breakGlassRequests.organisationId, organisationId));
-    await runtime.db
-      .delete(runtime.schema.auditEvents)
-      .where(eq(runtime.schema.auditEvents.organisationId, organisationId));
+    // The trail is append-only; lift the guard only for test cleanup.
+    for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
+      await runtime.db
+        .execute(sql.raw(`ALTER TABLE ${trigger.table} DISABLE TRIGGER ${trigger.name}`))
+        .catch(() => undefined);
+    }
+    try {
+      await runtime.db
+        .delete(runtime.schema.auditEvents)
+        .where(eq(runtime.schema.auditEvents.organisationId, organisationId));
+    } finally {
+      for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
+        await runtime.db
+          .execute(
+            sql.raw(`ALTER TABLE ${trigger.table} ENABLE ALWAYS TRIGGER ${trigger.name}`),
+          )
+          .catch(() => undefined);
+      }
+    }
     await runtime.db
       .delete(runtime.schema.organisations)
       .where(eq(runtime.schema.organisations.id, organisationId));
@@ -139,7 +156,7 @@ integration('break-glass grant, expiry, review, and read-only scope', () => {
     expect(ctx.permissions.has('application:create')).toBe(false);
 
     await expect(
-      runtime.tenancy.runWithTenantContext(ctx, () => {
+      runtime.tenancy.runWithTenantContext(ctx, async () => {
         const scope = runtime.tenantDb.currentScope();
         return scope.db.insert(runtime.schema.breakGlassRequests).values({
           organisationId,
@@ -217,5 +234,52 @@ integration('break-glass grant, expiry, review, and read-only scope', () => {
     );
     expect(reviewed.reviewedByUserId).toBe(approverId);
     expect(reviewed.reviewNotes).toContain('matched the support case');
+
+    // The notes stay on the row. The append-only trail holds a code only.
+    const audit = await runtime.db
+      .select({ reason: runtime.schema.auditEvents.reason })
+      .from(runtime.schema.auditEvents)
+      .where(eq(runtime.schema.auditEvents.resourceId, grantId));
+    expect(audit.map((row) => row.reason)).toContain('break_glass.reviewed');
+    expect(JSON.stringify(audit)).not.toContain('matched the support case');
+  });
+
+  it('refuses an active grant until the tenant has been notified', async () => {
+    const grantId = randomUUID();
+    await runtime.db.insert(runtime.schema.breakGlassRequests).values({
+      id: grantId,
+      organisationId,
+      supportCaseRef: 'SUP-UNNOTIFIED',
+      requestedByUserId: operatorId,
+      purpose: 'Check a stuck upload',
+      scope: 'Read application status',
+      status: 'active',
+      stepUpVerified: true,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      activatedAt: new Date(),
+    });
+
+    await expect(
+      runtime.breakGlass.resolveBreakGlassContext({
+        requestId: grantId,
+        userId: operatorId,
+        correlationId: randomUUID(),
+        reqId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(runtime.breakGlass.BreakGlassError);
+
+    const audit = await runtime.db
+      .select({
+        action: runtime.schema.auditEvents.action,
+        result: runtime.schema.auditEvents.result,
+        reason: runtime.schema.auditEvents.reason,
+      })
+      .from(runtime.schema.auditEvents)
+      .where(eq(runtime.schema.auditEvents.resourceId, grantId));
+    expect(audit).toContainEqual({
+      action: 'break_glass.accessed',
+      result: 'denied',
+      reason: 'break_glass.grant_not_live',
+    });
   });
 });

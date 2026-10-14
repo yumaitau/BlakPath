@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GET as listV1Applications } from '@/app/api/v1/applications/route';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { ApiKeyError } from '@/domains/api-keys';
-import { BreakGlassError } from '@/domains/break-glass';
+import {
+  BreakGlassError,
+  BreakGlassNotifyError,
+  BreakGlassReviewOverdueError,
+} from '@/domains/break-glass';
 import { CalendarConflictError } from '@/domains/calendar/errors';
 import { FormResponseLinkError, FormTokenError } from '@/domains/forms';
 import { StaffMfaRequiredError } from '@/lib/auth/staff-policy';
@@ -180,6 +184,16 @@ describe('errorResponse', () => {
         'Logo must be a PNG or JPEG under 512 KB.',
       ],
       [new OrganisationUnavailableError(), 403, 'Forbidden'],
+      [
+        new BreakGlassNotifyError('No tenant approver is available to notify.'),
+        409,
+        'No tenant approver is available to notify.',
+      ],
+      [
+        new BreakGlassReviewOverdueError(),
+        409,
+        'A previous emergency-access review is overdue for this organisation.',
+      ],
       [new ConcurrencyConflictError(), 409, CONCURRENCY_CONFLICT_MESSAGE],
       [new EvidenceUploadIncompleteError('missing'), 409, 'Upload incomplete'],
       [new RetentionTargetError(), 404, 'Legal hold target does not exist'],
