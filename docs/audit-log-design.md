@@ -25,7 +25,7 @@ Each row in `audit_events` captures one audited action:
 | `resourceType`               | text           | Kind of resource, e.g. `application`, `evidence`, `membership`.                                      |
 | `resourceId`                 | text, nullable | The affected resource id.                                                                            |
 | `result`                     | enum           | `success` \| `failure` \| `denied` (`audit_result`). `denied` = authz refusal; `failure` = error.    |
-| `reason`                     | text, nullable | Human-readable reason, especially for `denied`/`failure`.                                            |
+| `reason`                     | text, nullable | Coded value (`code` or `code:recordId`). Free text stays on the mutable row the id points at.        |
 | `ipAddress`, `userAgent`     | text           | Request origin. `ipAddress` is the trusted client address, or null when the origin was not verified. |
 | `correlationId`, `requestId` | text           | Trace/correlation, from the `TenantContext`.                                                         |
 | `beforeMeta`, `afterMeta`    | jsonb          | **Minimal, non-sensitive** change context — never full evidence payloads or secrets.                 |
@@ -129,16 +129,40 @@ sensitive content itself:
 - `beforeMeta` / `afterMeta` carry **minimal** change context — changed field
   names, status transitions, ids — **never** full evidence payloads, personal
   identity documents, genealogy detail, passwords, TOTP secrets or tokens.
+- Personal values are not stored. A rename is `changed: ['applicantName']`, not
+  the name. An evidence upload records the application id, not the file name.
+  Notes, emails, phone numbers and form answers are on the same denylist
+  (`src/domains/audit/hash.ts`). A forbidden key is stored as `[REDACTED]` even
+  if an allowlist names it, and tests fail if any allowlist names one.
+- `reason` is a dotted code. When the explanation is free text, the code may
+  be `code:recordId` and the text lives only on that mutable row (for example
+  `application_status_history.note` or `break_glass_requests.denial_reason`).
 - Secrets are never written to audit under any circumstance.
 - Because the hash covers the content fields, redaction is done **at write time**
   (only safe metadata is ever stored); the stored row is not later scrubbed, so
-  the chain stays intact.
+  the chain stays intact. Retention anonymisation removes a name from the
+  application row. It does not rewrite `audit_events`. That is safe only
+  because new events never received the name.
 - Reads of the audit trail are themselves permission-checked (`audit:view`) and
   tenant-scoped, so one tenant can never read another's audit history. The
   organisation id comes from the verified tenant context, never from the query.
   Opening the log (`audit.viewed`), exporting it (`audit.exported`) and
   acknowledging the monthly review (`audit.monthly_review_recorded`) are events
   on the same chain.
+
+## Existing chains
+
+The production-readiness review on 2026-10-13 (`main` @ `8e7dc3c`) found no
+BlakPath database in the AWS account. There are no production audit rows to
+remediate.
+
+Do not `UPDATE` or `DELETE` `audit_events` to remove personal information.
+Either change breaks the hash chain, and the append-only triggers above refuse
+both. No migration disables those triggers to scrub old rows. A non-production database that already
+contains names, notes or file names in the trail should be dropped and
+recreated before it is used for production records. If a future production
+chain is ever found to contain personal data, archive and verify that chain as
+a whole, then start a new chain. Do not edit the old rows.
 
 ## What must be audited
 

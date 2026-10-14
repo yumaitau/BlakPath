@@ -41,13 +41,45 @@ function isCurrentPath(pathname: string, href: string): boolean {
   return pathname === href || (href !== '/dashboard' && pathname.startsWith(`${href}/`));
 }
 
+function ToolLinks({
+  tools,
+  pathname,
+}: {
+  tools: readonly { href: string; label: string }[];
+  pathname: string;
+}) {
+  return tools.map((item) => {
+    const currentPath = isCurrentPath(pathname, item.href);
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        // Tool pages read tenant data and some audit the view (`/audit` records
+        // audit.viewed). Prefetch would record views nobody made.
+        prefetch={false}
+        aria-current={currentPath ? 'page' : undefined}
+        className={cn(
+          'flex shrink-0 items-center rounded-md px-3 py-2 text-sm font-semibold transition-colors',
+          currentPath
+            ? 'bg-surface-muted text-foreground'
+            : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
+        )}
+      >
+        {item.label}
+      </Link>
+    );
+  });
+}
+
 /** Authenticated staff chrome: navigational context, tenant switcher and inbox. */
 export function StaffShell({
   organisations,
   activeOrganisationId,
+  tools,
 }: {
   organisations: readonly StaffOrganisation[];
   activeOrganisationId: string;
+  tools: readonly { href: string; label: string }[];
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -202,6 +234,15 @@ export function StaffShell({
             className="ml-auto shrink-0 sm:hidden"
           />
         </nav>
+
+        {tools.length > 0 ? (
+          <nav
+            aria-label="Organisation tools"
+            className="border-border -mx-1 flex gap-1 overflow-x-auto border-t py-2 md:mx-0 md:flex-wrap"
+          >
+            <ToolLinks tools={tools} pathname={pathname} />
+          </nav>
+        ) : null}
       </div>
     </header>
   );

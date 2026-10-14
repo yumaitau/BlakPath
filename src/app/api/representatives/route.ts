@@ -1,7 +1,22 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
-import { requestRepresentativeAccess } from '@/domains/representatives';
+import {
+  listRepresentativeAuthorisations,
+  requestRepresentativeAccess,
+} from '@/domains/representatives';
+
+/** GET /api/representatives — list authorisations in the active organisation. */
+export async function GET(): Promise<Response> {
+  try {
+    const authorisations = await withRequestTenant(() =>
+      listRepresentativeAuthorisations(),
+    );
+    return NextResponse.json({ authorisations });
+  } catch (error) {
+    return toErrorResponse(error);
+  }
+}
 
 /** POST /api/representatives — request access (live consent required). */
 export async function POST(request: NextRequest): Promise<Response> {

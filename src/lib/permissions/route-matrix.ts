@@ -96,6 +96,11 @@ const CONSENT_READ = [
   'application:read-assigned',
 ] as const satisfies readonly Permission[];
 
+const REPRESENTATIVE_LIST = [
+  'application:update-intake',
+  'application:assign',
+] as const satisfies readonly Permission[];
+
 const TASK_READ = [
   'application:read-assigned',
   'application:read-any',
@@ -327,6 +332,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
     body: { subjectUserId: '{{user}}', purpose: 'matrix-consent' },
   }),
+  route('DELETE', '/api/consents/[id]', anyOf(CONSENT_WRITE)),
   route(
     'GET',
     '/api/dashboard/layout',
@@ -356,6 +362,9 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/email/events', { kind: 'webhook-secret' }),
   route('GET', '/api/evidence/[id]/download', anyOf(['evidence:download'])),
   route('POST', '/api/evidence/[id]/complete', anyOf(['evidence:upload-own'])),
+  route('POST', '/api/evidence/[id]/classification', anyOf(['evidence:classify']), {
+    body: { classification: 'Matrix label' },
+  }),
   route('GET', '/api/forms', anyOf(FORM_MANAGE), {
     allowRole: 'intake-officer',
     allowProbe: true,
@@ -526,6 +535,10 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   }),
   route('POST', '/api/reports/exports', anyOf(['report:export'])),
   route('GET', '/api/reports/exports/[id]/download', anyOf(['report:export'])),
+  route('GET', '/api/representatives', anyOf(REPRESENTATIVE_LIST), {
+    allowRole: 'intake-officer',
+    allowProbe: true,
+  }),
   route('POST', '/api/representatives', anyOf(CONSENT_WRITE)),
   route('PATCH', '/api/representatives/[id]', anyOf(CONSENT_WRITE), {
     body: { operation: 'revoke' },
@@ -548,6 +561,9 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('DELETE', '/api/retention/policies/[id]', anyOf(['retention:manage'])),
   route('PATCH', '/api/reviews/[id]', anyOf(['review:finalise']), {
     body: { operation: 'finalise' },
+  }),
+  route('POST', '/api/reviews/[id]/comments', anyOf(['review:create']), {
+    body: { body: 'Matrix comment' },
   }),
   route('GET', '/api/scim/credentials', anyOf(['tenant:configure']), {
     allowRole: 'organisation-admin',
@@ -579,6 +595,9 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
   }),
   route('POST', '/api/sso/providers', anyOf(['tenant:configure'])),
+  route('PATCH', '/api/sso/providers/[id]', anyOf(['tenant:configure']), {
+    body: { enabled: false },
+  }),
   route('GET', '/api/tasks', anyOf(TASK_READ), {
     allowRole: 'intake-officer',
     allowProbe: true,
@@ -619,7 +638,6 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
 export const UNROUTED_PERMISSIONS = {
   'evidence:read-assigned':
     'Included in the break-glass read bundle. Download checks evidence:download.',
-  'evidence:classify': 'classifyEvidence has no route.',
   'family-link:request': 'requestFamilyLink has no route.',
   'family-link:approve': 'approveFamilyLink has no route.',
   'conflict:declare': 'declareConflict has no route.',
