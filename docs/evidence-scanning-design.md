@@ -90,13 +90,28 @@ Only `clean` objects can be presigned for download, and only to a caller with
 
 ## Validation & hardening
 
-- **Pre-upload:** enforce allow-listed content types and a maximum size before
-  minting the presigned PUT.
-- **Post-upload (worker):** verify the real content type from magic bytes
-  (`file-type`) against the declared type — reject spoofed extensions before
-  scanning.
+- **Pre-upload:** enforce allow-listed content types and a maximum size (25 MiB)
+  before minting the presigned PUT. The upload form checks type and size in the
+  browser first, with plain-language errors, but the server is authoritative.
+- **Signed PUT:** the presigned URL signs `Content-Type` and `Content-Length`
+  (the presigner leaves `Content-Type` unsigned unless asked), so S3 refuses a
+  PUT whose type or size differs from the declaration.
+- **Post-upload (worker):** `HeadObject` first — the stored size must equal the
+  declared size and stay within the cap, or the upload is rejected
+  (`rejected:size`). Every later read and the promotion copy are pinned to that
+  `ETag`, so a re-upload cannot swap bytes between checks.
+- **Content type (worker):** verify the real content type from magic bytes
+  (`file-type`, streamed) against the declared type — reject spoofed extensions
+  before scanning. Known container equivalences are accepted: a legacy `.doc`
+  is detected as an MS Compound File (`application/x-cfb`) and is accepted as
+  `application/msword` only when the file name ends in `.doc`; HEIC and HEIF
+  share a container and are interchangeable. Unidentifiable bytes are rejected.
 - **Scanning:** stream the object to ClamAV (`INSTREAM`) at
-  `CLAMAV_HOST:CLAMAV_PORT`; do not load whole files into app memory.
+  `CLAMAV_HOST:CLAMAV_PORT` in 64 KiB frames with socket backpressure, hashing
+  (SHA-256) on the way; whole files are never loaded into app memory.
+- **Promotion:** the copy into the evidence bucket replaces the object metadata
+  (`MetadataDirective: REPLACE`) and sets `Content-Type` to the verified type,
+  never the client-declared one.
 - **Retries:** scan jobs use BullMQ retry with backoff. A scanner outage causes
   retries, not promotion; persistent failures are dead-lettered and alerted while
   the file remains quarantined.

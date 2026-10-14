@@ -16,9 +16,18 @@ function transpile(fileName, source) {
   }).outputText;
 }
 
+// The gate and its only local dependency. Imports are rewritten to the
+// sibling .cjs files so the bundle runs from the image root without a resolver.
+const migrationUrl = transpile(
+  'migration-url.ts',
+  readFileSync(join(root, 'src/db/migration-url.ts'), 'utf8'),
+);
 const lib = transpile(
   'production-readiness.ts',
-  readFileSync(join(root, 'src/lib/production-readiness.ts'), 'utf8'),
+  readFileSync(join(root, 'src/lib/production-readiness.ts'), 'utf8').replace(
+    "from '@/db/migration-url'",
+    "from './migration-url.cjs'",
+  ),
 );
 const cli = transpile(
   'check-production-readiness.ts',
@@ -29,5 +38,6 @@ const cli = transpile(
 );
 
 mkdirSync(outDir, { recursive: true });
+writeFileSync(join(outDir, 'migration-url.cjs'), migrationUrl);
 writeFileSync(join(outDir, 'production-readiness.cjs'), lib);
 writeFileSync(join(outDir, 'release-check.cjs'), cli);

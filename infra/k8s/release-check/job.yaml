@@ -35,6 +35,14 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            # The gate checks the migration role is distinct and uses TLS.
+            # Web and worker pods never mount blakpath-migrator; this Job does.
+            - name: DATABASE_MIGRATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-migrator
+                  key: DATABASE_MIGRATION_URL
           resources:
             requests:
               cpu: 50m
@@ -56,6 +64,14 @@ spec:
                 name: blakpath-config
             - secretRef:
                 name: blakpath-runtime
+          env:
+            # The gate checks the migration role is distinct and uses TLS.
+            # Web and worker pods never mount blakpath-migrator; this Job does.
+            - name: DATABASE_MIGRATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-migrator
+                  key: DATABASE_MIGRATION_URL
           resources:
             requests:
               cpu: 50m

@@ -41,4 +41,6 @@ jobs:
           chmod 600 "${HOME}/.kube/config"
 
       - name: Run release gate and block rollout on failure
-        run: bash scripts/eks-deploy.sh "${{ inputs.image_tag }}"
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: bash scripts/eks-deploy.sh "${IMAGE_TAG}"

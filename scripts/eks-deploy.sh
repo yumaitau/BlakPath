@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Roll out only after the release-check Job exits 0.
 # The Job runs node release-check.cjs in the candidate web and worker images
-# with the production ConfigMap and Secret. A failed gate does not apply workloads.
+# with the production ConfigMap, runtime Secret and migrator URL. A failed gate
+# does not apply workloads.
 set -euo pipefail
 
 tag="${1:-}"
@@ -24,7 +25,9 @@ echo "Applying namespace, config, and secret sync before the release gate"
 kubectl apply -f "$work/k8s/namespace.yaml"
 kubectl apply -f "$work/k8s/serviceaccounts.yaml"
 kubectl apply -f "$work/k8s/configmap.yaml"
+kubectl apply -f "$work/k8s/secretstore.yaml"
 kubectl apply -f "$work/k8s/externalsecret.yaml"
+kubectl apply -f "$work/k8s/migrator-externalsecret.yaml"
 
 echo "Running release-check Job for ${tag}"
 kubectl delete job -n blakpath blakpath-release-check --ignore-not-found

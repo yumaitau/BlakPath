@@ -15,11 +15,12 @@
  * no bypass of the password/MFA path. A real provider is only ever available
  * once it has been explicitly, deliberately registered.
  *
- * A future domain rule will additionally gate provider *selection* per tenant:
- * an organisation must opt in to a specific IdP and that binding must be
- * verified (see `organisationDomains`) before any of its members can federate.
- * That tenant-binding logic lives in the tenancy/identity layer, not here — this
- * file only models the provider capability itself.
+ * Provider *selection* is gated per tenant: an organisation must opt in to a
+ * specific IdP and that binding must be enabled and its domain verified (see
+ * `organisationDomains`) before any of its members can federate. That
+ * tenant-binding logic lives in the SSO domain (`src/domains/sso/sign-in.ts`)
+ * and the Better Auth plugin (`sso-plugin.ts`), not here — this file only
+ * models the provider capability itself.
  */
 
 /** The federation protocol a provider speaks. */
@@ -47,25 +48,44 @@ export interface FederatedIdentity {
 export interface SsoAuthorizationRequest {
   /** Fully-formed IdP authorization URL to redirect the browser to. */
   redirectUrl: string;
-  /** Opaque state to persist and verify on callback (CSRF protection). */
+  /** The `state` value sent to the IdP (CSRF protection). */
   state: string;
+  /**
+   * Sealed flow transaction (state, nonce, PKCE verifier, tenant, issuer). The
+   * caller MUST store it in an httpOnly cookie on THIS browser and hand it back
+   * to `complete` — it never travels through the IdP, which is what binds the
+   * callback to the browser that started the flow.
+   */
+  transaction: string;
 }
 
 /** Context passed when starting an authorization flow. */
 export interface SsoStartContext {
   /** The organisation this sign-in is scoped to (tenant binding). */
   organisationId: string;
+  /** Tenant-specific issuer from the binding; the only issuer accepted. */
+  issuer: string;
+  /** Client id from the binding; providers reject one they hold no secret for. */
+  clientId: string;
   /** Absolute callback URL the IdP must return to. */
   callbackUrl: string;
+  /** Optional sign-in hint (the email the user entered). */
+  loginHint?: string;
 }
 
 /** Context passed when completing an authorization flow. */
 export interface SsoCallbackContext {
   organisationId: string;
+  /** Tenant-specific issuer from the binding, re-read at callback time. */
+  issuer: string;
+  /** Client id from the binding. */
+  clientId: string;
   /** The exact callback URL that was hit, including query parameters. */
   callbackUrl: string;
   /** The `state` value returned by the IdP, to be verified against what we issued. */
   state: string;
+  /** The sealed transaction from this browser's cookie (see `start`). */
+  transaction: string;
 }
 
 /**

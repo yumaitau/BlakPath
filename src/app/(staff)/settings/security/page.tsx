@@ -25,9 +25,12 @@ export default function SecuritySettingsPage() {
       <p className="text-muted-foreground mt-2">
         Add extra protection to your account with two-step verification and passkeys.
       </p>
-      <div className="mt-4">
+      <div className="mt-4 flex flex-wrap gap-2">
         <Button asChild variant="outline" size="sm">
           <Link href="/settings/people">Manage people and access</Link>
+        </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/settings/encryption-keys">Encryption keys</Link>
         </Button>
       </div>
       <div className="mt-8">

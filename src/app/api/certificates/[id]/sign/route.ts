@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
-import {
-  requireRecentAuth,
-  StepUpRequiredError,
-  STEP_UP_WINDOWS,
-} from '@/lib/auth/session';
+import { requireRecentAuth, STEP_UP_WINDOWS } from '@/lib/auth/session';
 import { signCertificate } from '@/domains/certificates';
 
 /**
@@ -25,12 +21,6 @@ export async function POST(
     const certificate = await withRequestTenant(() => signCertificate(id));
     return NextResponse.json({ id: certificate.id, status: certificate.status });
   } catch (error) {
-    if (error instanceof StepUpRequiredError) {
-      return NextResponse.json(
-        { error: 'Re-authentication required', code: 'STEP_UP_REQUIRED' },
-        { status: 401 },
-      );
-    }
     return toErrorResponse(error);
   }
 }
