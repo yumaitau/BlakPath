@@ -42,6 +42,7 @@ export {
   updateForm,
   type CaseFormResponse,
   type FormInvitationRow,
+  type PublicFormInvitation,
   type FormResponseRow,
   type FormRow,
   type PublicForm,

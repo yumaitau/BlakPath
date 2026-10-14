@@ -2,7 +2,10 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 
-import { FormTokenError, requestPublicFileUpload } from '@/domains/forms';
+import { requestPublicFileUpload } from '@/domains/forms';
+import { clientIpForLimits } from '@/lib/http/client-ip';
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
+import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 
 /**
@@ -15,38 +18,31 @@ import { isAuthorizationError } from '@/lib/permissions/errors';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await params;
-
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json(
-      { error: 'This file could not be accepted.' },
-      { status: 400 },
-    );
-  }
+  const ip = clientIpForLimits(request.headers);
+  const limited = await enforcePair(REQUEST_LIMITS.publicFormFile, ip, token);
+  if (limited) return limited;
 
   try {
+    const body: unknown = await request.json();
     const prepared = await requestPublicFileUpload(token, body);
     return NextResponse.json(prepared, { status: 201 });
   } catch (error) {
-    if (error instanceof FormTokenError) {
-      return NextResponse.json(
-        { error: 'This form link is invalid or has expired.' },
-        { status: 404 },
+    if (
+      error instanceof SyntaxError ||
+      error instanceof ZodError ||
+      isAuthorizationError(error)
+    ) {
+      throw new ClientSafeError(
+        400,
+        'VALIDATION_ERROR',
+        'This file could not be accepted.',
       );
     }
-    if (error instanceof ZodError || isAuthorizationError(error)) {
-      return NextResponse.json(
-        { error: 'This file could not be accepted.' },
-        { status: 400 },
-      );
-    }
-    return NextResponse.json({ error: 'Something went wrong.' }, { status: 500 });
+    throw error;
   }
-}
+});

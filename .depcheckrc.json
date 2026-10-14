@@ -1,0 +1,9 @@
+{
+  "ignores": [
+    "@tailwindcss/postcss",
+    "@worker/*",
+    "pino-pretty",
+    "prettier-plugin-tailwindcss",
+    "tailwindcss"
+  ]
+}

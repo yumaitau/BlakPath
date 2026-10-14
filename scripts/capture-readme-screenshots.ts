@@ -56,6 +56,7 @@ async function setActiveOrganisation(page: Page, organisationId: string): Promis
   const cookies = await page.context().cookies();
   const sessionDataCookie = cookies.find(
     (cookie) =>
+      cookie.name === '__Host-blakpath.session_data' ||
       cookie.name === '__Secure-blakpath.session_data' ||
       cookie.name === 'blakpath.session_data',
   );

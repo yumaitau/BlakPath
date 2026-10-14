@@ -21,10 +21,12 @@ import { applications } from './applications';
  * recipient completes the form via a public link WITHOUT signing in, and the
  * answers land in `form_responses`. All tenant-owned and org-leading indexed.
  *
- * SECURITY: an invitation stores only the SHA-256 HASH of its secret token, so a
- * database read never yields a usable link. The public completion path resolves
- * a presented token by hashing it and matching the hash — the token itself is
- * the capability, and it is scoped, single-use for submission, and expiring.
+ * SECURITY: an invitation stores the SHA-256 HASH of its secret token for
+ * lookup, plus a sealed copy used only to deliver the email. The seal is
+ * envelope ciphertext and is cleared after a successful send. A database read
+ * never yields a usable link. The public completion path resolves a presented
+ * token by hashing it and matching the hash — the token itself is the
+ * capability, and it is scoped, single-use for submission, and expiring.
  * A half-finished draft may be saved against that same token and resumed until
  * the invitation expires; submitting still consumes the token.
  */
@@ -65,8 +67,13 @@ export const formInvitations = pgTable(
     formId: refId('form_id')
       .notNull()
       .references(() => forms.id, { onDelete: 'cascade' }),
-    /** SHA-256 hex of the secret token. The raw token is never stored. */
+    /** SHA-256 hex of the secret token. Lookup key; not a usable link. */
     tokenHash: text('token_hash').notNull(),
+    /**
+     * Envelope-encrypted bearer token. Present only until the worker sends
+     * the invitation email, then cleared. Never copied onto a queue.
+     */
+    tokenSeal: jsonb('token_seal'),
     recipientName: text('recipient_name'),
     recipientEmail: text('recipient_email'),
     status: formInvitationStatus('status').notNull().default('pending'),
@@ -120,7 +127,10 @@ export const formResponses = pgTable(
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
     /** Coarse origin for abuse investigation; not shown in the UI. */
     ipAddress: text('ip_address'),
+    /** Set once retention has anonymised this response. A later sweep skips it. */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
+    ...softDelete,
   },
   (table) => [
     index('form_responses_org_form_idx').on(table.organisationId, table.formId),

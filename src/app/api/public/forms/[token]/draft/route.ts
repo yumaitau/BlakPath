@@ -1,46 +1,45 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-import { FormTokenError, savePublicDraft } from '@/domains/forms';
+import { savePublicDraft } from '@/domains/forms';
+import { isTenantKeyUnavailable } from '@/lib/encryption/errors';
+import { clientIpForLimits } from '@/lib/http/client-ip';
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
+import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 
 /**
  * POST /api/public/forms/[token]/draft — save a partial response.
  *
- * Same token capability as submit. Answers are stored on the invitation and
- * restored by GET of the public form until the invitation expires. The token
- * stays usable for the real submission.
+ * Same token capability as submit, never `withRequestTenant`. Answers are
+ * sealed on the invitation and restored by the public form page until the
+ * invitation expires. The token stays usable for the real submission.
+ * Failures do not reveal whether the token existed.
  */
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await params;
+  const ip = clientIpForLimits(request.headers);
+  const limited = await enforcePair(REQUEST_LIMITS.publicFormDraft, ip, token);
+  if (limited) return limited;
 
-  let answers: unknown;
+  // FormTokenError (404) and OrganisationUnavailableError (403) map centrally.
   try {
     const body = (await request.json()) as { answers?: unknown };
-    answers = body.answers;
-  } catch {
-    return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
-  }
-
-  try {
-    const saved = await savePublicDraft(token, answers);
+    const saved = await savePublicDraft(token, body.answers);
     return NextResponse.json(saved);
   } catch (error) {
-    if (error instanceof FormTokenError) {
-      return NextResponse.json(
-        { error: 'This form link is invalid or has expired.' },
-        { status: 404 },
-      );
+    if (error instanceof SyntaxError || isAuthorizationError(error)) {
+      throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Some answers are invalid.');
     }
-    if (isAuthorizationError(error)) {
-      return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
+    if (isTenantKeyUnavailable(error)) {
+      throw new ClientSafeError(500, 'INTERNAL_ERROR', 'Internal error');
     }
-    return NextResponse.json({ error: 'Something went wrong.' }, { status: 500 });
+    throw error;
   }
-}
+});

@@ -1,5 +1,5 @@
 {
-  "id": "ada255a2-1efa-4ec4-8bab-c787f3781747",
+  "id": "b76854e1-4ba5-4e09-97ec-9bce58b81107",
   "prevId": "e1a6652d-3756-465e-ac7c-9ed3d84da830",
   "version": "7",
   "dialect": "postgresql",
@@ -193,6 +193,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "aaguid": {
+          "name": "aaguid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -379,6 +385,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "verified": {
+          "name": "verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "failed_verification_count": {
+          "name": "failed_verification_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -453,6 +479,13 @@
         },
         "is_platform_operator": {
           "name": "is_platform_operator",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "two_factor_enabled": {
+          "name": "two_factor_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -3896,13 +3929,7 @@
           "name": "application_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
-        },
-        "form_invitation_id": {
-          "name": "form_invitation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "uploaded_by_user_id": {
           "name": "uploaded_by_user_id",
@@ -4052,27 +4079,6 @@
           "method": "btree",
           "with": {}
         },
-        "evidence_org_form_invitation_idx": {
-          "name": "evidence_org_form_invitation_idx",
-          "columns": [
-            {
-              "expression": "organisation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "form_invitation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "evidence_org_status_idx": {
           "name": "evidence_org_status_idx",
           "columns": [
@@ -4120,19 +4126,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "evidence_form_invitation_id_form_invitations_id_fk": {
-          "name": "evidence_form_invitation_id_form_invitations_id_fk",
-          "tableFrom": "evidence",
-          "tableTo": "form_invitations",
-          "columnsFrom": [
-            "form_invitation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "evidence_uploaded_by_user_id_users_id_fk": {
@@ -6323,24 +6316,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "draft_answers": {
-          "name": "draft_answers",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "draft_saved_at": {
-          "name": "draft_saved_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "draft_expires_at": {
-          "name": "draft_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -6475,12 +6450,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "application_id": {
-          "name": "application_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "respondent_name": {
           "name": "respondent_name",
           "type": "text",
@@ -6542,27 +6511,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "form_responses_org_application_idx": {
-          "name": "form_responses_org_application_idx",
-          "columns": [
-            {
-              "expression": "organisation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "application_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -6598,19 +6546,6 @@
           "tableTo": "form_invitations",
           "columnsFrom": [
             "invitation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "form_responses_application_id_applications_id_fk": {
-          "name": "form_responses_application_id_applications_id_fk",
-          "tableFrom": "form_responses",
-          "tableTo": "applications",
-          "columnsFrom": [
-            "application_id"
           ],
           "columnsTo": [
             "id"

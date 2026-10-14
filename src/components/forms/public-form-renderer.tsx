@@ -11,6 +11,8 @@ import { Field, type FieldRenderProps } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { cn } from '@/lib/utils';
 
 /**
@@ -194,6 +196,7 @@ type SubmitState =
 
 export function PublicFormRenderer({ token, form }: { token: string; form: PublicForm }) {
   const baseId = useId();
+  const hydrated = useHydrated();
   const [values, setValues] = useState<Record<string, AnswerValue>>(() =>
     buildInitialState(form.fields, form.draft),
   );
@@ -328,6 +331,13 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
         return;
       }
 
+      const conflict = await readConflictMessage(res);
+      if (conflict) {
+        setSubmit({ status: 'error', message: conflict });
+        requestAnimationFrame(() => errorRef.current?.focus());
+        return;
+      }
+
       if (res.status === 404) {
         setSubmit({
           status: 'error',
@@ -427,13 +437,13 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" disabled={isSubmitting || uploadBusy}>
+            <Button type="submit" disabled={!hydrated || isSubmitting || uploadBusy}>
               {isSubmitting ? 'Submitting…' : 'Submit'}
             </Button>
             <Button
               type="button"
               variant="secondary"
-              disabled={isSubmitting || uploadBusy}
+              disabled={!hydrated || isSubmitting || uploadBusy}
               onClick={() => {
                 dirty.current = true;
                 void persistDraft();
@@ -470,6 +480,8 @@ function FieldControl({
 }) {
   const id = `${baseId}-${field.key}`;
   const helpText = field.helpText ?? undefined;
+  // React does not replay a select change made before hydration.
+  const hydrated = useHydrated();
 
   // Boolean and multiselect are group-shaped, so they manage their own labelling
   // rather than going through the single-control Field wrapper.
@@ -630,6 +642,7 @@ function FieldControl({
                 {...props}
                 aria-required={field.required}
                 value={stringValue}
+                disabled={!hydrated}
                 onChange={(e) => onValueChange(e.target.value)}
                 className={cn(
                   'border-input bg-surface text-foreground flex h-11 w-full rounded-md border px-3 py-2 text-base',

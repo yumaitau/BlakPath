@@ -42,6 +42,7 @@ export type AuditAction =
   | 'mfa.removed'
   | 'mfa.challenge_succeeded'
   | 'mfa.challenge_failed'
+  | 'mfa.access_denied'
   | 'mfa.recovery_codes_regenerated'
   | 'mfa.recovery_code_used'
   | 'mfa.passkey_registered'
@@ -87,6 +88,7 @@ export type AuditAction =
   | 'evidence.scan_clean'
   | 'evidence.scan_infected'
   | 'evidence.scan_failed'
+  | 'evidence.scan_requeued'
   | 'evidence.rejected'
   | 'evidence.deleted'
   | 'evidence.quarantined'
@@ -94,6 +96,10 @@ export type AuditAction =
   // API keys (public REST API credentials).
   | 'api_key.created'
   | 'api_key.revoked'
+  // SCIM directory credentials (per organisation).
+  | 'scim.credential_created'
+  | 'scim.credential_rotated'
+  | 'scim.credential_revoked'
   // Custom forms & tokenised responses.
   | 'form.created'
   | 'form.updated'
@@ -202,6 +208,7 @@ export type AuditAction =
   | 'certificate.generated'
   | 'certificate.signed'
   | 'certificate.viewed'
+  | 'certificate.verified'
   | 'certificate.downloaded'
   | 'certificate.reissued'
   | 'certificate.revoked'
@@ -214,6 +221,7 @@ export type AuditAction =
   | 'import.completed'
   // Retention / lifecycle of data.
   | 'retention.policy_applied'
+  | 'retention.policy_deleted'
   | 'retention.record_purged'
   | 'retention.record_anonymised'
   | 'retention.hold_placed'
@@ -227,12 +235,16 @@ export type AuditAction =
   | 'break_glass.expired'
   | 'break_glass.tenant_notified'
   | 'break_glass.reviewed'
+  // Background jobs that were not run.
+  | 'job.rejected'
   // Integrations.
   | 'integration.connected'
   | 'integration.disconnected'
   | 'integration.credentials_rotated'
   | 'integration.call_succeeded'
   | 'integration.call_failed'
+  // Organisation lifecycle. Recorded on the platform chain by an operator.
+  | 'organisation.status_changed'
   // Admin / configuration.
   | 'admin.organisation_updated'
   | 'admin.settings_updated'
@@ -241,10 +253,32 @@ export type AuditAction =
   | 'admin.domain_verified'
   | 'admin.domain_removed'
   | 'admin.terminology_updated'
-  // Audit self-events (integrity).
+  // Tenant key custody (platform chain — not a determination).
+  | 'key.registered'
+  | 'key.rotated'
+  | 'key.replacement_started'
+  | 'key.rewrap_completed'
+  | 'key.status_changed'
+  | 'key.unavailable'
+  | 'key.validation_passed'
+  | 'key.validation_failed'
+  | 'key.deletion_scheduled'
+  | 'key.destruction_certified'
+  | 'key.replacement_started'
+  | 'key.escrow_opted_in'
+  | 'key.escrow_withdrawn'
+  | 'key.health_checked'
+  | 'key.viewed'
+  // Field encryption backfill. Counts and table names only.
+  | 'encryption.backfill_batch'
+  | 'encryption.backfill_completed'
+  // Audit self-events (integrity and access to the trail itself).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'
-  | 'audit.divergence_detected';
+  | 'audit.divergence_detected'
+  | 'audit.viewed'
+  | 'audit.exported'
+  | 'audit.monthly_review_recorded';
 
 /**
  * The exhaustive set of resource types an audit event may reference. Stable
@@ -257,6 +291,9 @@ export type ResourceType =
   | 'passkey'
   | 'organisation'
   | 'organisation_settings'
+  | 'organisation_key'
+  | 'organisation_key_rewrap'
+  | 'destruction_certificate'
   | 'organisation_domain'
   | 'feature_flag'
   | 'role'
@@ -273,6 +310,7 @@ export type ResourceType =
   | 'assignment'
   | 'task'
   | 'api_key'
+  | 'scim_credential'
   | 'form'
   | 'form_invitation'
   | 'form_response'
@@ -296,8 +334,10 @@ export type ResourceType =
   | 'retention_policy'
   | 'break_glass_request'
   | 'integration'
+  | 'job'
   | 'search'
-  | 'audit_chain';
+  | 'audit_chain'
+  | 'audit_log';
 
 /** All audit results, useful for runtime validation and enumeration. */
 export const AUDIT_RESULTS: readonly AuditResult[] = [
