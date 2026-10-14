@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, lte, or } from 'drizzle-orm';
 import {
   calendarEventAttendees,
   calendarEventReminders,
@@ -90,14 +90,22 @@ async function resourceConflicts(input: {
 /**
  * Whether this tenant hard-blocks resource double-booking. Tenant override
  * wins; platform default row (null organisation) next; absent = warn-only.
+ * The read is limited to this organisation and the platform default.
  */
-async function resourceHardBlock(): Promise<boolean> {
+export async function resourceHardBlock(): Promise<boolean> {
   const scope = currentScope();
   const rows = await scope.db
     .select()
     .from(featureFlags)
-    .where(eq(featureFlags.key, 'calendar-resource-hard-block'))
-    .limit(10);
+    .where(
+      and(
+        eq(featureFlags.key, 'calendar-resource-hard-block'),
+        or(
+          eq(featureFlags.organisationId, scope.organisationId),
+          isNull(featureFlags.organisationId),
+        ),
+      ),
+    );
   const orgRow = rows.find((r) => r.organisationId === scope.organisationId);
   if (orgRow) return orgRow.enabled;
   const platform = rows.find((r) => r.organisationId === null);
