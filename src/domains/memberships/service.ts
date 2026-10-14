@@ -69,7 +69,7 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
       resourceType: 'user',
       resourceId: existing.id,
       result: 'denied',
-      reason: 'account already exists — sign in instead',
+      reason: 'auth.account_exists',
       organisationId: invitation.organisationId,
     });
     throw new AuthorizationError('POLICY_DENIED');
@@ -96,7 +96,7 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
     resourceType: 'user',
     resourceId: userId,
     result: 'success',
-    reason: 'invite-bound signup',
+    reason: 'auth.invite_signup',
     organisationId: invitation.organisationId,
   });
   return { userId };

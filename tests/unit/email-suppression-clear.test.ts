@@ -8,13 +8,13 @@ const state = vi.hoisted(() => ({
     resourceId?: string | null;
     reason?: string | null;
   }[],
-  sets: [] as { clearedAt?: unknown }[],
+  sets: [] as { clearedAt?: unknown; clearedReason?: unknown }[],
 }));
 
 vi.mock('@/db/client', () => ({
   db: {
     update: () => ({
-      set: (values: { clearedAt?: unknown }) => {
+      set: (values: { clearedAt?: unknown; clearedReason?: unknown }) => {
         state.sets.push(values);
         return {
           where: () => ({
@@ -60,12 +60,13 @@ describe('clearSuppression', () => {
     });
     expect(result).toEqual({ cleared: true });
     expect(state.sets[0]?.clearedAt).toBeInstanceOf(Date);
+    expect(state.sets[0]?.clearedReason).toBe('mailbox restored');
     expect(state.audits).toEqual([
       expect.objectContaining({
         action: 'email.suppression_cleared',
         actorUserId: ACTOR,
         resourceId: 'sup-1',
-        reason: 'mailbox restored',
+        reason: 'email.suppression_note',
       }),
     ]);
   });

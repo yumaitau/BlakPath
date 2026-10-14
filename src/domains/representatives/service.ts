@@ -91,7 +91,7 @@ export async function requestRepresentativeAccess(
       resourceType: 'representative_authorisation',
       resourceId: null,
       result: 'denied',
-      reason: 'no live consent',
+      reason: 'representative.no_live_consent',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
@@ -146,7 +146,7 @@ export async function activateRepresentativeAccess(
       resourceType: 'representative_authorisation',
       resourceId: id,
       result: 'denied',
-      reason: 'consent lapsed',
+      reason: 'representative.consent_lapsed',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }

@@ -105,7 +105,7 @@ describe('setOrganisationStatus', () => {
       resourceType: 'organisation',
       resourceId: 'org-1',
       result: 'success',
-      reason: 'pilot ended',
+      reason: 'organisation.status_note',
       actorUserId: 'user-1',
       actingRole: 'platform-operator',
       before: { data: { status: 'active' }, allow: ['status'] },
