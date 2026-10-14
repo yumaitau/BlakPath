@@ -328,7 +328,7 @@ integration('retention sweep', () => {
     expect(await auditCount(orgId, 'once-second')).toBe(0);
   });
 
-  it('anonymises family links, evidence, form responses, notes, client and decision notes', async () => {
+  it('anonymises family links, evidence, form responses, notes, client, decision notes and conflict reasons', async () => {
     const orgId = await createOrg();
     const dueAt = new Date(Date.now() - (MIN_RETENTION_DAYS + 10) * DAY);
     const [client] = await db
@@ -387,6 +387,13 @@ integration('retention sweep', () => {
       proposedOutcome: 'deferred',
       rationale: 'private rationale',
       status: 'proposed',
+    });
+    const member = await createUser();
+    await db.insert(schema.conflictDeclarations).values({
+      organisationId: orgId,
+      applicationId: appId,
+      declaredByUserId: member,
+      reason: await fields.sealConflictReason(orgId, member, 'cousin of the applicant'),
     });
     await addPolicy(orgId, 'application', 'anonymise');
 
@@ -447,6 +454,13 @@ integration('retention sweep', () => {
       .where(drizzle.eq(schema.decisions.applicationId, appId));
     expect(decision?.rationale).toBeNull();
     expect(decision?.status).toBe('proposed');
+
+    const [conflict] = await db
+      .select()
+      .from(schema.conflictDeclarations)
+      .where(drizzle.eq(schema.conflictDeclarations.applicationId, appId));
+    expect(conflict?.reason).toBeNull();
+    expect(conflict?.status).toBe('declared');
 
     // The old name's blind index must not still find the anonymised matter.
     const { blindIndex } = await import('@/lib/encryption/blind-index');

@@ -49,6 +49,8 @@ integration('committee meetings', () => {
       slug: `meeting-${suffix}`,
       status: 'active',
     });
+    const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+    await ensureOrganisationKey(organisationId);
     await runtime.db.insert(runtime.schema.memberships).values({
       id: membershipId,
       organisationId,
@@ -188,5 +190,164 @@ integration('committee meetings', () => {
     );
     expect(finalised.meetingId).toBe(meeting.id);
     expect(finalised.status).toBe('finalised');
+  });
+
+  it('seals minutes, quorum, attendance notes and conflict reasons at rest', async () => {
+    const { tenancy, applications, meetings, db, schema } = runtime;
+    const application = await tenancy.runWithTenantContext(context, () =>
+      applications.createApplication({
+        applicantName: 'Name supplied for the sealed meeting test',
+        applicantUserId: userId,
+        priority: 'normal',
+      }),
+    );
+    const meeting = await tenancy.runWithTenantContext(context, () =>
+      meetings.createMeeting({
+        title: 'Sealed sitting',
+        scheduledStart: new Date('2026-11-02T00:00:00.000Z'),
+      }),
+    );
+    await tenancy.runWithTenantContext(context, () =>
+      meetings.addAgendaItem(meeting.id, { applicationId: application.id }),
+    );
+
+    const minutesText = 'MINUTES_CANARY the committee heard the matter.';
+    const quorumText = 'QUORUM_CANARY four members present.';
+    const attendanceText = 'ATTENDANCE_CANARY joined by phone.';
+    const reasonText = 'REASON_CANARY related to the applicant.';
+
+    const withMinutes = await tenancy.runWithTenantContext(context, () =>
+      meetings.recordMinutes(meeting.id, { minutes: minutesText }),
+    );
+    expect(withMinutes.minutes).toBe(minutesText);
+    const withQuorum = await tenancy.runWithTenantContext(context, () =>
+      meetings.attestQuorum(meeting.id, { present: true, note: quorumText }),
+    );
+    expect(withQuorum.quorumPresent).toBe(true);
+    expect(withQuorum.quorumNote).toBe(quorumText);
+    expect(withQuorum.minutes).toBe(minutesText);
+
+    const first = await tenancy.runWithTenantContext(context, () =>
+      meetings.recordAttendance(meeting.id, {
+        userId,
+        present: false,
+        note: 'first attestation',
+      }),
+    );
+    const second = await tenancy.runWithTenantContext(context, () =>
+      meetings.recordAttendance(meeting.id, {
+        userId,
+        present: true,
+        note: attendanceText,
+      }),
+    );
+    expect(second.id).toBe(first.id);
+    expect(second.present).toBe(true);
+    expect(second.note).toBe(attendanceText);
+
+    const declared = await tenancy.runWithTenantContext(context, () =>
+      meetings.declareConflict({
+        applicationId: application.id,
+        meetingId: meeting.id,
+        reason: reasonText,
+      }),
+    );
+    expect(declared.reason).toBe(reasonText);
+
+    const [stored] = await db
+      .select()
+      .from(schema.meetings)
+      .where(eq(schema.meetings.id, meeting.id));
+    const [storedAttendance] = await db
+      .select()
+      .from(schema.meetingAttendance)
+      .where(eq(schema.meetingAttendance.id, first.id));
+    const [storedConflict] = await db
+      .select()
+      .from(schema.conflictDeclarations)
+      .where(eq(schema.conflictDeclarations.id, declared.id));
+    const raw = JSON.stringify([stored, storedAttendance, storedConflict]);
+    for (const canary of [minutesText, quorumText, attendanceText, reasonText]) {
+      expect(raw).not.toContain(canary);
+    }
+
+    const opened = await tenancy.runWithTenantContext(context, async () => ({
+      meeting: await meetings.getMeeting(meeting.id),
+      attendance: await meetings.listAttendance(meeting.id),
+      conflicts: await meetings.listMeetingConflicts(meeting.id),
+      listed: await meetings.listMeetings(),
+    }));
+    expect(opened.meeting.minutes).toBe(minutesText);
+    expect(opened.meeting.quorumNote).toBe(quorumText);
+    expect(opened.attendance).toHaveLength(1);
+    expect(opened.attendance[0]?.note).toBe(attendanceText);
+    expect(opened.conflicts.find((row) => row.id === declared.id)?.reason).toBe(
+      reasonText,
+    );
+    expect(opened.listed.find((row) => row.id === meeting.id)?.minutes).toBe(minutesText);
+
+    const cleared = await tenancy.runWithTenantContext(context, () =>
+      meetings.clearConflict(declared.id),
+    );
+    expect(cleared.reason).toBe(reasonText);
+
+    const audits = await db
+      .select({ action: schema.auditEvents.action })
+      .from(schema.auditEvents)
+      .where(
+        and(
+          eq(schema.auditEvents.organisationId, organisationId),
+          eq(schema.auditEvents.resourceId, meeting.id),
+        ),
+      );
+    const actions = audits.map((row) => row.action);
+    expect(actions).toContain('meeting.minutes_recorded');
+    expect(actions).toContain('meeting.quorum_attested');
+    expect(actions).toContain('meeting.attendance_recorded');
+
+    const { plaintextResidueSql } = await import('@/lib/encryption/verify');
+    const residue = (await runtime.sqlClient.unsafe(
+      plaintextResidueSql(organisationId),
+    )) as unknown as Array<{ column_name: string; residue: number }>;
+    for (const row of residue) {
+      expect(Number(row.residue), row.column_name).toBe(0);
+    }
+  });
+
+  it('refuses attendance for someone else and minutes without the run permission', async () => {
+    const { tenancy, meetings } = runtime;
+    const meeting = await tenancy.runWithTenantContext(context, () =>
+      meetings.createMeeting({
+        title: 'Refusal sitting',
+        scheduledStart: new Date('2026-11-03T00:00:00.000Z'),
+      }),
+    );
+    const member: TenantContext = {
+      ...context,
+      permissions: new Set(['decision:vote']),
+      sessionId: randomUUID(),
+      correlationId: randomUUID(),
+      requestId: randomUUID(),
+    };
+    await expect(
+      tenancy.runWithTenantContext(member, () =>
+        meetings.recordAttendance(meeting.id, { userId: randomUUID(), present: true }),
+      ),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(
+      tenancy.runWithTenantContext(member, () =>
+        meetings.recordMinutes(meeting.id, { minutes: 'Not allowed.' }),
+      ),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    const nobody: TenantContext = { ...member, permissions: new Set() };
+    await expect(
+      tenancy.runWithTenantContext(nobody, () =>
+        meetings.recordAttendance(meeting.id, { userId, present: true }),
+      ),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    const self = await tenancy.runWithTenantContext(member, () =>
+      meetings.recordAttendance(meeting.id, { userId, present: true }),
+    );
+    expect(self.attestedByUserId).toBe(userId);
   });
 });
