@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// Presigning requires an active tenant key; stub the key-custody lookup.
+vi.mock('@/domains/organisation-keys', () => ({
+  getOrganisationKey: vi.fn(async (organisationId: string) => ({
+    organisationId,
+    kmsKeyArn:
+      'arn:aws:kms:ap-southeast-2:111111111111:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    status: 'active',
+  })),
+}));
+
 // Dynamic import after vi.stubEnv: the env proxy caches on first read. Static
 // dummy credentials and a local endpoint keep presigning entirely offline.
 async function freshStorage() {

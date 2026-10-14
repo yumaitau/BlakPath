@@ -13,11 +13,19 @@
       "file-type@>=13.0.0 <21.3.1": ">=21.3.1",
       "postcss@<8.5.10": ">=8.5.10",
       "uuid@<11.1.1": ">=11.1.1",
-      "next@<16.3.3": ">=16.3.3",
+      "next@<16.3.8": ">=16.3.8",
       "postcss@<8.5.18": ">=8.5.18",
       "nanoid@<3.3.18": ">=3.3.18",
       "browserslist@<=4.28.6": ">=4.28.7",
-      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0"
+      "@opentelemetry/propagator-jaeger@<2.9.0": ">=2.9.0",
+      "@grpc/grpc-js@<1.14.5": ">=1.14.5",
+      "sharp@<0.35.5": ">=0.35.5",
+      "source-map-js@<1.2.2": ">=1.2.2"
+    },
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "vitest"
+      ]
     },
     "auditConfig": {
       "ignoreGhsas": [
@@ -26,7 +34,7 @@
     }
   },
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=24.21.0"
   },
   "scripts": {
     "dev": "next dev",
@@ -43,6 +51,7 @@
     "test:live": "bash scripts/verify-live-stack.sh",
     "release:check": "tsx scripts/check-production-readiness.ts",
     "test:restore": "bash scripts/verify-restore-drill.sh",
+    "key-ceremony": "tsx scripts/key-ceremony.ts",
     "screenshot": "tsx scripts/capture-readme-screenshots.ts",
     "screenshot:landing": "tsx scripts/capture-readme-screenshot.ts",
     "db:generate": "drizzle-kit generate",
@@ -50,6 +59,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/db/seeds/index.ts",
+    "admin:invite": "tsx scripts/invite-first-admin.ts",
     "worker": "tsx worker/index.ts",
     "worker:dev": "tsx watch worker/index.ts"
   },
@@ -83,15 +93,17 @@
     "ioredis": "^5.4.1",
     "lucide-react": "^0.454.0",
     "nanoid": "^5.1.16",
-    "next": "16.3.6",
-    "nodemailer": "^9.1.0",
+    "next": "16.3.8",
+    "nodemailer": "^10.1.0",
     "pdf-lib": "^1.17.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.53.0",
+    "shamir-secret-sharing": "0.0.4",
     "tailwind-merge": "^2.5.4",
+    "undici": "^6.29.0",
     "uuidv7": "^1.0.2",
     "zod": "^4.0.0"
   },
@@ -99,8 +111,7 @@
     "@playwright/test": "^1.48.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@testing-library/react": "^16.0.1",
-    "@types/node": "^22.7.0",
-    "@types/nodemailer": "^6.4.16",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.6.0",
@@ -108,7 +119,7 @@
     "dotenv": "^16.4.5",
     "drizzle-kit": "^0.31.0",
     "eslint": "^9.13.0",
-    "eslint-config-next": "16.3.6",
+    "eslint-config-next": "16.3.8",
     "eslint-config-prettier": "^9.1.0",
     "jsdom": "^25.0.1",
     "pino-pretty": "^13.0.0",

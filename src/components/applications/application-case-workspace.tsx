@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,7 @@ import {
   UPLOAD_ACCEPT,
   uploadProblem,
 } from '@/domains/evidence/status';
+import { withStepUp } from '@/lib/auth/step-up-flow';
 
 interface CaseEvidence {
   id: string;
@@ -135,6 +137,7 @@ function evidenceIcon(status: string) {
 
 export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -202,6 +205,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
       if (!uploaded) return 'the upload did not complete. Please try again.';
       const completed = await fetch(`/api/evidence/${prepared.evidence.id}/complete`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!completed.ok) {
         return 'the file arrived, but its security scan could not be started.';
@@ -321,8 +325,42 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
     }
   }
 
+  async function downloadEvidence(id: string) {
+    setBusy(`download:${id}`);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await withStepUp(
+        () =>
+          fetch(`/api/evidence/${id}/download`, {
+            headers: { Accept: 'application/json' },
+          }),
+        () => stepUp.request(),
+      );
+      if (!response.ok) {
+        setError(
+          response.status === 401
+            ? 'Confirm it is you to download this file. You stay signed in.'
+            : 'That file could not be downloaded.',
+        );
+        return;
+      }
+      const data = (await response.json()) as { url?: string };
+      if (!data.url) {
+        setError('That file could not be downloaded.');
+        return;
+      }
+      window.location.assign(data.url);
+    } catch {
+      setError('That file could not be downloaded. Check your connection.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <div className="flex min-w-0 flex-col gap-8">
         {error ? (
           <Alert role="alert" tone="destructive" title="Change not saved">
@@ -438,12 +476,15 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
                           : displayLabel(item.status)}
                       </Badge>
                       {downloadable ? (
-                        <a
-                          className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline"
-                          href={`/api/evidence/${item.id}/download`}
+                        <button
+                          type="button"
+                          className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline disabled:opacity-60"
+                          disabled={busy !== null}
+                          onClick={() => void downloadEvidence(item.id)}
                         >
-                          <Download className="size-4" aria-hidden="true" /> Download
-                        </a>
+                          <Download className="size-4" aria-hidden="true" />
+                          {busy === `download:${item.id}` ? 'Checking…' : 'Download'}
+                        </button>
                       ) : null}
                     </span>
                   </li>

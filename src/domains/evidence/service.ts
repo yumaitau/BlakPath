@@ -472,7 +472,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   // Verify the stored size against the declaration; a storage error here
   // should retry, so let it throw.
-  const head = await headObject({ bucket: QUARANTINE_BUCKET, key });
+  const head = await headObject({ bucket: QUARANTINE_BUCKET, key, organisationId });
   if (!head.etag || !uploadSizeAcceptable(row.sizeBytes, head.contentLength)) {
     await rejectUpload(
       null,
@@ -485,7 +485,12 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   // Verify the REAL content type from magic bytes before scanning.
   const detected = await detectContentType(
-    await getObjectStream({ bucket: QUARANTINE_BUCKET, key, ifMatch: etag }),
+    await getObjectStream({
+      bucket: QUARANTINE_BUCKET,
+      key,
+      ifMatch: etag,
+      organisationId,
+    }),
   );
   const verifiedType = verifiedContentType({
     declared: row.declaredContentType,
@@ -503,7 +508,12 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
 
   // Scan, hashing the same bytes on the way through. Any scanner
   // unavailability MUST fail (retry) — never promote.
-  const body = await getObjectStream({ bucket: QUARANTINE_BUCKET, key, ifMatch: etag });
+  const body = await getObjectStream({
+    bucket: QUARANTINE_BUCKET,
+    key,
+    ifMatch: etag,
+    organisationId,
+  });
   const hash = createHash('sha256');
   let verdict: ScanVerdict;
   try {
