@@ -11,6 +11,7 @@ import {
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { transitionApplication } from '@/domains/applications';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { logger } from '@/lib/observability/logger';
 import { buildIcs, parseIcs, type IcsEvent } from '@/lib/calendar/ics';
 import {
@@ -192,12 +193,17 @@ export async function addAgendaItem(
   });
 
   // Best-effort: placing a matter on the agenda advances it into the committee
-  // stage. Only legal from `ready_for_committee`; an application in any other
-  // state simply stays put (agenda management must not fail because of it).
+  // stage. Only legal from `ready_for_committee`. A lost race means another
+  // request already moved it. Either way the agenda item stays.
   try {
     await transitionApplication(input.applicationId, 'schedule_committee');
   } catch (error) {
-    if (!(error instanceof ApplicationWorkflowError)) throw error;
+    if (
+      !(error instanceof ApplicationWorkflowError) &&
+      !(error instanceof ConcurrencyConflictError)
+    ) {
+      throw error;
+    }
     logger.debug(
       { applicationId: input.applicationId, meetingId },
       'agenda add: application not in a schedulable state — leaving status unchanged',
