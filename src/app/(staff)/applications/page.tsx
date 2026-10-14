@@ -3,11 +3,13 @@ import {
   type RegisterApplication,
   type RegisterParticipant,
 } from '@/components/applications/application-register';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import { listApplicationParticipants, listApplications } from '@/domains/applications';
 import {
   isTenantKeyUnavailable,
   TENANT_KEY_UNAVAILABLE_MESSAGE,
 } from '@/lib/encryption/errors';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 
 export default async function ApplicationsPage({
@@ -20,7 +22,7 @@ export default async function ApplicationsPage({
   let applications: RegisterApplication[] = [];
   let participants: RegisterParticipant[] = [];
   let canCreate = false;
-  let unavailable = false;
+  let forbidden = false;
   let locked = false;
   try {
     const loaded = await withRequestTenant(async (ctx) => {
@@ -42,8 +44,12 @@ export default async function ApplicationsPage({
       createdAt: application.createdAt.toISOString(),
     }));
   } catch (error) {
-    if (isTenantKeyUnavailable(error)) locked = true;
-    else unavailable = true;
+    if (isTenantKeyUnavailable(error)) {
+      locked = true;
+    } else {
+      await handlePageError(error);
+      forbidden = true;
+    }
   }
 
   if (locked) {
@@ -54,11 +60,14 @@ export default async function ApplicationsPage({
     );
   }
 
-  if (unavailable) {
+  if (forbidden) {
     return (
-      <p className="text-muted-foreground mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-        Sign in and select an organisation to view applications.
-      </p>
+      <ForbiddenNotice title="You do not have access to applications">
+        <p>
+          Your role in this organisation does not include the application register. If you
+          need access, ask an organisation administrator.
+        </p>
+      </ForbiddenNotice>
     );
   }
   return (

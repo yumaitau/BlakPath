@@ -5,7 +5,7 @@
  *   - `events`  — the closed AuditAction / ResourceType / AuditResult vocabulary.
  *   - `hash`    — canonical serialisation, SHA-256 chaining and redaction.
  *   - `service` — `recordAudit` / `recordPlatformAudit` write path.
- *   - `verify`  — `verifyChain` / `createCheckpoint` integrity tooling.
+ *   - `verify`  — `verifyChain` / `verifyAndCheckpoint` integrity tooling.
  *   - `anchor` — signed chain-head anchors stored outside the database.
  *   - `log`     — tenant-scoped viewer, formula-safe CSV export, monthly review.
  */
@@ -34,13 +34,32 @@ export {
 } from './service';
 
 export type {
+  AuditChainCursor,
+  AuditCheckpointAnchor,
+  AuditCheckpointInsert,
+  AuditPageQuery,
+  AuditVerificationReader,
   ChainDivergence,
   CreateCheckpointInput,
   DivergenceReason,
+  StoredAuditEvent,
+  VerifyAndCheckpointOptions,
+  VerifyAndCheckpointResult,
   VerifyChainOptions,
+  VerifyFromCheckpointResult,
   VerifyChainResult,
 } from './verify';
-export { AuditChainDivergenceError, createCheckpoint, verifyChain } from './verify';
+export {
+  AUDIT_VERIFY_PAGE_SIZE,
+  AuditChainDivergenceError,
+  auditChainProbe,
+  checkpointVerifiedSuffix,
+  createCheckpoint,
+  verifyAndCheckpoint,
+  verifyChain,
+  verifyChainFromPages,
+  verifyFromCheckpoint,
+} from './verify';
 
 export type {
   AuditLogEntry,
@@ -72,8 +91,10 @@ export type {
   AnchorMismatchReason,
   AnchorSignature,
   AnchorSigner,
+  AnchoredChainProbe,
   AnchoredChainView,
   AuditAnchorStore,
+  ChainHashes,
   SettleAuditChainResult,
   SettleAuditChainStatus,
   SignedAuditAnchor,

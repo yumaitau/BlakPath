@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { twoFactor } from '@/lib/auth/client';
+import { safeReturnTo } from '@/lib/auth/return-to';
 
 /**
  * Second-factor verification.
@@ -54,7 +55,9 @@ export default function TwoFactorPage() {
       return;
     }
 
-    window.location.href = '/dashboard';
+    window.location.href = safeReturnTo(
+      new URLSearchParams(window.location.search).get('returnTo'),
+    );
   }
 
   function switchMode(next: Mode) {

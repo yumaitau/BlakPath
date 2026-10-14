@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 import { FormTokenError, submitPublicResponse } from '@/domains/forms';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
@@ -48,6 +49,9 @@ export async function POST(
     await submitPublicResponse(token, answers, ipAddress);
     return NextResponse.json({ ok: true });
   } catch (error) {
+    if (error instanceof ConcurrencyConflictError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     if (error instanceof OrganisationUnavailableError) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }

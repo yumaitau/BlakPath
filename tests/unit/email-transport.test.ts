@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { stubProductionEnv } from '../helpers/production-env';
 
 const state = vi.hoisted(() => ({
   suppressed: false,
@@ -96,11 +97,12 @@ describe('email transport', () => {
   });
 
   it('refuses the SMTP transport in production', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('EMAIL_TRANSPORT', 'smtp');
+    // Production boot runs the release gate, so the refusal now comes from
+    // env validation before the mailer's own guard is reached.
+    stubProductionEnv({ EMAIL_TRANSPORT: 'smtp' });
     const { sendEmail } = await freshMailer();
 
-    await expect(sendEmail(message)).rejects.toThrow(/not permitted in production/);
+    await expect(sendEmail(message)).rejects.toThrow(/EMAIL_TRANSPORT: must be ses/);
     expect(state.smtpSend).not.toHaveBeenCalled();
     expect(state.sesSend).not.toHaveBeenCalled();
   });

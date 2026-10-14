@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { cn } from '@/lib/utils';
 
 /**
@@ -137,7 +138,10 @@ export function FormInvitations({ formId, initialInvitations }: FormInvitationsP
         headers: { 'Content-Type': 'application/json' },
       });
       if (!res.ok) {
-        setError('Could not revoke the invitation. Please try again.');
+        setError(
+          (await readConflictMessage(res)) ??
+            'Could not revoke the invitation. Please try again.',
+        );
         return;
       }
       setInvitations((current) =>
