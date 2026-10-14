@@ -1,6 +1,8 @@
 import { expect, test } from './helpers/page';
 
 test('sensitive APIs consistently reject anonymous requests', async ({ request }) => {
+  // One request per route; the dev server compiles each route on first hit.
+  test.setTimeout(120_000);
   const protectedGets = [
     '/api/applications',
     '/api/tasks',
