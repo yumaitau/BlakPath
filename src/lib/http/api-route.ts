@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { runWithTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { ApiKeyError, parseBearer, resolveApiKeyContext } from '@/domains/api-keys';
-import { clientIp, UNKNOWN_CLIENT_IP } from '@/lib/http/client-ip';
+import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
 import {
   REQUEST_LIMITS,
   RateLimitedError,
@@ -26,7 +26,7 @@ export async function withApiKey<T>(
   fn: (ctx: TenantContext) => Promise<T> | T,
   limits: RequestLimitPolicy = REQUEST_LIMITS.api,
 ): Promise<T> {
-  const ip = clientIp(request.headers);
+  const ip = clientIpForLimits(request.headers);
   // Count the address before resolving the key so a bad key still spends the
   // IP budget. The key bucket is the database id, never the bearer secret.
   await assertIp(limits, ip);

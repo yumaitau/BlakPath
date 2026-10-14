@@ -154,6 +154,13 @@ export function validateProductionReadiness(
     }
   }
 
+  const originSecret = environment.ORIGIN_VERIFY_SECRET;
+  if (!originSecret || originSecret.length < 32 || PLACEHOLDER.test(originSecret)) {
+    issues.push({
+      key: 'ORIGIN_VERIFY_SECRET',
+      message: 'must be a non-placeholder secret of at least 32 characters',
+    });
+  }
   const authSecret = environment.BETTER_AUTH_SECRET;
   if (!authSecret || authSecret.length < 32 || PLACEHOLDER.test(authSecret)) {
     issues.push({

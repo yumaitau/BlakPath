@@ -1,15 +1,19 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { clientIp } from '@/lib/http/client-ip';
+import { env } from '@/lib/env';
+import { clientIpForLimits, originRequestAllowed } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 
 /**
- * Request limits for the public form and certificate pages.
+ * Production origin gate, then request limits for the public form and
+ * certificate pages.
  *
- * Those routes are server components, which cannot set a 429 status. This
- * proxy runs on the Node.js runtime (the Proxy default) and answers before
- * render. The pages themselves do not count again.
+ * The load balancer verifies the zone client certificate. This check is the
+ * application backstop: a request that reaches the process without the
+ * origin-verify secret is refused. Health probes are excluded by the matcher.
  *
- * Matcher is only these two paths. Other routes limit inside their handlers.
+ * Form and certificate pages are server components, which cannot set a 429
+ * status. The limit runs here, before render. The pages themselves do not
+ * count again.
  */
 
 function subjectFrom(pathname: string, prefix: string): string | null {
@@ -24,12 +28,23 @@ function subjectFrom(pathname: string, prefix: string): string | null {
 }
 
 export async function proxy(request: NextRequest): Promise<NextResponse> {
+  if (
+    !originRequestAllowed({
+      pathname: request.nextUrl.pathname,
+      headers: request.headers,
+      nodeEnv: env.NODE_ENV,
+      originVerifySecret: env.ORIGIN_VERIFY_SECRET,
+    })
+  ) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
   const { pathname } = request.nextUrl;
   const formToken = subjectFrom(pathname, '/form');
   if (formToken) {
     const limited = await enforcePair(
       REQUEST_LIMITS.formPage,
-      clientIp(request.headers),
+      clientIpForLimits(request.headers),
       formToken,
     );
     if (limited) return limited;
@@ -38,7 +53,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   if (code) {
     const limited = await enforcePair(
       REQUEST_LIMITS.verifyPage,
-      clientIp(request.headers),
+      clientIpForLimits(request.headers),
       code,
     );
     if (limited) return limited;
@@ -47,5 +62,5 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 }
 
 export const config = {
-  matcher: ['/form/:token', '/verify/:code'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/ready|api/live).*)'],
 };

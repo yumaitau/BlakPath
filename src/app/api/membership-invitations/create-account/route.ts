@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { toErrorResponse } from '@/lib/http/tenant-route';
-import { clientIp } from '@/lib/http/client-ip';
+import { clientIpForLimits } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, limitIp, limitSubject } from '@/lib/http/request-limits';
 import { createInvitedAccount } from '@/domains/memberships';
 
@@ -17,7 +17,7 @@ import { createInvitedAccount } from '@/domains/memberships';
 export async function POST(request: NextRequest): Promise<Response> {
   const ipLimited = await limitIp(
     REQUEST_LIMITS.createAccount,
-    clientIp(request.headers),
+    clientIpForLimits(request.headers),
   );
   if (ipLimited) return ipLimited;
   try {

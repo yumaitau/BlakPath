@@ -78,7 +78,9 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
 - **Mitigations:** Better Auth sessions; argon2 password hashing; **mandatory
   staff MFA** (passkeys or verified TOTP, enforced before tenant access);
   step-up re-auth for sensitive actions; sessions
-  bound server-side with `ipAddress`/`userAgent`; tenant id derived from the
+  bound server-side with `ipAddress`/`userAgent`. `ipAddress` is
+  `CF-Connecting-IP` only after the origin-verify secret matches (`clientIp`);
+  a forwarded-for header is not a client identity. Tenant id is derived from the
   verified membership, never the request (`docs/authentication.md`).
 
 ### Tampering
@@ -105,7 +107,8 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
 - **Mitigations:** layered tenant isolation (application scoping + `assertOwned`
   - `NOT NULL` FKs + composite indexes + **RLS backstop**); per-tenant
     object-storage namespaces and short-lived presigned URLs; **envelope
-    encryption (AES-256-GCM)** for sensitive fields and secrets; TLS in transit;
+    encryption (AES-256-GCM)** for sensitive fields and secrets; TLS in transit
+    (Cloudflare Full (strict) to an HTTPS origin listener; HTTP only redirects);
     audit redaction (secrets/payloads never written to audit); least-privilege
     RBAC; **no standing operator access** (break-glass only)
     (`docs/tenant-isolation.md`, `docs/privacy-architecture.md`).
@@ -113,7 +116,8 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
 ### Denial of service
 
 - **Threat:** overwhelming the app, the scanner, or the queues.
-- **Mitigations:** Redis-backed, tenant-prefixed rate limiting; bounded upload
+- **Mitigations:** Redis-backed rate limiting keyed by the trusted client
+  address; regional WAFv2 managed rules on the origin load balancer; bounded upload
   sizes/types; presigned uploads keep large transfers off the app tier; BullMQ
   retries with backoff and dead-lettering; a stalled scanner **holds** files in
   quarantine rather than failing open (fail-secure, below).

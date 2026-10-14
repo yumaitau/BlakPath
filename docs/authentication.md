@@ -144,7 +144,10 @@ sequenceDiagram
   is single-use. Using one is an audited event.
 - Repeated failed sign-in attempts are limited per client address and, separately,
   delayed then locked per account. The counters live in Redis and are shared
-  across replicas. See `docs/rate-limits.md`.
+  across replicas. See `docs/rate-limits.md`. The address in the bucket is
+  `clientIp`: `CF-Connecting-IP` after the origin-verify secret matches. A
+  client-supplied forwarded-for value is not used. An unverified origin shares
+  one bucket instead of skipping the limit.
 - Failed TOTP verifications are also counted on the factor row. After 10
   consecutive failures the factor stays locked for 15 minutes. A later success
   clears the count. The deadline is stored in Postgres, not only in memory.

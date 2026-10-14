@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { acceptMembershipInvitation } from '@/domains/memberships';
 import { requireSession } from '@/lib/auth/session';
-import { clientIp } from '@/lib/http/client-ip';
+import { clientIpForLimits } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, limitIp, limitSubject } from '@/lib/http/request-limits';
 import { toErrorResponse } from '@/lib/http/tenant-route';
 
@@ -18,7 +18,7 @@ const SESSION_DATA_COOKIE_NAMES = [
 export async function POST(request: NextRequest): Promise<Response> {
   const ipLimited = await limitIp(
     REQUEST_LIMITS.invitationAccept,
-    clientIp(request.headers),
+    clientIpForLimits(request.headers),
   );
   if (ipLimited) return ipLimited;
   try {

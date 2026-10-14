@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __resetEnvCache } from '@/lib/env';
-import { clientIp, UNKNOWN_CLIENT_IP } from '@/lib/http/client-ip';
+import { clientIp, clientIpForLimits, UNKNOWN_CLIENT_IP } from '@/lib/http/client-ip';
 import {
   createMemoryCounterStore,
   getCounterStore,
@@ -33,30 +33,34 @@ afterEach(() => {
 });
 
 describe('client address', () => {
+  const secret = 'origin-verify-secret-value-0123456789';
+
   it('uses a single cf-connecting-ip and ignores forwarded lists', () => {
     const headers = new Headers({
       'cf-connecting-ip': '203.0.113.8',
       'x-forwarded-for': '198.51.100.2, 10.0.0.1',
       'x-real-ip': '198.51.100.9',
+      'x-blakpath-origin-verify': secret,
     });
-    expect(clientIp(headers)).toBe('203.0.113.8');
+    expect(clientIp({ headers }, { originVerifySecret: secret })).toBe('203.0.113.8');
   });
 
   it('rejects a multi-value cf-connecting-ip', () => {
-    expect(
-      clientIp(new Headers({ 'cf-connecting-ip': '203.0.113.8, 198.51.100.2' })),
-    ).toBe(UNKNOWN_CLIENT_IP);
+    const headers = new Headers({
+      'cf-connecting-ip': '203.0.113.8, 198.51.100.2',
+      'x-blakpath-origin-verify': secret,
+    });
+    expect(clientIp({ headers }, { originVerifySecret: secret })).toBeNull();
+    expect(clientIpForLimits(headers)).toBe(UNKNOWN_CLIENT_IP);
   });
 
-  it('accepts one x-real-ip outside production and ignores it in production', () => {
+  it('does not accept x-real-ip, verified or not', () => {
     const headers = new Headers({ 'x-real-ip': '203.0.113.9' });
-    expect(clientIp(headers)).toBe('203.0.113.9');
+    expect(clientIp({ headers }, { originVerifySecret: secret })).toBeNull();
+    expect(clientIpForLimits(headers)).toBe(UNKNOWN_CLIENT_IP);
     vi.stubEnv('NODE_ENV', 'production');
     __resetEnvCache();
-    expect(clientIp(headers)).toBe(UNKNOWN_CLIENT_IP);
-    expect(clientIp(new Headers({ 'cf-connecting-ip': '2001:db8::1' }))).toBe(
-      '2001:db8::1',
-    );
+    expect(clientIpForLimits(headers)).toBe(UNKNOWN_CLIENT_IP);
   });
 });
 

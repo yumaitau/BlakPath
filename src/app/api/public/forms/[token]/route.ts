@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 import { FormTokenError, submitPublicResponse } from '@/domains/forms';
-import { clientIp, UNKNOWN_CLIENT_IP } from '@/lib/http/client-ip';
+import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
 
@@ -28,7 +28,7 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await params;
-  const ip = clientIp(request.headers);
+  const ip = clientIpForLimits(request.headers);
   const limited = await enforcePair(REQUEST_LIMITS.publicFormPost, ip, token);
   if (limited) return limited;
 
