@@ -8,27 +8,38 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
-   `ENCRYPTION_MASTER_KEY`, `SMTP_USER`, `SMTP_PASSWORD`,
-   `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
-   `AUDIT_ANCHOR_SIGNING_KEY_ID`. Create a separate secret at
-   `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
-   `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
-3. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
+   `ENCRYPTION_MASTER_KEY`, `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
+   `AUDIT_ANCHOR_SIGNING_KEY_ID`. Do not store `SMTP_USER` or `SMTP_PASSWORD`.
+   Create a separate secret at `/blakpath/production/migrator` with only
+   `DATABASE_MIGRATION_URL` (role `blakpath_migrator`). Do not put the
+   migrator URL in the runtime secret.
+3. In `infra/aws/eks-boundary.example.yaml`, replace `OIDC_ID` with the cluster
+   OIDC issuer id. Deploy that stack in ap-southeast-2.
+   `CreatePodIdentityAssociation` stays `false` until the namespace exists.
+   `PlatformEsoRoleName` is the shared External Secrets role, never
+   `blakpath-external-secrets` or the workload role.
+4. Replace `CLUSTER_NAME` in
+   `infra/aws/blakpath-eks-runtime-trust.example.json` and set that document as
+   the trust policy on `blakpath-eks-runtime`.
+5. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
+6. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, certificate ARN,
    trust store ARN and WAF ACL ARN. Complete the edge section below first.
    Rolling the app before the origin-verify header is live makes production
    requests return 403.
-5. Run `pnpm release:check` inside the exact web and worker images before
-   promoting. It rejects static S3 credentials and `PILOT_BOOTSTRAP_TOKEN`.
-   SDK uses the IRSA task role chain. Do not put `PILOT_BOOTSTRAP_TOKEN` in
-   the runtime secret.
-6. Apply the migrate job, then the seed job, then
+7. Delete any pod identity association for `blakpath/blakpath` that was left
+   behind while the namespace did not exist. Update the stack with
+   `CreatePodIdentityAssociation=true` and the real `WorkloadRoleArn`.
+8. Run `pnpm release:check` inside the exact web and worker images before
+   promoting. It rejects static S3 credentials, standing SMTP credentials and
+   `PILOT_BOOTSTRAP_TOKEN`. SDK uses the workload role. Do not put
+   `PILOT_BOOTSTRAP_TOKEN` in the runtime secret.
+9. Apply the migrate job, then the seed job, then
    `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
    The job emails an organisation-administrator invitation and does not create
    a password. That person enrols a passkey or authenticator before the
    organisation tools open.
-7. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+10. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
 ## Edge and origin
 
@@ -62,15 +73,76 @@ manifest is `infra/k8s/service-ingress.yaml`. The example stack is
 ## Secrets and keys
 
 - Dedicated folder: every BlakPath secret lives under
-  `/blakpath/production/` in Secrets Manager. The app reads a single synced
-  `blakpath-runtime` Secret via External Secrets Operator; the platform ESO
-  role stays shared and is never narrowed per app.
+  `/blakpath/production/` in Secrets Manager. The app reads one synced
+  `blakpath-runtime` Secret. The store is namespace-local
+  (`infra/k8s/secretstore.yaml`). Its role
+  `blakpath-external-secrets` can read that folder only, and only when the
+  IRSA subject is `system:serviceaccount:blakpath:blakpath-external-secrets`.
+- The shared External Secrets role is denied `GetSecretValue` on
+  `secret:/blakpath/production/*` and `kms:Decrypt` on
+  `alias/blakpath-app-secrets`. Do not point BlakPath at the cluster-wide
+  store.
+- After the deny is in place, an ExternalSecret for
+  `/blakpath/production/runtime` outside namespace `blakpath` must fail with
+  AccessDenied. Delete that check object. Do not print Secret data.
 - Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
   Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
   `alias/blakpath-prod-evidence` covers both S3 buckets. RDS uses its
-  provisioned key. No AWS-managed default keys in the secret path.
+  provisioned key. No AWS-managed default keys in the secret path. The key
+  policy keeps account-root IAM delegation so the dedicated role's IAM allow
+  works. Do not grant the shared External Secrets role on that key.
 - ElastiCache runs with transit and at-rest encryption. Redis holds
   ephemeral state only — never tenant records.
+
+## Mail credentials
+
+Production mail uses `ses:SendEmail` on `blakpath-eks-runtime`, limited to
+`ses:FromAddress` `no-reply@blakpath.yumait.au`. The stack does not create an
+SMTP user or an access key.
+
+Retire the standing user `blakpath-ses-smtp`:
+
+1. Delete its access keys.
+2. Detach `AmazonSESFullAccess` and any other SES policy.
+3. Delete the user.
+4. Remove `SMTP_USER` and `SMTP_PASSWORD` from `/blakpath/production/runtime`
+   if those keys exist.
+
+Confirm the user has no access keys and is not attached to `AmazonSESFullAccess`.
+Do not print key material.
+
+## API endpoint
+
+The cluster that runs BlakPath uses
+`infra/aws/eks-api-endpoint.example.yaml`: private API access, no public
+CIDR of `0.0.0.0/0` or `::/0`. Reach a private API through Tailscale. A public
+endpoint, if one must remain, lists admin or CI CIDRs only.
+
+Apply that contract with `UpdateClusterConfig`. On `yumait-prod` this affects
+every team. The target is the dedicated cluster in
+`docs/adr/0001-dedicated-cluster.md`. Coordinate before changing the shared
+cluster.
+
+## Rotate the runtime secret
+
+Do this after the cross-namespace sync returns AccessDenied and the blakpath
+ExternalSecret is Ready. Update the secret in Secrets Manager, wait for the
+refresh, then restart web and worker. Do not write the new values into tickets,
+shell history, or this repo.
+
+1. Database password, then `DATABASE_URL`.
+2. Cache auth token, then `REDIS_URL`.
+3. `BETTER_AUTH_SECRET` (at least 32 characters). Existing sessions end.
+4. Revoke the old PaperBoy key, then store the new `PAPERBOY_API_KEY`.
+5. `EMAIL_WEBHOOK_SECRET` (at least 16 characters).
+6. Remove `SMTP_USER` and `SMTP_PASSWORD`.
+7. `ENCRYPTION_MASTER_KEY` only when no ciphertext depends on it.
+   `decryptField` uses the current key alone, so replacing it makes stored
+   fields unreadable. Before production records, replace it with a new
+   base64 32-byte value and bump `ENCRYPTION_KEY_VERSION`. After records
+   exist, leave it until wrapped data keys can be rewrapped.
+
+Record who rotated, when, and which keys. Do not record the values.
 
 ## Data services
 

@@ -225,7 +225,8 @@ BlakPath/
 | [`docs/council-trust-model.md`](docs/council-trust-model.md)           | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
 | [`docs/calendar-vision.md`](docs/calendar-vision.md)                   | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                 |
 | [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                         | Full user-journey e2e matrix across auth, CoA, teams, calendar                                 |
-| [`docs/eks-runbook.md`](docs/eks-runbook.md)                           | EKS deploy, data services, SES, restore drill, alarms                                          |
+| [`docs/eks-runbook.md`](docs/eks-runbook.md)                           | EKS deploy, secret sync, origin edge, restore drill, alarms                                   |
+| [`docs/adr/0001-dedicated-cluster.md`](docs/adr/0001-dedicated-cluster.md) | Dedicated EKS cluster for BlakPath; shared-cluster rules until cutover                         |
 | [`docs/council-onboarding.md`](docs/council-onboarding.md)             | New council tenant: teams, identity/SSO, go-live gate, legacy import                           |
 
 ## Licence & governance — open code, community authority

@@ -91,4 +91,13 @@ describe('production readiness configuration', () => {
     });
     expect(issues.map(({ key }) => key)).toContain('DATABASE_MIGRATION_URL');
   });
+
+  it('rejects standing SMTP credentials', () => {
+    const issues = validateProductionReadiness({
+      ...valid,
+      SMTP_USER: 'mail-user',
+      SMTP_PASSWORD: 'mail-secret',
+    });
+    expect(issues.map(({ key }) => key)).toContain('SMTP_USER');
+  });
 });

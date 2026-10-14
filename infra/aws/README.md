@@ -7,6 +7,15 @@ with resources owned by the production environment.
 - `workload-roles.example.yaml` separates web, worker and ECS execution roles.
   The application roles have no Secrets Manager permission and no access keys;
   the execution role can inject one named runtime secret into the tasks.
+- `eks-boundary.example.yaml` is the EKS path. One role reads
+  `/blakpath/production/*` from the `blakpath` namespace only. The shared
+  External Secrets role is denied that folder and the app-secrets key. The
+  workload role may `ses:SendEmail` from the application address. No SMTP user
+  and no access key.
+- `blakpath-eks-runtime-trust.example.json` is the pod identity trust for
+  service account `blakpath` in namespace `blakpath`.
+- `eks-api-endpoint.example.yaml` keeps the Kubernetes API private. Public
+  CIDRs must not be `0.0.0.0/0` or `::/0`.
 - `operational-alerts.example.yaml` converts the application’s structured JSON
   `signal` fields into CloudWatch metrics and pages an existing on-call SNS topic.
 - `origin-edge.example.yaml` requests the origin ACM certificate, a regional
