@@ -11,7 +11,8 @@ export interface BoundaryDocuments {
   serviceAccounts: string;
   kustomization: string;
   boundaryTemplate: string;
-  workloadTrust: string;
+  /** infra/aws/workload-roles.example.yaml: web and worker Pod Identity roles. */
+  workloadRoles: string;
   endpointConfig: string;
 }
 
@@ -127,24 +128,38 @@ export function secretSyncIssues(docs: BoundaryDocuments): BoundaryIssue[] {
       'must not grant secret reads on every resource',
     ),
     ...miss(
-      docs.workloadTrust.includes('pods.eks.amazonaws.com') &&
-        docs.workloadTrust.includes('aws:RequestTag/kubernetes-namespace') &&
-        docs.workloadTrust.includes('aws:RequestTag/kubernetes-service-account') &&
-        docs.workloadTrust.includes('aws:RequestTag/eks-cluster-name') &&
-        docs.workloadTrust.includes('"blakpath"') &&
-        !docs.workloadTrust.includes('"*"') &&
-        !WORLD_CIDR.test(docs.workloadTrust),
+      docs.workloadRoles.includes('pods.eks.amazonaws.com') &&
+        docs.workloadRoles.includes("'aws:RequestTag/kubernetes-namespace': blakpath") &&
+        docs.workloadRoles.includes('aws:RequestTag/kubernetes-service-account') &&
+        docs.workloadRoles.includes('aws:RequestTag/eks-cluster-name') &&
+        !/Principal:\s*['"]?\*/.test(docs.workloadRoles) &&
+        !WORLD_CIDR.test(docs.workloadRoles),
       'workloadTrust',
-      'must allow pod identity only for the blakpath service account',
+      'must allow pod identity only for blakpath service accounts',
     ),
-    ...miss(
-      /Namespace:\s*blakpath/.test(docs.boundaryTemplate) &&
-        /ServiceAccount:\s*blakpath/.test(docs.boundaryTemplate) &&
-        !/DisableSessionTags/.test(docs.boundaryTemplate),
-      'podIdentity',
-      'must associate only the blakpath namespace and service account',
-    ),
+    ...podIdentityIssues(docs.workloadRoles),
   ];
+}
+
+const WORKLOAD_SERVICE_ACCOUNTS = new Set(['blakpath-web', 'blakpath-worker']);
+
+/** Associations exist only for web and worker in namespace blakpath. */
+function podIdentityIssues(workloadRoles: string): BoundaryIssue[] {
+  const namespaces = [...workloadRoles.matchAll(/^\s+Namespace:\s*(\S+)\s*$/gm)].map(
+    (match) => match[1],
+  );
+  const accounts = [...workloadRoles.matchAll(/^\s+ServiceAccount:\s*(\S+)\s*$/gm)].map(
+    (match) => match[1] ?? '',
+  );
+  return miss(
+    accounts.length > 0 &&
+      namespaces.length === accounts.length &&
+      namespaces.every((namespace) => namespace === 'blakpath') &&
+      accounts.every((account) => WORKLOAD_SERVICE_ACCOUNTS.has(account)) &&
+      !/DisableSessionTags/.test(workloadRoles),
+    'podIdentity',
+    'must associate only the blakpath web and worker service accounts',
+  );
 }
 
 function withoutComments(document: string): string {

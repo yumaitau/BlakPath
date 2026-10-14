@@ -20,12 +20,16 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-worker
     spec:
-      serviceAccountName: blakpath
+      serviceAccountName: blakpath-worker
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         seccompProfile:
           type: RuntimeDefault
+      # tsx/esbuild scratch. HOME is /tmp so a read-only root has one writable path.
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: worker
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
@@ -38,10 +42,15 @@ spec:
                 name: blakpath-runtime
           # Explicit env wins over envFrom. 33 = 11 queues × concurrency 3.
           env:
+            - name: HOME
+              value: /tmp
             - name: BLAKPATH_PROCESS
               value: worker
             - name: DATABASE_WORKER_POOL_MAX
               value: '33'
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 500m
@@ -51,5 +60,6 @@ spec:
               memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]

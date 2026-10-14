@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { validateProductionReadiness } from '@/lib/production-readiness';
+import {
+  PRODUCTION_READINESS_KEYS,
+  validateProductionReadiness,
+} from '@/lib/production-readiness';
+
+const kmsKey =
+  'arn:aws:kms:ap-southeast-2:123456789012:key/12345678-1234-1234-1234-123456789abc';
 
 const valid = {
   NODE_ENV: 'production',
@@ -30,7 +36,66 @@ const valid = {
   PLATFORM_KMS_KEY_ARN:
     'arn:aws:kms:ap-southeast-2:123456789012:key/12345678-1234-1234-1234-123456789abc',
   OPERATOR_ONCALL_EMAIL: 'oncall@blakpath.internal',
+  COA_SIGNING_KEY_ID: kmsKey,
 } as const;
+
+type Key = (typeof PRODUCTION_READINESS_KEYS)[number];
+
+/** One failing value per key the gate can reject. */
+const cases: ReadonlyArray<{ key: Key; patch: Record<string, string | undefined> }> = [
+  { key: 'NODE_ENV', patch: { NODE_ENV: 'development' } },
+  { key: 'PILOT_BOOTSTRAP_TOKEN', patch: { PILOT_BOOTSTRAP_TOKEN: 'pilot-token-long' } },
+  { key: 'APP_REGION', patch: { APP_REGION: 'us-east-1' } },
+  { key: 'S3_REGION', patch: { S3_REGION: 'us-east-1' } },
+  { key: 'APP_URL', patch: { APP_URL: 'http://localhost:3000' } },
+  { key: 'BETTER_AUTH_URL', patch: { BETTER_AUTH_URL: 'https://other.example.org' } },
+  {
+    key: 'DATABASE_URL',
+    patch: { DATABASE_URL: 'postgres://blakpath_app:secret@db.internal/blakpath' },
+  },
+  { key: 'DATABASE_MIGRATION_URL', patch: { DATABASE_MIGRATION_URL: undefined } },
+  { key: 'REDIS_URL', patch: { REDIS_URL: 'redis://localhost:6379' } },
+  { key: 'S3_ENDPOINT', patch: { S3_ENDPOINT: 'http://minio:9000' } },
+  { key: 'S3_ACCESS_KEY_ID', patch: { S3_SECRET_ACCESS_KEY: 'standing-secret' } },
+  { key: 'S3_KMS_KEY_ID', patch: { S3_KMS_KEY_ID: undefined } },
+  { key: 'S3_BUCKET_AUDIT_ANCHORS', patch: { S3_BUCKET_AUDIT_ANCHORS: undefined } },
+  { key: 'AUDIT_ANCHOR_OBJECT_LOCK', patch: { AUDIT_ANCHOR_OBJECT_LOCK: 'false' } },
+  {
+    key: 'AUDIT_ANCHOR_SIGNING_KEY_ID',
+    patch: { AUDIT_ANCHOR_SIGNING_KEY_ID: undefined },
+  },
+  { key: 'COA_SIGNING_KEY_ID', patch: { COA_SIGNING_KEY_ID: undefined } },
+  {
+    key: 'COA_SIGNING_LOCAL_KEY_PEM',
+    patch: { COA_SIGNING_LOCAL_KEY_PEM: '-----BEGIN PRIVATE KEY-----' },
+  },
+  {
+    key: 'OTEL_EXPORTER_OTLP_ENDPOINT',
+    patch: { OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318' },
+  },
+  { key: 'CLAMAV_HOST', patch: { CLAMAV_HOST: 'localhost' } },
+  { key: 'EMAIL_TRANSPORT', patch: { EMAIL_TRANSPORT: 'smtp' } },
+  { key: 'SMTP_USER', patch: { SMTP_USER: 'ses-smtp-user' } },
+  { key: 'SMTP_PASSWORD', patch: { SMTP_PASSWORD: 'ses-smtp-password' } },
+  { key: 'PAPERBOY_URL', patch: { PAPERBOY_URL: 'https://paperboy.yumait.au' } },
+  { key: 'PAPERBOY_API_KEY', patch: { PAPERBOY_API_KEY: 'pb_live' } },
+  { key: 'SES_CONFIGURATION_SET', patch: { SES_CONFIGURATION_SET: undefined } },
+  { key: 'SMTP_FROM', patch: { SMTP_FROM: 'BlakPath <no-reply@blakpath.local>' } },
+  { key: 'ORIGIN_VERIFY_SECRET', patch: { ORIGIN_VERIFY_SECRET: 'short' } },
+  { key: 'BETTER_AUTH_SECRET', patch: { BETTER_AUTH_SECRET: 'test-secret' } },
+  {
+    key: 'ENCRYPTION_LOCAL_KEY',
+    patch: { ENCRYPTION_LOCAL_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' },
+  },
+  { key: 'KMS_ENDPOINT', patch: { KMS_ENDPOINT: 'http://localhost:4566' } },
+  { key: 'PLATFORM_KMS_KEY_ARN', patch: { PLATFORM_KMS_KEY_ARN: undefined } },
+  { key: 'OPERATOR_ONCALL_EMAIL', patch: { OPERATOR_ONCALL_EMAIL: undefined } },
+  { key: 'EMAIL_WEBHOOK_SECRET', patch: { EMAIL_WEBHOOK_SECRET: undefined } },
+  {
+    key: 'EMAIL_SNS_TOPIC_ARN',
+    patch: { EMAIL_SNS_TOPIC_ARN: 'arn:aws:sns:us-east-1:123456789012:topic' },
+  },
+];
 
 describe('production readiness configuration', () => {
   it('accepts managed, encrypted Australian-region dependencies', () => {
@@ -62,7 +127,7 @@ describe('production readiness configuration', () => {
       S3_ACCESS_KEY_ID: 'standing-key',
       S3_SECRET_ACCESS_KEY: 'standing-secret',
       S3_KMS_KEY_ID: undefined,
-      OTEL_EXPORTER_OTLP_ENDPOINT: undefined,
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
       CLAMAV_HOST: 'localhost',
     });
 
@@ -219,5 +284,72 @@ describe('production readiness configuration', () => {
         },
       ]);
     }
+  });
+
+  it('treats the trace collector as optional but HTTPS when set', () => {
+    expect(
+      validateProductionReadiness({ ...valid, OTEL_EXPORTER_OTLP_ENDPOINT: undefined }),
+    ).toEqual([]);
+  });
+
+  it('accepts the CoA signing alias the runbook rotates and refuses a local id', () => {
+    const keys = (value: string) =>
+      validateProductionReadiness({ ...valid, COA_SIGNING_KEY_ID: value }).map(
+        ({ key }) => key,
+      );
+    expect(keys('alias/blakpath-coa-signing')).toEqual([]);
+    expect(
+      keys('arn:aws:kms:ap-southeast-2:123456789012:alias/blakpath-coa-signing'),
+    ).toEqual([]);
+    expect(keys('local-dev-key')).toEqual(['COA_SIGNING_KEY_ID']);
+    expect(keys(kmsKey.replace('ap-southeast-2', 'us-east-1'))).toEqual([
+      'COA_SIGNING_KEY_ID',
+    ]);
+  });
+
+  it('covers every production key', () => {
+    expect(cases.map((entry) => entry.key).sort()).toEqual(
+      [...PRODUCTION_READINESS_KEYS].sort(),
+    );
+  });
+
+  it.each(cases)('rejects $key', ({ key, patch }) => {
+    const issues = validateProductionReadiness({ ...valid, ...patch });
+    expect(issues.map((issue) => issue.key)).toContain(key);
+  });
+
+  it('reports every key at once for a dev-shaped environment', () => {
+    const issues = validateProductionReadiness({
+      NODE_ENV: 'test',
+      PILOT_BOOTSTRAP_TOKEN: 'pilot-token-that-is-long-enough',
+      APP_REGION: 'us-east-1',
+      S3_REGION: 'eu-west-1',
+      APP_URL: 'http://localhost:3000',
+      BETTER_AUTH_URL: 'http://127.0.0.1:3000',
+      DATABASE_URL: 'postgres://app:secret@localhost:5432/blakpath',
+      REDIS_URL: 'redis://localhost:6379',
+      S3_ENDPOINT: 'http://minio.internal:9000',
+      S3_ACCESS_KEY_ID: 'standing-key',
+      S3_SECRET_ACCESS_KEY: 'standing-secret',
+      S3_KMS_KEY_ID: 'alias/aws/s3',
+      COA_SIGNING_KEY_ID: 'local-dev-key',
+      COA_SIGNING_LOCAL_KEY_PEM: '-----BEGIN PRIVATE KEY-----',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+      CLAMAV_HOST: 'localhost',
+      SMTP_FROM: 'BlakPath <no-reply@blakpath.local>',
+      SMTP_USER: 'ses-user',
+      SMTP_PASSWORD: 'ses-password',
+      PAPERBOY_URL: 'http://paperboy.local',
+      PAPERBOY_API_KEY: 'replace-me',
+      ORIGIN_VERIFY_SECRET: 'changeme',
+      BETTER_AUTH_SECRET: 'test-secret',
+      ENCRYPTION_LOCAL_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      KMS_ENDPOINT: 'http://localhost:4566',
+      EMAIL_WEBHOOK_SECRET: 'changeme',
+    });
+
+    expect(new Set(issues.map((issue) => issue.key))).toEqual(
+      new Set(PRODUCTION_READINESS_KEYS),
+    );
   });
 });

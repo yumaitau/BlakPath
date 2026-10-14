@@ -4,16 +4,23 @@ import { getOrganisationKey } from '@/domains/organisation-keys/service';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
 import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
-import { closeQueues, type TenantJob } from '@/lib/queues';
+import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
+import { closeMalwareScanDlq, deadLetterExhaustedScan } from '@/lib/queues/dlq';
+import { malwareScanBackoffStrategy } from '@/lib/queues/scan-policy';
 import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
 import { startKeyHealthLoop } from './key-health-loop';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
+import { isPlatformAuditJob } from './audit-verify';
 import { queueFailureSignal } from './operational-signals';
 import { startSignatureAgeMonitor } from './signature-age-monitor';
 import { startAuthEmailWorker } from './auth-email';
 import { startTenantScheduleSync } from './scheduler';
 import { rememberPausedJob } from './tenant-pause-ledger';
-import { applyTenantJobGate, tenantKeyPauseSignal } from './tenant-key-gate';
+import {
+  applyTenantJobGate,
+  pauseOnTenantKeyLoss,
+  tenantKeyPauseSignal,
+} from './tenant-key-gate';
 
 /**
  * BlakPath background worker bootstrap.
@@ -29,7 +36,9 @@ import { applyTenantJobGate, tenantKeyPauseSignal } from './tenant-key-gate';
  *
  * Security posture: this process holds privileged infrastructure access. It
  * performs NO identity determination — see `worker/processors.ts`. Every job is
- * tenant-bound (`TenantJob.organisationId`). Full processors (malware scan,
+ * tenant-bound (`TenantJob.organisationId`), except the platform audit schedule,
+ * whose `platform` sentinel maps to the null-organisation chain (see
+ * `isPlatformAuditJob`). Full processors (malware scan,
  * certificate/export rendering, email, audit verification, retention, webhooks)
  * land in later phases.
  */
@@ -54,6 +63,10 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const worker = new Worker<TenantJob>(
     queueName,
     async (job, token) => {
+      // The platform audit chain has no tenant: no status or key gate applies.
+      if (isPlatformAuditJob(queueName, job.data)) {
+        return processor(job, childLogger);
+      }
       // Drop work for a suspended or closed organisation instead of retrying
       // it. A lookup failure still throws, so an outage is retried.
       if (!(await isOrganisationAcceptingWork(job.data.organisationId))) {
@@ -63,18 +76,30 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
         );
         return;
       }
+      const moveToDelayed = async (timestamp: number): Promise<void> => {
+        if (!token) throw new Error('tenant key pause requires the BullMQ lock token');
+        await job.moveToDelayed(timestamp, token);
+        if (job.id) rememberPausedJob(job.data.organisationId, `${queueName}:${job.id}`);
+      };
       const row = await getOrganisationKey(job.data.organisationId);
       const outcome = await applyTenantJobGate({
         status: row?.status ?? null,
-        moveToDelayed: async (timestamp) => {
-          if (!token) throw new Error('tenant key pause requires the BullMQ lock token');
-          await job.moveToDelayed(timestamp, token);
-          if (job.id)
-            rememberPausedJob(job.data.organisationId, `${queueName}:${job.id}`);
-        },
+        moveToDelayed,
       });
       if (outcome === 'paused') throw tenantKeyPauseSignal();
-      return processor(job, childLogger);
+      try {
+        return await processor(job, childLogger);
+      } catch (err) {
+        // A scan whose tenant key went non-active mid-job waits like a gated
+        // job. It must not burn a scan attempt or reach the dead-letter queue.
+        if (
+          queueName === QueueName.MalwareScan &&
+          (await pauseOnTenantKeyLoss({ err, moveToDelayed }))
+        ) {
+          throw tenantKeyPauseSignal();
+        }
+        throw err;
+      }
     },
     {
       connection,
@@ -83,6 +108,10 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
       concurrency: WORKER_QUEUE_CONCURRENCY,
       // Do not autorun until all workers are constructed and listeners wired.
       autorun: false,
+      // BullMQ reads the custom backoff from the worker that owns the job.
+      ...(queueName === QueueName.MalwareScan
+        ? { settings: { backoffStrategy: malwareScanBackoffStrategy } }
+        : {}),
     },
   );
 
@@ -92,6 +121,14 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
       { jobId: job?.id, ...failure, err },
       failure.alert ? 'job retries exhausted' : 'job failed; retry scheduled',
     );
+    if (queueName === QueueName.MalwareScan && failure.alert && job) {
+      void deadLetterExhaustedScan(job).catch((dlqErr: unknown) => {
+        childLogger.error(
+          { err: dlqErr, jobId: job.id },
+          'failed to dead-letter malware scan',
+        );
+      });
+    }
   });
 
   worker.on('completed', (job) => {
@@ -136,6 +173,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     stopTenantScheduleSync?.();
     stopKeyHealth?.();
     await Promise.all([authEmailWorker.close(), ...workers.map((w) => w.close())]);
+    await closeMalwareScanDlq();
     await closeQueues();
     await closeAuthEmailQueue();
     await redis.quit();

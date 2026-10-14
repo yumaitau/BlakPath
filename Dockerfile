@@ -72,6 +72,9 @@ ENV DATABASE_URL=${DATABASE_URL} \
     S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Plain JS release gate. Runtime images do not ship pnpm, tsx, or the source
+# tree, so the pre-deploy Job runs `node release-check.cjs`.
+RUN node scripts/build-release-check.mjs
 # Build the Next.js standalone server. `output: 'standalone'` is set in
 # next.config.ts, producing .next/standalone with a minimal node_modules.
 RUN pnpm build
@@ -112,6 +115,9 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/certs/rds-global-bundle.pem ./certs/rds-global-bundle.pem
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
+COPY --from=build --chown=nextjs:nodejs /app/dist/release-check/migration-url.cjs ./migration-url.cjs
 # Certificate renderer reads Noto Sans from the working directory. The
 # standalone server does not otherwise keep that path.
 COPY --from=build --chown=nextjs:nodejs /app/src/domains/certificates/fonts ./src/domains/certificates/fonts
@@ -158,6 +164,9 @@ COPY --from=build --chown=worker:nodejs /app/worker ./worker
 COPY --from=build --chown=worker:nodejs /app/src ./src
 COPY --from=build --chown=worker:nodejs /app/scripts ./scripts
 COPY --from=build --chown=worker:nodejs /app/certs/rds-global-bundle.pem ./certs/rds-global-bundle.pem
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/release-check.cjs ./release-check.cjs
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/production-readiness.cjs ./production-readiness.cjs
+COPY --from=build --chown=worker:nodejs /app/dist/release-check/migration-url.cjs ./migration-url.cjs
 
 USER worker
 

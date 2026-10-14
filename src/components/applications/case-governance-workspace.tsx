@@ -4,6 +4,7 @@ import { CheckCircle2, CircleDot, LockKeyhole, Vote } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -103,10 +104,12 @@ export function CaseGovernanceWorkspace({
         body: JSON.stringify(body),
       });
       if (!response.ok) {
+        const conflict = await readConflictMessage(response);
         setError(
-          response.status === 403
-            ? 'Your role does not allow that action, or the record is no longer available.'
-            : 'That record could not be saved. Refresh the case and try again.',
+          conflict ??
+            (response.status === 403
+              ? 'Your role does not allow that action, or the record is no longer available.'
+              : 'That record could not be saved. Refresh the case and try again.'),
         );
         return false;
       }

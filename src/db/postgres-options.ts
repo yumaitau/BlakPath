@@ -63,7 +63,7 @@ export function readRdsCaBundle(): string {
 /**
  * TLS options for postgres.js.
  *
- * Passing `ssl: 'require'` makes postgres.js set `rejectUnauthorized: false`
+ * Passing `ssl: 'require'` makes postgres.js skip certificate verification
  * (`postgres/src/connection.js`). An explicit options object wins over the
  * URL `sslmode`, so `require` and `verify-ca` still verify the RDS bundle and
  * the hostname. Only `verify-full` is accepted by the production gate. Local

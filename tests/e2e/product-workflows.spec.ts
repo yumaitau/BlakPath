@@ -193,6 +193,6 @@ test('account security fails safely and sign-out ends the session', async ({ pag
   const protectedResponse = await page.request.get('/api/notifications');
   expect(protectedResponse.status()).toBe(401);
   await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
   expect(pageErrors.map((error) => error.message)).toEqual([]);
 });
