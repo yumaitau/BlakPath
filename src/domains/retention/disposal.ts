@@ -179,6 +179,8 @@ export const DISPOSAL_CLASS_BY_RESOURCE = {
   group: 'operational_record',
   client: 'person_record',
   message: 'operational_record',
+  correspondence: 'application_matter',
+  correspondence_template: 'organisation_admin',
   notification: 'operational_record',
   email_suppression: 'operational_record',
   meeting_pack: 'governance_record',

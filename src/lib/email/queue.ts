@@ -68,7 +68,8 @@ export interface QueueTenantEmailInput {
   jobId?: string;
 }
 
-export async function queueTenantEmail(input: QueueTenantEmailInput): Promise<void> {
+/** Seals the message, enqueues delivery, and returns the sealed message id. */
+export async function queueTenantEmail(input: QueueTenantEmailInput): Promise<string> {
   const messageId = await insertSealedCorrespondence({
     organisationId: input.organisationId,
     recipient: input.to,
@@ -86,4 +87,5 @@ export async function queueTenantEmail(input: QueueTenantEmailInput): Promise<vo
     },
     input.jobId ? { jobId: input.jobId } : {},
   );
+  return messageId;
 }

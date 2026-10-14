@@ -108,6 +108,15 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     );
     if (limited) return limited;
   }
+  const letterToken = subjectFrom(pathname, '/c');
+  if (letterToken) {
+    const limited = await enforcePair(
+      REQUEST_LIMITS.correspondencePage,
+      clientIpForLimits(request.headers),
+      letterToken,
+    );
+    if (limited) return limited;
+  }
   const code = subjectFrom(pathname, '/verify');
   if (code) {
     const limited = await enforcePair(

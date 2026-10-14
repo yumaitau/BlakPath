@@ -31,6 +31,7 @@ import {
 import { WebhookDestinationError } from '@/domains/webhooks/destination';
 import { EvidenceUploadIncompleteError } from '@/domains/evidence/errors';
 import { RetentionError, RetentionTargetError } from '@/domains/retention';
+import { CorrespondenceError } from '@/domains/correspondence/errors';
 import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 import { logger } from '@/lib/observability/logger';
 import { AuthorizationError } from '@/lib/permissions/errors';
@@ -192,6 +193,26 @@ describe('errorResponse', () => {
       expect(mapped.status).toBe(status);
       expect(mapped.body.error).toBe(text);
     }
+
+    const notFinalised = await bodyOf(new CorrespondenceError('decision_not_finalised'));
+    expect(notFinalised.status).toBe(409);
+    expect(notFinalised.body).toMatchObject({
+      code: 'CORRESPONDENCE_DECISION_NOT_FINALISED',
+      error:
+        'An outcome letter cannot be sent until an authorised person has finalised the decision.',
+    });
+    const field = await bodyOf(
+      new CorrespondenceError('unknown_merge_field', 'applicant.dob'),
+    );
+    expect(field.body.error).toBe(
+      'A template uses a merge field that is not allowed. (applicant.dob)',
+    );
+    // Free text in the detail is never echoed.
+    const unsafe = await bodyOf(
+      new CorrespondenceError('unknown_merge_field', 'Jane Citizen <jane@example.org>'),
+    );
+    expect(unsafe.body.error).toBe('A template uses a merge field that is not allowed.');
+    expect(unsafe.body.code).toBe('CORRESPONDENCE_UNKNOWN_MERGE_FIELD');
 
     const mfa = await bodyOf(new StaffMfaRequiredError('user-1'));
     expect(mfa.body).toMatchObject({

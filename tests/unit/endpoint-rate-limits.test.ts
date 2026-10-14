@@ -328,6 +328,33 @@ describe('endpoint request limits', () => {
       }),
     );
     expect(codeAllowed.status).toBe(200);
+
+    const letter = REQUEST_LIMITS.correspondencePage;
+    await saturate(
+      letter.scope,
+      'token',
+      hashIdentity('letter-token-one'),
+      letter.subjectMax,
+      letter.windowSec,
+    );
+    const letterBlocked = await proxy(
+      new NextRequest('http://localhost/c/letter-token-one', {
+        headers: {
+          'cf-connecting-ip': '203.0.113.19',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
+        },
+      }),
+    );
+    expect(letterBlocked.status).toBe(429);
+    const letterAllowed = await proxy(
+      new NextRequest('http://localhost/c/letter-token-two', {
+        headers: {
+          'cf-connecting-ip': '203.0.113.19',
+          [ORIGIN_VERIFY_HEADER]: ORIGIN_SECRET,
+        },
+      }),
+    );
+    expect(letterAllowed.status).toBe(200);
   });
 
   it('returns 429 for v1 and mcp past the IP limit and past the key id', async () => {

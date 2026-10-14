@@ -497,6 +497,166 @@ integration('retention sweep', () => {
     expect(deleteAllObjectVersions).not.toHaveBeenCalled();
   });
 
+  /**
+   * A sent letter as `sendCorrespondence` leaves it: sealed text and recipient,
+   * a hashed applicant link that is still live, a sealed delivery copy, and a
+   * printed PDF object.
+   */
+  async function insertSentLetter(
+    orgId: string,
+    appId: string,
+    token: string,
+  ): Promise<{ itemId: string; messageId: string }> {
+    const { createHash, randomUUID } = await import('node:crypto');
+    const messageId = await fields.insertSealedCorrespondence({
+      organisationId: orgId,
+      recipient: 'pat@example.test',
+      subject: 'Update on application',
+      textBody: `Read it at https://app.example.test/c/${token}`,
+      htmlBody: '<p>Pat Smith</p>',
+    });
+    const itemId = randomUUID();
+    const sealed = await fields.sealCorrespondenceItemText(orgId, itemId, {
+      subjectTemplate: 'Letter for {{applicant.name}}',
+      bodyTemplate: 'Dear {{applicant.name}}',
+      renderedSubject: 'Letter for Pat Smith',
+      renderedBody: 'Dear Pat Smith',
+      recipientName: 'Pat Smith',
+      recipientEmail: 'pat@example.test',
+    });
+    await db.insert(schema.correspondenceItems).values({
+      id: itemId,
+      organisationId: orgId,
+      applicationId: appId,
+      kind: 'general',
+      channel: 'letter',
+      status: 'sent',
+      subjectTemplate: sealed.subjectTemplate ?? '',
+      bodyTemplate: sealed.bodyTemplate ?? '',
+      renderedSubject: sealed.renderedSubject ?? null,
+      renderedBody: sealed.renderedBody ?? null,
+      recipientName: sealed.recipientName ?? null,
+      recipientEmail: sealed.recipientEmail ?? null,
+      messageId,
+      portalTokenHash: createHash('sha256').update(token, 'utf8').digest('hex'),
+      portalExpiresAt: new Date(Date.now() + 14 * DAY),
+      pdfObjectKey: `${orgId}/correspondence/${itemId}.pdf`,
+      sentAt: new Date(),
+    });
+    return { itemId, messageId };
+  }
+
+  async function residue(orgId: string): Promise<number> {
+    const { plaintextResidueSql } = await import('@/lib/encryption/verify');
+    const rows = (await db.execute(
+      drizzle.sql.raw(plaintextResidueSql(orgId)),
+    )) as unknown as Array<{ column_name: string; residue: number }>;
+    const checked = rows.filter((row) => row.column_name.startsWith('correspondence_'));
+    // Every inventoried correspondence column is checked, not an empty set.
+    expect(checked.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'correspondence_items.rendered_body',
+        'correspondence_items.recipient_email',
+        'correspondence_messages.text_body',
+        'correspondence_templates.body_template',
+      ]),
+    );
+    return checked.reduce((sum, row) => sum + Number(row.residue), 0);
+  }
+
+  it('anonymises letters and their delivery copies and kills the applicant link', async () => {
+    const orgId = await createOrg();
+    const dueAt = new Date(Date.now() - (MIN_RETENTION_DAYS + 10) * DAY);
+    const [appId] = await insertApps(orgId, 'LETTER', 1, dueAt);
+    if (!appId) throw new Error('fixture insert failed');
+    const token = `letter-token-${Date.now()}-abcdefghijklmnop`;
+    const { itemId, messageId } = await insertSentLetter(orgId, appId, token);
+    const { getPublicCorrespondence } = await import('@/domains/correspondence');
+    expect(await getPublicCorrespondence(token)).toMatchObject({
+      body: 'Dear Pat Smith',
+    });
+    expect(await residue(orgId)).toBe(0);
+    await addPolicy(orgId, 'application', 'anonymise');
+
+    await processRetentionSweep({ organisationId: orgId, correlationId: 'letters' });
+
+    const [item] = await db
+      .select()
+      .from(schema.correspondenceItems)
+      .where(drizzle.eq(schema.correspondenceItems.id, itemId));
+    if (!item) throw new Error('letter row missing');
+    const [opened] = await fields.openCorrespondenceItemRows(orgId, [item]);
+    expect(opened).toMatchObject({
+      subjectTemplate: ANONYMISED_PLACEHOLDER,
+      bodyTemplate: ANONYMISED_PLACEHOLDER,
+      renderedSubject: ANONYMISED_PLACEHOLDER,
+      renderedBody: ANONYMISED_PLACEHOLDER,
+      recipientName: null,
+      recipientEmail: null,
+      portalTokenHash: null,
+      portalExpiresAt: null,
+      pdfObjectKey: null,
+    });
+    expect(await fields.openCorrespondence(orgId, messageId)).toEqual({
+      to: ANONYMISED_PLACEHOLDER,
+      subject: ANONYMISED_PLACEHOLDER,
+      text: ANONYMISED_PLACEHOLDER,
+      html: null,
+    });
+    expect(await getPublicCorrespondence(token)).toBeNull();
+    expect(deleteAllObjectVersions).toHaveBeenCalledWith({
+      bucket: 'blakpath-evidence',
+      key: `${orgId}/correspondence/${itemId}.pdf`,
+    });
+    expect(await residue(orgId)).toBe(0);
+  });
+
+  it('purges letters with the case: link dead at tombstone, rows gone after grace', async () => {
+    const orgId = await createOrg();
+    const dueAt = new Date(Date.now() - (MIN_RETENTION_DAYS + 10) * DAY);
+    const [appId] = await insertApps(orgId, 'PURGELETTER', 1, dueAt);
+    if (!appId) throw new Error('fixture insert failed');
+    const token = `purge-token-${Date.now()}-abcdefghijklmnop`;
+    const { itemId, messageId } = await insertSentLetter(orgId, appId, token);
+    await addPolicy(orgId, 'application', 'purge');
+    const { getPublicCorrespondence } = await import('@/domains/correspondence');
+
+    await processRetentionSweep({ organisationId: orgId, correlationId: 'purge-letter' });
+    expect(await getPublicCorrespondence(token)).toBeNull();
+    expect(deleteAllObjectVersions).toHaveBeenCalledWith({
+      bucket: 'blakpath-evidence',
+      key: `${orgId}/correspondence/${itemId}.pdf`,
+    });
+
+    // Past the grace period the tombstone is hard-deleted; letters cascade and
+    // the sealed delivery copy goes with them.
+    const old = new Date(Date.now() - 40 * DAY);
+    await db
+      .update(schema.applications)
+      .set({ deletedAt: old })
+      .where(drizzle.eq(schema.applications.id, appId));
+    await processRetentionSweep({ organisationId: orgId, correlationId: 'purge-grace' });
+
+    expect(
+      await db
+        .select({ id: schema.applications.id })
+        .from(schema.applications)
+        .where(drizzle.eq(schema.applications.id, appId)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select({ id: schema.correspondenceItems.id })
+        .from(schema.correspondenceItems)
+        .where(drizzle.eq(schema.correspondenceItems.id, itemId)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select({ id: schema.correspondenceMessages.id })
+        .from(schema.correspondenceMessages)
+        .where(drizzle.eq(schema.correspondenceMessages.id, messageId)),
+    ).toEqual([]);
+  });
+
   it('refuses decided and certified applications until a signed authority is verified', async () => {
     const orgId = await createOrg();
     const dueAt = new Date(Date.now() - (MIN_RETENTION_DAYS + 10) * DAY);

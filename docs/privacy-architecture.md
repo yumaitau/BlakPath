@@ -131,6 +131,12 @@ Inventoried columns:
 - `decisions.rationale`
 - `webhook_endpoints.secret`
 - `correspondence_messages.recipient`, `subject`, `text_body`, `html_body`
+- `correspondence_templates.subject_template`, `body_template` (`name` stays a
+  readable label for the per-organisation unique index)
+- `correspondence_items.subject_template`, `body_template`, `rendered_subject`,
+  `rendered_body`, `recipient_name`, `recipient_email`. The applicant link is
+  stored only as a SHA-256 hash; the delivered email (with the live link) is a
+  `correspondence_messages` row referenced by `message_id`
 - `consent_records.wording_snapshot` (the wording copied at grant time)
 - `membership_invitations.token_seal` and `form_invitations.token_seal` (the
   bearer token held until the invitation email is sent; JSONB envelope)
@@ -138,9 +144,11 @@ Inventoried columns:
 `applications.reference` stays readable so staff can see the matter number.
 Lookup does not use a plaintext index on that column.
 
-This is not a full correspondence product and not a full append-only consent
-ledger. Those remain separate work. The wording snapshot and the outbound
-email holding table exist so those bodies sit under the tenant key.
+This is not a full append-only consent ledger. That remains separate work. The
+wording snapshot and the outbound email holding table exist so those bodies sit
+under the tenant key. Case correspondence (`src/domains/correspondence`) stores
+its letters in `correspondence_items` and sends email through the same holding
+table.
 
 ### Blind index
 
@@ -270,6 +278,12 @@ and both lookups and name checks are rate-limited.
   hard-deletes the row only after a further 30-day grace. The hard delete runs
   only under a purge policy that still passes the signed-authority gate.
   Anonymised rows are marked and are not rewritten on later sweeps.
+- **Letters follow the case.** Anonymising an application rewrites its
+  `correspondence_items` text and their `correspondence_messages` delivery
+  copies to a sealed placeholder, clears the recipient, deletes the printed PDF
+  and removes the applicant link hash, all in the disposal transaction. A purge
+  removes the link at the tombstone; the hard delete cascades the letters and
+  deletes their delivery copies.
 - **Legal holds cascade.** A hold on an application also shields its evidence,
   form responses, notes and family links. A hold on evidence or a form response
   keeps that record, and its parent application, out of the sweep. Holds can

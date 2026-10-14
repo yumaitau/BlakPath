@@ -11,7 +11,7 @@ import { logger } from '@/lib/observability/logger';
  * the scope only.
  *
  * Auth routes keep their own rules (`AUTH_LIMITS`) inside Better Auth.
- * Page routes `/form/:token` and `/verify/:code` are enforced in `src/proxy.ts`
+ * Page routes `/form/:token`, `/verify/:code` and `/c/:token` are enforced in `src/proxy.ts`
  * so the response can be a real 429 before render.
  */
 
@@ -36,6 +36,12 @@ export const REQUEST_LIMITS = {
   publicFormFile: { scope: 'public-form-file', windowSec: 60, ipMax: 30, subjectMax: 20 },
   formPage: { scope: 'form-page', windowSec: 60, ipMax: 60, subjectMax: 30 },
   verifyPage: { scope: 'verify-page', windowSec: 60, ipMax: 30, subjectMax: 15 },
+  correspondencePage: {
+    scope: 'correspondence-page',
+    windowSec: 60,
+    ipMax: 30,
+    subjectMax: 15,
+  },
   invitationAccept: {
     scope: 'invitation-accept',
     windowSec: 60,

@@ -20,6 +20,8 @@ import { DELETE as releaseHold } from '@/app/api/retention/holds/[id]/route';
 import { DELETE as deletePolicy } from '@/app/api/retention/policies/[id]/route';
 import { POST as createSso } from '@/app/api/sso/providers/route';
 import { POST as createWebhook } from '@/app/api/webhooks/route';
+import { POST as sendLetter } from '@/app/api/applications/[id]/correspondence/[correspondenceId]/send/route';
+import { POST as notifyEvidenceRequest } from '@/app/api/applications/[id]/evidence-requests/[requestId]/notify/route';
 import { POST as redeliverWebhook } from '@/app/api/webhooks/[id]/deliveries/[deliveryId]/redeliver/route';
 
 const params = {
@@ -59,6 +61,28 @@ describe('listed routes require a fresh session', () => {
     await expectStale(
       revokeCertificate(post() as never, params),
       STEP_UP_ROUTES['POST /api/certificates/[id]/revoke'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      sendLetter(post(), {
+        params: Promise.resolve({
+          id: '00000000-0000-7000-8000-000000000001',
+          correspondenceId: '00000000-0000-7000-8000-000000000002',
+        }),
+      }),
+      STEP_UP_ROUTES[
+        'POST /api/applications/[id]/correspondence/[correspondenceId]/send'
+      ],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      notifyEvidenceRequest(post(), {
+        params: Promise.resolve({
+          id: '00000000-0000-7000-8000-000000000001',
+          requestId: '00000000-0000-7000-8000-000000000002',
+        }),
+      }),
+      STEP_UP_ROUTES['POST /api/applications/[id]/evidence-requests/[requestId]/notify'],
     );
     requireRecentAuth.mockClear();
     await expectStale(createKey(post() as never), STEP_UP_ROUTES['POST /api/keys']);

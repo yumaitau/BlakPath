@@ -72,6 +72,8 @@ describe('permission catalogue', () => {
       'certificate:generate',
       'certificate:sign',
       'certificate:revoke',
+      'correspondence:send',
+      'correspondence:manage-templates',
       'report:view',
       'report:export',
       'audit:view',
@@ -134,6 +136,8 @@ describe('system role templates', () => {
       expect(admin).not.toContain('evidence:upload-on-behalf');
       expect(admin).toContain('membership:manage');
       expect(admin).toContain('break-glass:approve');
+      expect(admin).toContain('correspondence:manage-templates');
+      expect(admin).not.toContain('correspondence:send');
       expect(admin).toContain('mcp:read');
       expect(admin).not.toContain('application:read-any');
     });

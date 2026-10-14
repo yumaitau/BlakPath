@@ -602,6 +602,8 @@ export async function requestFurtherEvidence(
       tx,
     );
 
+    // Recording the request does not notify the applicant. A person sends that
+    // notice, with the due date, through correspondence.
     return row;
   });
 }
