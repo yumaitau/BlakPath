@@ -151,18 +151,22 @@ export function scanStream(
       });
     });
 
+    // clamd sends a single NUL-terminated reply. Returns false until it has.
+    const settleFromReply = (): boolean => {
+      const received = Buffer.concat(chunks);
+      if (!received.includes(0)) return false;
+      try {
+        const verdict = parseClamdResponse(received.toString('utf8'));
+        done(() => resolve(verdict));
+      } catch (err) {
+        done(() => reject(err));
+      }
+      return true;
+    };
+
     socket.on('data', (buf: Buffer) => {
       chunks.push(buf);
-      // clamd sends a single NUL-terminated reply; act as soon as we see it.
-      if (buf.includes(0)) {
-        const reply = Buffer.concat(chunks).toString('utf8');
-        try {
-          const verdict = parseClamdResponse(reply);
-          done(() => resolve(verdict));
-        } catch (err) {
-          done(() => reject(err));
-        }
-      }
+      settleFromReply();
     });
 
     socket.on('timeout', () => {
@@ -171,11 +175,15 @@ export function scanStream(
       );
     });
 
+    // clamd closes after an early rejection (e.g. size limit), so our next write
+    // can fail. Prefer a reply already received over the socket error.
     socket.on('error', (err) => {
+      if (settleFromReply()) return;
       done(() => reject(new ClamAvUnavailableError('clamd connection error', err)));
     });
 
     socket.on('close', () => {
+      if (settleFromReply()) return;
       // Closed before a parseable reply arrived — treat as unavailable.
       done(() => reject(new ClamAvUnavailableError('clamd closed before replying')));
     });
