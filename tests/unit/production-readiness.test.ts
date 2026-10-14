@@ -25,6 +25,8 @@ const valid = {
   ORIGIN_VERIFY_SECRET: 'a-different-runtime-value-that-is-long-enough',
   EMAIL_WEBHOOK_SECRET: 'email-webhook-secret-value',
   EMAIL_SNS_TOPIC_ARN: 'arn:aws:sns:ap-southeast-2:123456789012:blakpath-email-events',
+  PLATFORM_KMS_KEY_ARN:
+    'arn:aws:kms:ap-southeast-2:123456789012:key/12345678-1234-1234-1234-123456789abc',
 } as const;
 
 describe('production readiness configuration', () => {
@@ -62,13 +64,13 @@ describe('production readiness configuration', () => {
       SMTP_HOST: 'localhost',
     });
 
+    expect(issues.map(({ key }) => key)).not.toContain('ENCRYPTION_MASTER_KEY');
     expect(
       validateProductionReadiness({
         ...valid,
         ORIGIN_VERIFY_SECRET: 'replace-me-not-a-real-origin-secret',
       }).map(({ key }) => key),
     ).toContain('ORIGIN_VERIFY_SECRET');
-
     expect(issues.map(({ key }) => key)).toEqual(
       expect.arrayContaining([
         'APP_REGION',
@@ -111,6 +113,22 @@ describe('production readiness configuration', () => {
     });
     expect(issues.map(({ key }) => key)).toEqual(
       expect.arrayContaining(['EMAIL_WEBHOOK_SECRET', 'EMAIL_SNS_TOPIC_ARN']),
+    );
+  });
+
+  it('rejects the local encryption provider and a local KMS endpoint', () => {
+    const issues = validateProductionReadiness({
+      ...valid,
+      ENCRYPTION_LOCAL_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      KMS_ENDPOINT: 'http://localhost:4566',
+      PLATFORM_KMS_KEY_ARN: undefined,
+    });
+    expect(issues.map(({ key }) => key)).toEqual(
+      expect.arrayContaining([
+        'ENCRYPTION_LOCAL_KEY',
+        'KMS_ENDPOINT',
+        'PLATFORM_KMS_KEY_ARN',
+      ]),
     );
   });
 });

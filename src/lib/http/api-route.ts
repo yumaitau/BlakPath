@@ -11,6 +11,7 @@ import {
   rateLimitResponse,
   type RequestLimitPolicy,
 } from '@/lib/http/request-limits';
+import { tenantKeyErrorResponse } from '@/lib/http/tenant-key-response';
 
 /**
  * Route helper for the public REST API (`/api/v1/*`).
@@ -48,6 +49,8 @@ export async function withApiKey<T>(
 
 /** Map an error thrown in an API route to a non-leaking JSON response. */
 export function apiErrorResponse(error: unknown): NextResponse {
+  const locked = tenantKeyErrorResponse(error);
+  if (locked) return locked;
   if (error instanceof RateLimitedError) return rateLimitResponse(error.retryAfter);
   if (error instanceof ApiKeyError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

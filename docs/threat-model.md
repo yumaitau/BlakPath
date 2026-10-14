@@ -108,8 +108,9 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
   tenants.
 - **Mitigations:** layered tenant isolation (application scoping + `assertOwned`
   - `NOT NULL` FKs + composite indexes + **RLS backstop**); per-tenant
-    object-storage namespaces and short-lived presigned URLs; **envelope
-    encryption (AES-256-GCM)** for sensitive fields and secrets; TLS in transit
+    object-storage namespaces and short-lived presigned URLs; **per-tenant
+    envelope encryption (AES-256-GCM)** under that organisation's KMS key,
+    failing closed when the key is unavailable; TLS in transit
     (Cloudflare Full (strict) to an HTTPS origin listener; HTTP only redirects);
     audit redaction (secrets/payloads never written to audit); least-privilege
     RBAC; **no standing operator access** (break-glass only); runtime secrets

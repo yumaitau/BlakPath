@@ -246,6 +246,11 @@ export type AuditAction =
   | 'admin.domain_verified'
   | 'admin.domain_removed'
   | 'admin.terminology_updated'
+  // Tenant key custody (platform chain — not a determination).
+  | 'key.registered'
+  | 'key.rotated'
+  | 'key.status_changed'
+  | 'key.unavailable'
   // Audit self-events (integrity).
   | 'audit.chain_verified'
   | 'audit.checkpoint_created'
@@ -262,6 +267,7 @@ export type ResourceType =
   | 'passkey'
   | 'organisation'
   | 'organisation_settings'
+  | 'organisation_key'
   | 'organisation_domain'
   | 'feature_flag'
   | 'role'

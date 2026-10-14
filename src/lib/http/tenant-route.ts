@@ -15,6 +15,7 @@ import { clientIp } from '@/lib/http/client-ip';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
 import { WebhookDestinationError } from '@/domains/webhooks/destination';
+import { tenantKeyErrorResponse } from '@/lib/http/tenant-key-response';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { RateLimitedError, rateLimitResponse } from '@/lib/http/request-limits';
 
@@ -74,6 +75,8 @@ export async function withRequestTenant<T>(
  * from "does not exist".
  */
 export function toErrorResponse(error: unknown): NextResponse {
+  const locked = tenantKeyErrorResponse(error);
+  if (locked) return locked;
   if (error instanceof RateLimitedError) return rateLimitResponse(error.retryAfter);
   if (error instanceof UnauthenticatedError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

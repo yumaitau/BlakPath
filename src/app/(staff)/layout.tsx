@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { TenantKeyUnavailable } from '@/components/encryption/tenant-key-unavailable';
 import { StaffShell } from '@/components/staff/staff-shell';
 import {
   membershipRequiresStaffMfa,
@@ -8,6 +9,7 @@ import {
   STAFF_MFA_ENROL_PATH,
   StaffMfaRequiredError,
 } from '@/lib/auth/staff-policy';
+import { getOrganisationKey } from '@/domains/organisation-keys';
 import { getServerSession } from '@/lib/auth/session';
 import { clientIp } from '@/lib/http/client-ip';
 import {
@@ -49,6 +51,9 @@ export default async function StaffLayout({ children }: { children: ReactNode })
     }
   }
 
+  const key = await getOrganisationKey(activeOrganisationId);
+  const locked = key && key.status !== 'active' ? key.status : null;
+
   return (
     <div className="flex min-h-dvh flex-col">
       <StaffShell
@@ -56,7 +61,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
         activeOrganisationId={activeOrganisationId}
       />
       <main id="main-content" tabIndex={-1} className="flex-1">
-        {children}
+        {locked ? <TenantKeyUnavailable status={locked} /> : children}
       </main>
     </div>
   );

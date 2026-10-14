@@ -9,6 +9,7 @@
 export * from './enums';
 export * from './auth';
 export * from './tenancy';
+export * from './organisation-keys';
 export * from './membership';
 export * from './teams';
 export * from './calendar';

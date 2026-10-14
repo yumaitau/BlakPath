@@ -11,6 +11,8 @@ region.
       environments; attach the successful key-only output to the release record.
       The check fails when `PILOT_BOOTSTRAP_TOKEN` is set. Leave that variable
       unset. The web and worker processes also refuse to boot if it is set.
+      The gate requires `PLATFORM_KMS_KEY_ARN` and rejects `ENCRYPTION_LOCAL_KEY`
+      and `KMS_ENDPOINT`. `ENCRYPTION_MASTER_KEY` is not required.
 - [ ] Use managed PostgreSQL, object storage and Redis in `ap-southeast-2`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.

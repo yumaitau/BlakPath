@@ -8,12 +8,14 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
-   `ENCRYPTION_MASTER_KEY`, `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
+   `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
    `AUDIT_ANCHOR_SIGNING_KEY_ID`. `EMAIL_SNS_TOPIC_ARN` is not a secret; it
-   lives in the ConfigMap. Do not store `SMTP_USER` or `SMTP_PASSWORD`.
-   Create a separate secret at `/blakpath/production/migrator` with only
-   `DATABASE_MIGRATION_URL` (role `blakpath_migrator`). Do not put the
-   migrator URL in the runtime secret.
+   lives in the ConfigMap. Set `PLATFORM_KMS_KEY_ARN` (platform CMK, not a
+   secret) in the config. Do not set `ENCRYPTION_LOCAL_KEY`, `KMS_ENDPOINT`,
+   `SMTP_USER` or `SMTP_PASSWORD`. `ENCRYPTION_MASTER_KEY` is optional and
+   only reads version-1 ciphertext. Create a separate secret at
+   `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
+   `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
 3. In `infra/aws/eks-boundary.example.yaml`, replace `OIDC_ID` with the cluster
    OIDC issuer id. Deploy that stack in ap-southeast-2.
    `CreatePodIdentityAssociation` stays `false` until the namespace exists.
