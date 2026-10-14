@@ -237,3 +237,39 @@ export const breakGlassStatus = pgEnum('break_glass_status', [
   'expired',
   'revoked',
 ]);
+
+/**
+ * Who holds the tenant's key-encryption key. These are custody arrangements,
+ * not judgements about a person. `client_owned` is a CMK in the client's
+ * account or an external key store (XKS) key. Escrow is a separate flag.
+ */
+export const keyCustodyMode = pgEnum('key_custody_mode', [
+  'blakpath_managed',
+  'client_owned',
+  'client_owned_escrow',
+]);
+
+/**
+ * Whether a tenant key may wrap or unwrap data.
+ * `pending_validation` is not usable: the handshake has not passed.
+ */
+export const organisationKeyStatus = pgEnum('organisation_key_status', [
+  'active',
+  'disabled',
+  'pending_deletion',
+  'unavailable',
+  'pending_validation',
+]);
+
+/** Result of the GenerateDataKey / Decrypt handshake for a tenant key. */
+export const organisationKeyValidationStatus = pgEnum(
+  'organisation_key_validation_status',
+  ['pending', 'passed', 'failed'],
+);
+
+/** Background re-wrap of fields and objects onto a replacement CMK. */
+export const organisationKeyRewrapStatus = pgEnum('organisation_key_rewrap_status', [
+  'running',
+  'completed',
+  'failed',
+]);

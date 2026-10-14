@@ -230,6 +230,11 @@ export const SYSTEM_ROLES = Object.freeze({
     permissions: [
       'tenant:configure',
       'membership:manage',
+      // Transport scopes only. The admin still holds no application, evidence,
+      // decision or certificate read, so a key needs a separate data permission
+      // the issuer themselves holds before a tool can return records.
+      'mcp:read',
+      'mcp:read-pii',
       'report:view',
       'audit:view',
       'break-glass:approve',

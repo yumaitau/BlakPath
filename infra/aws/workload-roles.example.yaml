@@ -8,9 +8,22 @@ Parameters:
     Type: String
   EvidenceKmsKeyArn:
     Type: String
+  AuditAnchorBucketArn:
+    Type: String
+  AuditAnchorSigningKeyArn:
+    Type: String
   RuntimeSecretArn:
     Type: String
   RuntimeSecretKmsKeyArn:
+    Type: String
+  # Informational. Tenant and platform envelope calls are authorised by the
+  # encryption-context condition below, because BYOK / XKS ARNs are not known
+  # when this role is deployed. The customer key policy must grant this role
+  # kms:Decrypt, kms:Encrypt, kms:GenerateDataKey and kms:DescribeKey.
+  # DescribeKey has no encryption context, so it is a separate statement on
+  # the worker role only. S3 object encryption uses the tenant CMK via
+  # kms:ViaService, not the purpose condition.
+  PlatformKmsKeyArn:
     Type: String
 
 Resources:
@@ -44,6 +57,35 @@ Resources:
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
                 Resource: [!Ref EvidenceKmsKeyArn]
+              - Sid: PlatformEnvelopeKey
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: [!Ref PlatformKmsKeyArn]
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
+                      - blind-index
+                      - key_validation
+                      # Wrap-and-unwrap check from Settings → Encryption keys.
+                      # Web only; no record data is wrapped under it.
+                      - key_health
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: s3.ap-southeast-2.amazonaws.com
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
 
   WorkerTaskRole:
     Type: AWS::IAM::Role
@@ -75,6 +117,57 @@ Resources:
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
                 Resource: [!Ref EvidenceKmsKeyArn]
+              - Sid: AuditAnchorReadWrite
+                Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: [!Ref AuditAnchorBucketArn]
+              - Sid: AuditAnchorObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: [!Sub '${AuditAnchorBucketArn}/*']
+              - Sid: AuditAnchorSign
+                Effect: Allow
+                Action: [kms:Sign, kms:GetPublicKey, kms:DescribeKey]
+                Resource: [!Ref AuditAnchorSigningKeyArn]
+              - Sid: AuditAnchorNoDelete
+                Effect: Deny
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:BypassGovernanceRetention
+                Resource:
+                  - !Ref AuditAnchorBucketArn
+                  - !Sub '${AuditAnchorBucketArn}/*'
+              - Sid: PlatformEnvelopeKey
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: [!Ref PlatformKmsKeyArn]
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
+                      - blind-index
+                      - key_validation
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: s3.ap-southeast-2.amazonaws.com
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
+              - Sid: TenantKeyDescribe
+                Effect: Allow
+                Action: kms:DescribeKey
+                Resource: '*'
 
   TaskExecutionRole:
     Type: AWS::IAM::Role

@@ -92,6 +92,8 @@ describe('permission catalogue', () => {
       'calendar:read-any',
       'calendar:update-any',
       'calendar:delete-any',
+      'mcp:read',
+      'mcp:read-pii',
     ];
     expect([...ALL_PERMISSIONS].sort()).toEqual([...expected].sort());
     // No determination/scoring capability may ever exist.
@@ -132,6 +134,8 @@ describe('system role templates', () => {
       expect(admin).not.toContain('evidence:upload-on-behalf');
       expect(admin).toContain('membership:manage');
       expect(admin).toContain('break-glass:approve');
+      expect(admin).toContain('mcp:read');
+      expect(admin).not.toContain('application:read-any');
     });
 
     it('lets intake and case officers record evidence received for an applicant', () => {

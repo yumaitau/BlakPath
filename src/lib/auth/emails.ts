@@ -5,7 +5,7 @@
  * ------------------------
  * The auth layer must be able to send verification and password-reset links
  * without hard-wiring transport specifics at import time. Delivery goes
- * through the shared SMTP transport (SES SMTP interface in production) via a
+ * through the shared email transport (SES v2 API in production) via a
  * lazy dynamic import, so every bundle — dev server, standalone production,
  * worker — resolves the same real transport without relying on a
  * separately-registered module singleton.
@@ -36,7 +36,7 @@ export interface AuthMailer {
 /**
  * Default transport.
  *
- * Sends through the real SMTP transport (SES SMTP interface in production,
+ * Sends through the real email transport (SES v2 API in production,
  * Mailpit locally) via a lazy dynamic import — static import would create a
  * module cycle, and the previous setter-only design silently failed in
  * production bundles where the instrumentation module registry never reached

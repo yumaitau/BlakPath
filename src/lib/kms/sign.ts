@@ -25,6 +25,12 @@ import { logger } from '@/lib/observability/logger';
  * organisation's signing key without ever seeing private key material:
  * signing happens inside KMS, verification uses the public key only.
  *
+ * Seals record the RESOLVED key ARN that KMS reports it signed with — never
+ * the configured alias — and the caller persists that key's public half
+ * (`signing_keys`) the first time it signs. Verification is then fully
+ * offline against the stored SPKI: no KMS call per `/verify` request, and an
+ * alias retarget or a disabled old key never invalidates earlier seals.
+ *
  * Key resolution, in order:
  *   1. `COA_SIGNING_KEY_ID` — KMS asymmetric key (RSA_2048+ or ECC_NIST_P256+,
  *      SIGN_VERIFY usage) accessed under the workload IAM role. Production.
@@ -36,10 +42,18 @@ import { logger } from '@/lib/observability/logger';
 export const COA_SIGNING_ALGORITHMS = ['RSASSA_PSS_SHA_256', 'ECDSA_SHA_256'] as const;
 export type CoaSigningAlgorithm = (typeof COA_SIGNING_ALGORITHMS)[number];
 
-const globalForKms = globalThis as unknown as {
-  __blakpathKms?: KMSClient;
-  __blakpathCoaPubkey?: { keyId: string; at: number; pem: string };
-};
+/** Key id recorded for seals made with `COA_SIGNING_LOCAL_KEY_PEM`. */
+export const LOCAL_DEV_KEY_ID = 'local-dev-key';
+
+/** Full KMS key ARN, including multi-Region (`mrk-`) keys. Never an alias. */
+const KMS_KEY_ARN =
+  /^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key\/(?:mrk-[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+export function isKmsKeyArn(value: string): boolean {
+  return KMS_KEY_ARN.test(value);
+}
+
+const globalForKms = globalThis as unknown as { __blakpathKms?: KMSClient };
 
 function kmsClient(): KMSClient {
   globalForKms.__blakpathKms ??= new KMSClient({ region: env.S3_REGION });
@@ -75,11 +89,79 @@ export function coaPayloadHash(canonical: string): string {
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
 
+/** SHA-256 hex of a base64 DER SubjectPublicKeyInfo. */
+export function spkiFingerprint(spkiB64: string): string {
+  return createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex');
+}
+
+/** The public half of a KMS signing key, as persisted in `signing_keys`. */
+export interface CoaSigningPublicKey {
+  /** Resolved key ARN. */
+  keyId: string;
+  keySpec: string;
+  /** Base64 DER SubjectPublicKeyInfo. */
+  spkiB64: string;
+  fingerprintSha256: string;
+}
+
 export interface CoaSignature {
   signatureB64: string;
   algorithm: CoaSigningAlgorithm;
+  /** Resolved KMS key ARN, or `LOCAL_DEV_KEY_ID`. */
   keyId: string;
   payloadHash: string;
+  /** KMS seals only: the signing key's public half, to persist before the seal. */
+  publicKey: CoaSigningPublicKey | null;
+}
+
+function spkiKey(spkiB64: string): KeyObject {
+  return createPublicKey({
+    key: Buffer.from(spkiB64, 'base64'),
+    format: 'der',
+    type: 'spki',
+  });
+}
+
+function verifyWithKey(
+  key: KeyObject,
+  algorithm: string,
+  canonical: string,
+  signature: Buffer,
+): boolean {
+  const verifier = createVerify(algorithm === 'ECDSA_SHA_256' ? 'SHA256' : 'RSA-SHA256');
+  verifier.update(canonical, 'utf8');
+  const type = key.asymmetricKeyType ?? '';
+  return algorithm === 'ECDSA_SHA_256' || !type.includes('rsa')
+    ? verifier.verify(key, signature)
+    : verifier.verify(
+        { key, padding: cryptoConstants.RSA_PKCS1_PSS_PADDING, saltLength: 32 },
+        signature,
+      );
+}
+
+/**
+ * Fetch a KMS key's public half. Accepts an alias, alias ARN, key id or key
+ * ARN and always returns the resolved key ARN KMS reports. Used when sealing
+ * and by the operator backfill — never on the public verification path.
+ */
+export async function fetchKmsSigningPublicKey(
+  keyIdOrAlias: string,
+): Promise<CoaSigningPublicKey> {
+  const out = await kmsClient().send(new GetPublicKeyCommand({ KeyId: keyIdOrAlias }));
+  if (!out.PublicKey) throw new Error('KMS returned no public key.');
+  if (!out.KeyId || !isKmsKeyArn(out.KeyId)) {
+    throw new Error('KMS GetPublicKey did not return a key ARN.');
+  }
+  if (out.KeyUsage && out.KeyUsage !== 'SIGN_VERIFY') {
+    throw new Error(`KMS key ${out.KeyId} is not a SIGN_VERIFY key.`);
+  }
+  const spkiB64 = Buffer.from(out.PublicKey).toString('base64');
+  return {
+    keyId: out.KeyId,
+    keySpec: out.KeySpec ?? 'UNKNOWN',
+    spkiB64,
+    fingerprintSha256: spkiFingerprint(spkiB64),
+  };
 }
 
 /** Sign the canonical payload. Returns everything the row must persist. */
@@ -101,57 +183,56 @@ export async function signCoaPayload(canonical: string): Promise<CoaSignature> {
     return {
       signatureB64: signature.toString('base64'),
       algorithm,
-      keyId: 'local-dev-key',
+      keyId: LOCAL_DEV_KEY_ID,
       payloadHash,
+      publicKey: null,
     };
   }
 
-  const keyId = env.COA_SIGNING_KEY_ID;
-  if (!keyId) {
+  const configured = env.COA_SIGNING_KEY_ID;
+  if (!configured) {
     throw new Error(
       'CoA signing is not configured: set COA_SIGNING_KEY_ID (KMS) or, for local development only, COA_SIGNING_LOCAL_KEY_PEM.',
     );
   }
-  // Algorithm resolved after DescribeKey tells us the key type; request KMS
-  // default first via a cheap public-key fetch (cached below).
-  const pem = await getCoaPublicKeyPem(keyId);
-  const pub = createPublicKey(pem);
+  // Resolve the configured id (often an alias) to the concrete key on every
+  // seal — signing is a rare, human, step-up act — then sign with that exact
+  // ARN so the public key we persist is the one that produced the signature,
+  // even if the alias is retargeted mid-flight.
+  const publicKey = await fetchKmsSigningPublicKey(configured);
+  const verifyKey = spkiKey(publicKey.spkiB64);
   const algorithm = resolveAlgorithm(
-    pub.asymmetricKeyType ?? '',
+    verifyKey.asymmetricKeyType ?? '',
     env.COA_SIGNING_ALGORITHM,
   );
   const out = await kmsClient().send(
     new SignCommand({
-      KeyId: keyId,
+      KeyId: publicKey.keyId,
       Message: Buffer.from(canonical, 'utf8'),
       MessageType: 'RAW',
       SigningAlgorithm: algorithm as SigningAlgorithmSpec,
     }),
   );
   if (!out.Signature) throw new Error('KMS signing returned no signature.');
-  logger.info({ keyId, algorithm }, 'CoA payload signed');
-  return {
-    signatureB64: Buffer.from(out.Signature).toString('base64'),
-    algorithm,
-    keyId,
-    payloadHash,
-  };
-}
-
-/** Fetch (and cache for 1h) the public key PEM for a KMS key. */
-export async function getCoaPublicKeyPem(keyId: string): Promise<string> {
-  const cached = globalForKms.__blakpathCoaPubkey;
-  if (cached && cached.keyId === keyId && Date.now() - cached.at < 3_600_000) {
-    return cached.pem;
+  // Persist what KMS says it signed with, and refuse anything that is not
+  // the key whose public half we are about to store.
+  const signedWith = out.KeyId;
+  if (!signedWith || !isKmsKeyArn(signedWith) || signedWith !== publicKey.keyId) {
+    throw new Error('KMS Sign did not report the resolved signing key ARN.');
   }
-  const out = await kmsClient().send(new GetPublicKeyCommand({ KeyId: keyId }));
-  if (!out.PublicKey) throw new Error('KMS returned no public key.');
-  const pem = Buffer.from(out.PublicKey)
-    .toString('base64')
-    .replace(/(.{64})/g, '$1\n');
-  const wrapped = `-----BEGIN PUBLIC KEY-----\n${pem}\n-----END PUBLIC KEY-----\n`;
-  globalForKms.__blakpathCoaPubkey = { keyId, at: Date.now(), pem: wrapped };
-  return wrapped;
+  const signature = Buffer.from(out.Signature);
+  // Self-check: a seal that cannot verify offline must never be issued.
+  if (!verifyWithKey(verifyKey, algorithm, canonical, signature)) {
+    throw new Error('KMS signature does not verify against the key public half.');
+  }
+  logger.info({ keyId: signedWith, algorithm }, 'CoA payload signed');
+  return {
+    signatureB64: signature.toString('base64'),
+    algorithm,
+    keyId: signedWith,
+    payloadHash,
+    publicKey,
+  };
 }
 
 export interface CoaVerification {
@@ -161,37 +242,40 @@ export interface CoaVerification {
 
 /**
  * Verify a signature against the canonical payload using the public key only.
- * `keyId === 'local-dev-key'` verifies against the configured local PEM.
+ * Fully offline — never calls KMS. KMS seals verify against the stored SPKI
+ * (`signing_keys.public_key_spki`); `keyId === LOCAL_DEV_KEY_ID` verifies
+ * against the configured local PEM. No public key → not verified.
  */
 export async function verifyCoaSignature(input: {
   canonical: string;
   signatureB64: string;
   algorithm: string;
   keyId: string;
+  publicKeySpki?: string | null;
 }): Promise<CoaVerification> {
   const payloadMatches = true; // caller compares stored payload hash separately
   try {
-    const verifier = createVerify(
-      input.algorithm === 'ECDSA_SHA_256' ? 'SHA256' : 'RSA-SHA256',
-    );
-    verifier.update(input.canonical, 'utf8');
     const signature = Buffer.from(input.signatureB64, 'base64');
     let key: KeyObject;
-    if (input.keyId === 'local-dev-key') {
+    if (input.keyId === LOCAL_DEV_KEY_ID) {
       const privateKey = localKey();
       if (!privateKey) return { signatureValid: false, payloadMatches };
       key = createPublicKey(privateKey);
+    } else if (input.publicKeySpki) {
+      key = spkiKey(input.publicKeySpki);
     } else {
-      key = createPublicKey(await getCoaPublicKeyPem(input.keyId));
+      logger.warn(
+        { keyId: input.keyId },
+        'CoA seal has no stored public key — run the signing-key backfill',
+      );
+      return { signatureValid: false, payloadMatches };
     }
-    const type = key.asymmetricKeyType ?? '';
-    const signatureValid =
-      input.algorithm === 'ECDSA_SHA_256' || !type.includes('rsa')
-        ? verifier.verify(key, signature)
-        : verifier.verify(
-            { key, padding: cryptoConstants.RSA_PKCS1_PSS_PADDING, saltLength: 32 },
-            signature,
-          );
+    const signatureValid = verifyWithKey(
+      key,
+      input.algorithm,
+      input.canonical,
+      signature,
+    );
     return { signatureValid, payloadMatches };
   } catch (error) {
     logger.warn({ err: error }, 'CoA signature verification failed');
