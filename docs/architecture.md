@@ -178,8 +178,9 @@ path:
 - **Audit integrity verification** — page each active tenant chain and the
   platform chain from the latest checkpoint, compare the chain to the signed
   external anchors, then checkpoint or alarm (`docs/audit-log-design.md`).
-- **Retention & lifecycle** — apply retention/deletion policies where lawful,
-  respecting official-record obligations (`docs/privacy-architecture.md`).
+- **Retention & lifecycle** — apply retention/deletion policies where a signed
+  disposal authority and a second approver allow it (`docs/records-disposal.md`,
+  `docs/privacy-architecture.md`).
 
 Jobs run under the **same guarantees as web requests**: a job that touches
 tenant data establishes a tenant context, uses the tenant-scoped data layer, and

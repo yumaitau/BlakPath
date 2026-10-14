@@ -30,6 +30,8 @@ const LISTED_ROUTES = [
   'POST /api/sso/providers',
   'DELETE /api/retention/holds/[id]',
   'DELETE /api/retention/policies/[id]',
+  'POST /api/retention/policies/[id]/activate',
+  'POST /api/retention/disposal-authorities',
   'POST /api/break-glass/[id]/deny',
   'POST /api/break-glass/[id]/revoke',
 ] as const;

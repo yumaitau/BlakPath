@@ -1,25 +1,104 @@
 import { z } from 'zod';
-import { MIN_RETENTION_DAYS, RETENTION_ACTIONS, RETENTION_RESOURCE_TYPES } from './rules';
+import { DISPOSAL_CLASSES, DISPOSAL_CLASS_INFO, RECORDS_JURISDICTIONS } from './disposal';
+import {
+  MIN_RETENTION_DAYS,
+  RETENTION_ACTIONS,
+  RETENTION_RESOURCE_TYPES,
+  SWEEP_RESOURCE_TYPES,
+} from './rules';
 
-/** Input validation for retention management (zod v4). */
+/**
+ * Input validation for retention management (zod v4).
+ *
+ * `RETENTION_DAYS_SANITY_MAX` is an input bound so a bad number cannot overflow
+ * date maths. It is not a legal maximum. A policy period also has a floor of
+ * `MIN_RETENTION_DAYS` so a recorded matter survives long enough to correct.
+ * Permanent retention is `action: 'retain'` with no end date. A purge must cite an authority reference; the
+ * service checks that reference against a records-manager sign-off.
+ */
 
-export const createPolicySchema = z.object({
-  resourceType: z.enum(RETENTION_RESOURCE_TYPES),
-  /** Floor of {@link MIN_RETENTION_DAYS}, cap of 10 years. */
-  retentionDays: z.coerce.number().int().min(MIN_RETENTION_DAYS).max(3650),
-  action: z.enum(RETENTION_ACTIONS),
-  /**
-   * Reference to an approved disposal authority. Required before a sweep may
-   * touch a decided application, a finalised decision, or an issued certificate.
-   * Dual-control approval of this reference is a separate records control.
-   */
-  disposalAuthorityRef: z.string().trim().min(1).max(200).optional(),
-});
+/** 1_000 years. Not a lawful cap. */
+export const RETENTION_DAYS_SANITY_MAX = 365_000;
+
+const finiteDays = z.coerce.number().int().min(1).max(RETENTION_DAYS_SANITY_MAX);
+
+/** A policy period: floor of {@link MIN_RETENTION_DAYS}, sanity cap only. */
+const policyDays = z.coerce
+  .number()
+  .int()
+  .min(MIN_RETENTION_DAYS)
+  .max(RETENTION_DAYS_SANITY_MAX);
+
+export const createPolicySchema = z
+  .object({
+    resourceType: z.enum(RETENTION_RESOURCE_TYPES),
+    retentionDays: z.union([z.null(), policyDays]).optional(),
+    action: z.enum(RETENTION_ACTIONS),
+    jurisdiction: z.enum(RECORDS_JURISDICTIONS),
+    authorityReference: z.string().trim().min(1).max(500).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.action === 'retain') {
+      if (value.retentionDays != null) {
+        context.addIssue({
+          code: 'custom',
+          path: ['retentionDays'],
+          message: 'Permanent retention has no end date.',
+        });
+      }
+      return;
+    }
+    if (value.retentionDays == null) {
+      context.addIssue({
+        code: 'custom',
+        path: ['retentionDays'],
+        message: 'A finite retention period is required unless the action is retain.',
+      });
+    }
+    if (value.action === 'purge' && !value.authorityReference) {
+      context.addIssue({
+        code: 'custom',
+        path: ['authorityReference'],
+        message: 'A purge requires a disposal authority reference.',
+      });
+    }
+  });
 export type CreatePolicyInput = z.input<typeof createPolicySchema>;
 
+/** Holds name a record the sweep can act on, and the service checks it exists. */
 export const placeHoldSchema = z.object({
-  resourceType: z.enum(RETENTION_RESOURCE_TYPES),
+  resourceType: z.enum(SWEEP_RESOURCE_TYPES),
   resourceId: z.uuid(),
   reason: z.string().trim().min(1).max(2000),
 });
 export type PlaceHoldInput = z.input<typeof placeHoldSchema>;
+
+export const signDisposalAuthoritySchema = z
+  .object({
+    jurisdiction: z.enum(RECORDS_JURISDICTIONS),
+    disposalClass: z.enum(DISPOSAL_CLASSES),
+    authorityReference: z.string().trim().min(1).max(500),
+    permanent: z.boolean(),
+    minimumRetentionDays: z.union([z.null(), finiteDays]).optional(),
+    notes: z.string().trim().max(2000).optional(),
+  })
+  .superRefine((value, context) => {
+    if (
+      DISPOSAL_CLASS_INFO[value.disposalClass].destructionForbidden &&
+      !value.permanent
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['permanent'],
+        message: 'This class cannot be destroyed. Sign it as permanent.',
+      });
+    }
+    if (value.permanent && value.minimumRetentionDays != null) {
+      context.addIssue({
+        code: 'custom',
+        path: ['minimumRetentionDays'],
+        message: 'A permanent class has no minimum end date.',
+      });
+    }
+  });
+export type SignDisposalAuthorityInput = z.input<typeof signDisposalAuthoritySchema>;
