@@ -2,6 +2,7 @@ import type { Job } from 'bullmq';
 import type { Logger } from 'pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as InvitationDelivery from '@/lib/email/invitation-delivery';
+import type * as AuditVerify from '../../worker/audit-verify';
 import { QueueName, type TenantJob } from '@/lib/queues';
 import { script } from './helpers/scripted-db';
 
@@ -33,22 +34,9 @@ const deps = vi.hoisted(() => ({
     subject: 'Notice',
     text: 'You have a notification',
   })),
-  verifyChain: vi.fn(
-    async (): Promise<{
-      ok: boolean;
-      eventCount: number;
-      divergence: { eventId: string; index: number; reason: string } | null;
-    }> => ({ ok: true, eventCount: 1, divergence: null }),
-  ),
-  createCheckpoint: vi.fn(async () => undefined),
-  settleAuditChain: vi.fn(
-    async (): Promise<{
-      status: string;
-      reason: string | null;
-      eventCount: number;
-      day: string | null;
-    }> => ({ status: 'anchored', reason: null, eventCount: 1, day: '2026-10-15' }),
-  ),
+  // Chain walking, anchoring and checkpointing are covered by the
+  // audit-verify tests. Here only the routing into it is asserted.
+  processAuditVerifyJob: vi.fn(async (): Promise<unknown> => ({})),
 }));
 
 vi.mock('../../worker/tenant-job', () => ({ acceptTenantJob: deps.acceptTenantJob }));
@@ -78,13 +66,11 @@ vi.mock('@/domains/notifications', () => ({
   markEmailed: deps.markEmailed,
   renderNotificationEmail: deps.renderNotificationEmail,
 }));
-vi.mock('@/domains/audit', () => ({
-  verifyChain: deps.verifyChain,
-  createCheckpoint: deps.createCheckpoint,
+// The platform-job predicate stays real: it decides which jobs skip the gate.
+vi.mock('../../worker/audit-verify', async (importOriginal) => ({
+  ...(await importOriginal<typeof AuditVerify>()),
+  processAuditVerifyJob: deps.processAuditVerifyJob,
 }));
-vi.mock('@/domains/audit/anchor', () => ({ settleAuditChain: deps.settleAuditChain }));
-vi.mock('@/domains/audit/anchor-s3', () => ({ createS3AuditAnchorStore: () => ({}) }));
-vi.mock('@/domains/audit/anchor-sign', () => ({ loadAnchorSigner: () => ({}) }));
 vi.mock('@/db/tenant-db', async () => {
   const { scriptedTenantModule } = await import('./helpers/scripted-db');
   return scriptedTenantModule('org-1');
@@ -92,10 +78,15 @@ vi.mock('@/db/tenant-db', async () => {
 
 const { PROCESSORS, REGISTERED_QUEUES } = await import('../../worker/processors');
 
-function job(data: Record<string, unknown>, name = 'job'): Job<TenantJob> {
+function job(
+  data: Record<string, unknown>,
+  name = 'job',
+  queueName: string = 'test-queue',
+): Job<TenantJob> {
   return {
     id: 'job-1',
     name,
+    queueName,
     attemptsMade: 1,
     data: { organisationId: 'org-1', correlationId: 'corr-1', ...data },
   } as Job<TenantJob>;
@@ -119,13 +110,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   deps.acceptTenantJob.mockResolvedValue(true);
   deps.openCorrespondence.mockResolvedValue(null);
-  deps.verifyChain.mockResolvedValue({ ok: true, eventCount: 1, divergence: null });
-  deps.settleAuditChain.mockResolvedValue({
-    status: 'anchored',
-    reason: null,
-    eventCount: 1,
-    day: '2026-10-15',
-  });
   deps.renderNotificationEmail.mockReturnValue({
     subject: 'Notice',
     text: 'You have a notification',
@@ -146,7 +130,11 @@ describe('worker processors', () => {
     deps.acceptTenantJob.mockResolvedValue(false);
     for (const name of Object.values(QueueName)) {
       await PROCESSORS[name](
-        job({ evidenceId: 'ev-1', deliveryId: 'del-1', notificationId: 'note-1' }),
+        job(
+          { evidenceId: 'ev-1', deliveryId: 'del-1', notificationId: 'note-1' },
+          'job',
+          name,
+        ),
         asLogger(logger()),
       );
     }
@@ -154,7 +142,7 @@ describe('worker processors', () => {
     expect(deps.processEvidenceScan).not.toHaveBeenCalled();
     expect(deps.processWebhookDelivery).not.toHaveBeenCalled();
     expect(deps.processRetentionSweep).not.toHaveBeenCalled();
-    expect(deps.verifyChain).not.toHaveBeenCalled();
+    expect(deps.processAuditVerifyJob).not.toHaveBeenCalled();
     expect(deps.sendEmail).not.toHaveBeenCalled();
     expect(script.ops).toEqual([]);
   });
@@ -331,57 +319,57 @@ describe('worker processors', () => {
     expect(JSON.stringify(log.info.mock.calls)).not.toContain('person@council.example');
   });
 
-  it('checkpoints a clean anchored chain and logs divergence without retrying', async () => {
+  it('verifies a tenant audit chain only after the tenant gate', async () => {
     const log = logger();
-    await PROCESSORS[QueueName.AuditVerify](job({}), asLogger(log));
-    expect(deps.verifyChain).toHaveBeenCalledWith('org-1');
-    expect(deps.createCheckpoint).toHaveBeenCalledWith({ organisationId: 'org-1' });
-    expect(log.info).toHaveBeenCalled();
-    expect(log.error).not.toHaveBeenCalled();
-
-    deps.settleAuditChain.mockResolvedValueOnce({
-      status: 'already_anchored',
-      reason: null,
-      eventCount: 1,
-      day: '2026-10-15',
-    });
-    await PROCESSORS[QueueName.AuditVerify](job({}), asLogger(log));
-    expect(deps.createCheckpoint).toHaveBeenCalledTimes(1);
-
-    deps.verifyChain.mockResolvedValue({
-      ok: false,
-      eventCount: 4,
-      divergence: { eventId: 'evt-1', index: 2, reason: 'hash' },
-    });
-    deps.settleAuditChain.mockResolvedValue({
-      status: 'divergence',
-      reason: null,
-      eventCount: 4,
-      day: null,
-    });
-    await expect(
-      PROCESSORS[QueueName.AuditVerify](job({}), asLogger(log)),
-    ).resolves.toBeUndefined();
-    expect(log.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        signal: 'audit_integrity_failure',
-        alert: true,
-        eventId: 'evt-1',
-        reason: 'hash',
-      }),
-      expect.any(String),
+    await PROCESSORS[QueueName.AuditVerify](
+      job({}, 'job', QueueName.AuditVerify),
+      asLogger(log),
     );
-    expect(deps.createCheckpoint).toHaveBeenCalledTimes(1);
+    expect(deps.acceptTenantJob).toHaveBeenCalledTimes(1);
+    expect(deps.processAuditVerifyJob).toHaveBeenCalledWith(
+      {
+        organisationId: 'org-1',
+        correlationId: 'corr-1',
+        platformChain: false,
+        jobId: 'job-1',
+      },
+      log,
+    );
+
+    // A store outage throws so BullMQ retries the anchor write.
+    deps.processAuditVerifyJob.mockRejectedValueOnce(new Error('anchor store down'));
+    await expect(
+      PROCESSORS[QueueName.AuditVerify](
+        job({}, 'job', QueueName.AuditVerify),
+        asLogger(log),
+      ),
+    ).rejects.toThrow(/anchor store down/);
   });
 
-  it('verifies the platform chain only when the job asks for it', async () => {
+  it('a tenant id with platformChain set is still a gated tenant job', async () => {
+    deps.acceptTenantJob.mockResolvedValue(false);
     await PROCESSORS[QueueName.AuditVerify](
-      job({ platformChain: true }),
+      job({ platformChain: true }, 'job', QueueName.AuditVerify),
       asLogger(logger()),
     );
-    expect(deps.verifyChain).toHaveBeenCalledWith(null);
-    expect(deps.settleAuditChain).toHaveBeenCalledWith(
-      expect.objectContaining({ organisationId: null }),
+    expect(deps.acceptTenantJob).toHaveBeenCalledTimes(1);
+    expect(deps.processAuditVerifyJob).not.toHaveBeenCalled();
+  });
+
+  it('routes only the exact platform payload to the platform chain', async () => {
+    await PROCESSORS[QueueName.AuditVerify](
+      job(
+        { organisationId: 'platform', platformChain: true },
+        'job',
+        QueueName.AuditVerify,
+      ),
+      asLogger(logger()),
+    );
+    // The platform chain has no tenant, so the active-tenant gate is skipped.
+    expect(deps.acceptTenantJob).not.toHaveBeenCalled();
+    expect(deps.processAuditVerifyJob).toHaveBeenCalledWith(
+      expect.objectContaining({ platformChain: true }),
+      expect.anything(),
     );
   });
 
