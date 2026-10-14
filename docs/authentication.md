@@ -152,7 +152,7 @@ an authenticator is enrolled, a TOTP or backup code — or a passkey. That check
 mints a new session and retries the action. It does not sign the person out.
 
 The mapped routes are evidence download, report export create and download,
-certificate revoke, API key create, webhook create, SSO provider create,
+certificate revoke, meeting pack read, API key create, webhook create, SSO provider create,
 retention hold release, retention policy delete, and break-glass deny and
 revoke. Certificate signing, break-glass approval and activation, and
 membership changes are gated the same way.

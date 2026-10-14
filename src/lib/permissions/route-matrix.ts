@@ -148,6 +148,18 @@ const MEETING_READ = [
   'meeting:agenda-manage',
 ] as const satisfies readonly Permission[];
 
+const MEETING_RUN = [
+  'meeting:agenda-manage',
+  'meeting:create',
+] as const satisfies readonly Permission[];
+
+const MEETING_ATTENDANCE = [
+  ...MEETING_RUN,
+  'decision:vote',
+  'meeting:pack-access',
+  'conflict:declare',
+] as const satisfies readonly Permission[];
+
 const DASHBOARD_READ = [
   'report:view',
   'application:read-any',
@@ -399,6 +411,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     body: { subjectUserId: '{{user}}', purpose: 'matrix-consent' },
   }),
   route('DELETE', '/api/consents/[id]', anyOf(CONSENT_WRITE)),
+  route('POST', '/api/conflicts/[id]/clear', anyOf(['meeting:agenda-manage'])),
   route(
     'GET',
     '/api/dashboard/layout',
@@ -491,6 +504,24 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       denyStatuses: [401, 404],
     },
   ),
+  route('GET', '/api/meetings', anyOf(MEETING_READ), {
+    allowRole: 'committee-chair',
+    allowProbe: true,
+  }),
+  route('POST', '/api/meetings', anyOf(['meeting:create'])),
+  route('GET', '/api/meetings/[id]', anyOf(MEETING_READ)),
+  route('GET', '/api/meetings/[id]/agenda', anyOf(MEETING_READ)),
+  route('POST', '/api/meetings/[id]/agenda', anyOf(['meeting:agenda-manage'])),
+  route('DELETE', '/api/meetings/[id]/agenda/[itemId]', anyOf(['meeting:agenda-manage'])),
+  route('GET', '/api/meetings/[id]/attendance', anyOf(MEETING_READ)),
+  // Agenda managers record anyone; a member may attest only their own attendance.
+  route('POST', '/api/meetings/[id]/attendance', anyOf(MEETING_ATTENDANCE)),
+  route('GET', '/api/meetings/[id]/conflicts', anyOf(MEETING_READ)),
+  route('POST', '/api/meetings/[id]/conflicts', anyOf(['conflict:declare'])),
+  route('POST', '/api/meetings/[id]/minutes', anyOf(MEETING_RUN)),
+  // Step-up first (a fresh fixture session passes), then pack access.
+  route('GET', '/api/meetings/[id]/pack', anyOf(['meeting:pack-access'])),
+  route('POST', '/api/meetings/[id]/quorum', anyOf(MEETING_RUN)),
   route('GET', '/api/membership-invitations', anyOf(['membership:manage']), {
     allowRole: 'organisation-admin',
     allowProbe: true,
@@ -781,7 +812,6 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
 export const UNROUTED_PERMISSIONS = {
   'evidence:read-assigned':
     'Included in the break-glass read bundle. Download checks evidence:download.',
-  'conflict:declare': 'declareConflict has no route.',
   'break-glass:request':
     'The platform-operator template grants it. Request and activate check users.isPlatformOperator, not this key.',
   'group:manage':

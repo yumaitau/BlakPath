@@ -31,6 +31,8 @@ export const STEP_UP_ROUTES = {
   'POST /api/reports/exports': STEP_UP_WINDOWS.sensitiveAction,
   'GET /api/reports/exports/[id]/download': STEP_UP_WINDOWS.sensitiveAction,
   'POST /api/certificates/[id]/revoke': STEP_UP_WINDOWS.sensitiveAction,
+  // The meeting pack releases confidential case material to the reader.
+  'GET /api/meetings/[id]/pack': STEP_UP_WINDOWS.sensitiveAction,
   // Sending a letter releases case information to the applicant.
   'POST /api/applications/[id]/correspondence/[correspondenceId]/send':
     STEP_UP_WINDOWS.sensitiveAction,

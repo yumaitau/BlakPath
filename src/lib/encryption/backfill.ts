@@ -4,6 +4,7 @@ import {
   applicationNotes,
   applications,
   clients,
+  conflictDeclarations,
   consentRecords,
   decisions,
   encryptionBackfillRuns,
@@ -44,6 +45,7 @@ const ORDER = [
   'form_responses',
   'clients',
   'decisions',
+  'conflict_declarations',
   'webhook_endpoints',
   'consent_records',
   'membership_invitations',
@@ -432,6 +434,47 @@ async function backfillDecisions(
   return { count, lastId: rows.at(-1)?.id ?? null, full: rows.length === BATCH };
 }
 
+/** Conflict reasons written before they were sealed. Later columns are sealed on write. */
+async function backfillConflicts(
+  organisationId: string,
+  afterId: string | null,
+  scope: EncryptionScope,
+): Promise<Step> {
+  const tenant = tenantScope(organisationId);
+  const rows = await tenant.db
+    .select({ id: conflictDeclarations.id, reason: conflictDeclarations.reason })
+    .from(conflictDeclarations)
+    .where(
+      tenant.where(
+        conflictDeclarations.organisationId,
+        afterId ? gt(conflictDeclarations.id, afterId) : undefined,
+      ),
+    )
+    .orderBy(asc(conflictDeclarations.id))
+    .limit(BATCH);
+  let count = 0;
+  for (const row of rows) {
+    if (row.reason == null || isTenantCiphertext(row.reason)) continue;
+    const saved = await resaveText(
+      scope,
+      bind('conflict_declarations', 'reason', row.id),
+      row.reason,
+    );
+    if (!saved.changed || saved.value === null) continue;
+    await tenant.db
+      .update(conflictDeclarations)
+      .set({ reason: saved.value })
+      .where(
+        and(
+          eq(conflictDeclarations.organisationId, organisationId),
+          eq(conflictDeclarations.id, row.id),
+        ),
+      );
+    count += 1;
+  }
+  return { count, lastId: rows.at(-1)?.id ?? null, full: rows.length === BATCH };
+}
+
 async function backfillWebhooks(
   organisationId: string,
   afterId: string | null,
@@ -651,6 +694,8 @@ async function runStep(
       return backfillClients(organisationId, afterId, scope);
     case 'decisions':
       return backfillDecisions(organisationId, afterId, scope);
+    case 'conflict_declarations':
+      return backfillConflicts(organisationId, afterId, scope);
     case 'webhook_endpoints':
       return backfillWebhooks(organisationId, afterId, scope);
     case 'consent_records':

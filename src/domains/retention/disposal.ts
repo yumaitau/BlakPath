@@ -95,7 +95,7 @@ export const DISPOSAL_CLASS_INFO = {
     destructionForbidden: false,
   },
   governance_record: {
-    description: 'Meetings, agendas, packs, conflicts and votes.',
+    description: 'Meetings, agendas, attendance, minutes, packs, conflicts and votes.',
     destructionForbidden: false,
   },
   operational_record: {
