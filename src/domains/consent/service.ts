@@ -7,6 +7,7 @@ import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { openConsentRows, sealWordingSnapshot } from '@/lib/encryption/tenant-fields';
+import { CONSENT_READ_PERMISSIONS, CONSENT_WRITE_PERMISSIONS } from './permissions';
 
 /**
  * Consent service — tenant-scoped, permission-checked, audited.
@@ -15,17 +16,6 @@ import { openConsentRows, sealWordingSnapshot } from '@/lib/encryption/tenant-fi
  */
 
 export type ConsentRow = typeof consentRecords.$inferSelect;
-
-const CONSENT_WRITE = [
-  'application:create',
-  'application:update-intake',
-  'application:assign',
-] as const;
-const CONSENT_READ = [
-  ...CONSENT_WRITE,
-  'application:read-any',
-  'application:read-assigned',
-] as const;
 
 const recordSchema = z.object({
   subjectUserId: z.uuid(),
@@ -43,7 +33,7 @@ export async function recordConsent(
   raw: z.input<typeof recordSchema>,
 ): Promise<ConsentRow> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), CONSENT_WRITE);
+  requireAny(subjectFromContext(ctx), CONSENT_WRITE_PERMISSIONS);
   const input = recordSchema.parse(raw);
   const scope = currentScope();
   const wordingRows = await scope.db
@@ -86,7 +76,7 @@ export async function recordConsent(
 
 export async function withdrawConsent(id: string): Promise<ConsentRow> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), CONSENT_WRITE);
+  requireAny(subjectFromContext(ctx), CONSENT_WRITE_PERMISSIONS);
   const scope = currentScope();
   const updated = await scope.db
     .update(consentRecords)
@@ -111,7 +101,7 @@ export async function withdrawConsent(id: string): Promise<ConsentRow> {
 
 export async function listConsents(subjectUserId: string): Promise<ConsentRow[]> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), CONSENT_READ);
+  requireAny(subjectFromContext(ctx), CONSENT_READ_PERMISSIONS);
   const scope = currentScope();
   const rows = await scope.db
     .select()
@@ -132,7 +122,7 @@ export async function hasLiveConsent(
   purpose: string,
 ): Promise<boolean> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), CONSENT_READ);
+  requireAny(subjectFromContext(ctx), CONSENT_READ_PERMISSIONS);
   const scope = currentScope();
   const now = new Date();
   const rows = await scope.db

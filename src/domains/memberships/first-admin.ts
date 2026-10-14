@@ -157,7 +157,7 @@ export async function inviteFirstAdministrator(
       resourceType: 'membership',
       resourceId: invitationId,
       result: 'success',
-      reason: 'first administrator invitation',
+      reason: 'membership.first_admin_invitation',
       organisationId,
       actorUserId: null,
       actingRole: 'operator',

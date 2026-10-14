@@ -231,7 +231,9 @@ when you did.
 ## 4. Withdrawal
 
 The client's signatories can withdraw by written notice. Record it with
-`withdrawEscrow` (reason and recording user). Object Lock stops the vault
+`withdrawEscrow` (a coded reason such as `escrow.client_notice`, and the
+recording user). Keep the written notice with the escrow records; the audit
+chain stores the code only. Object Lock stops the vault
 package being deleted before its retention ends. So pair a withdrawal with a
 rotation to new, un-escrowed material: the old package then opens nothing. It
 is deleted when retention ends. State this in the consent wording.

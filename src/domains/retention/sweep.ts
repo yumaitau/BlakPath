@@ -20,8 +20,10 @@ import { dueForRetention, isRetentionResourceType } from './rules';
  * For each active policy, finds records past their retention period that are NOT
  * under a legal hold, and purges or anonymises them. Runs with an explicit
  * organisation id. FAIL-SAFE: a held record is never touched; every action is
- * audited; the append-only audit trail itself is never a target. Batched so one
- * run is bounded — the next sweep continues where this left off.
+ * audited; the append-only audit trail itself is never a target and is never
+ * rewritten. Anonymisation therefore removes the applicant name only when the
+ * trail never stored it. Batched so one run is bounded — the next sweep
+ * continues where this left off.
  */
 
 const BATCH = 500;

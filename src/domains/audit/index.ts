@@ -13,9 +13,13 @@ export { AUDIT_RESULTS, isAuditResult } from './events';
 
 export type { HashableAuditEvent, JsonValue } from './hash';
 export {
+  assertCodedAuditReason,
+  auditReason,
   canonicalEventPayload,
   canonicalise,
   computeEventHash,
+  isCodedAuditReason,
+  isForbiddenAuditKey,
   redactMeta,
   toIsoTimestamp,
 } from './hash';

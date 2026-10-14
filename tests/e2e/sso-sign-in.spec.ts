@@ -220,24 +220,24 @@ test('sso: disabled binding denies with a generic error and an audited denial', 
   page,
 }) => {
   await setBindingEnabled(false);
-  const before = await signInAuditCount('denied', 'sso:entra:BINDING_DISABLED');
+  const before = await signInAuditCount('denied', 'sso.binding_disabled:entra');
   await startSso(page);
   await expect(page.getByText(SSO_FAILURE_TEXT)).toBeVisible();
   await expect(page).toHaveURL(/\/sign-in/);
-  expect(await signInAuditCount('denied', 'sso:entra:BINDING_DISABLED')).toBe(before + 1);
+  expect(await signInAuditCount('denied', 'sso.binding_disabled:entra')).toBe(before + 1);
 });
 
 test('sso: mock IdP sign-in lands in the bound tenant with permissions unchanged', async ({
   page,
 }) => {
   await setBindingEnabled(true);
-  const before = await signInAuditCount('success', 'sso:entra');
+  const before = await signInAuditCount('success', 'sso.sign_in:entra');
   await startSso(page);
   // The staff shell only renders with a session whose active organisation is
   // a verified membership — i.e. the session is scoped to the bound tenant.
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
-  expect(await signInAuditCount('success', 'sso:entra')).toBe(before + 1);
+  expect(await signInAuditCount('success', 'sso.sign_in:entra')).toBe(before + 1);
 
   // Permission checks are unchanged: an intake officer cannot configure SSO.
   const admin = await page.request.get('/api/sso/providers');
@@ -257,11 +257,11 @@ test('sso: an id_token failing verification is denied and audited', async ({ pag
   await setBindingEnabled(true);
   forgeNonce = true;
   try {
-    const before = await signInAuditCount('denied', 'sso:entra:VERIFICATION_FAILED');
+    const before = await signInAuditCount('denied', 'sso.verification_failed:entra');
     await startSso(page);
     await expect(page).toHaveURL(/\/sign-in\?error=sso$/);
     await expect(page.getByText(SSO_FAILURE_TEXT)).toBeVisible();
-    expect(await signInAuditCount('denied', 'sso:entra:VERIFICATION_FAILED')).toBe(
+    expect(await signInAuditCount('denied', 'sso.verification_failed:entra')).toBe(
       before + 1,
     );
   } finally {
