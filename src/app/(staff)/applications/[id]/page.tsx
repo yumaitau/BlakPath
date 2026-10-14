@@ -26,6 +26,10 @@ import {
   type CaseFormResponseView,
 } from '@/components/forms/case-form-responses';
 import {
+  FamilyLinksPanel,
+  type FamilyLinksPanelProps,
+} from '@/components/applications/family-links-panel';
+import {
   availableActions,
   getApplicationCaseRecord,
   permissionsForAction,
@@ -45,6 +49,11 @@ import {
 } from '@/domains/decisions';
 import { listMeetingsForApplication } from '@/domains/meetings';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
+import {
+  canReadFamilyLinks,
+  listFamilyLinks,
+  loadDeceasedNameWarning,
+} from '@/domains/family-links';
 import { listResponsesForApplication } from '@/domains/forms';
 import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
 import { handlePageError, isRecordId } from '@/lib/http/page-errors';
@@ -55,6 +64,8 @@ import { AuthorizationError } from '@/lib/permissions/errors';
 interface LoadedData {
   reference: string;
   workspace: ApplicationCaseWorkspaceProps;
+  /** Null when the viewer holds no genealogy permission. */
+  familyLinks: FamilyLinksPanelProps | null;
   governance: CaseGovernanceWorkspaceProps;
   decisions: PanelDecision[];
   certificates: PanelCertificate[];
@@ -96,6 +107,9 @@ export default async function ApplicationDetailPage({
     // A malformed id cannot exist: refuse it like any unreadable record.
     if (!isRecordId(id)) throw new AuthorizationError('POLICY_DENIED');
     data = await withRequestTenant(async (ctx) => {
+      const subject = subjectFromContext(ctx);
+      // Genealogy is culturally sensitive: only family-link roles load it.
+      const readFamilyLinks = canReadFamilyLinks(subject);
       const [
         record,
         evidence,
@@ -104,6 +118,8 @@ export default async function ApplicationDetailPage({
         decisions,
         certificates,
         formResponses,
+        familyLinks,
+        deceasedWarning,
       ] = await Promise.all([
         getApplicationCaseRecord(id),
         listForApplication(id),
@@ -112,8 +128,9 @@ export default async function ApplicationDetailPage({
         listDecisions(id),
         listCertificates(id),
         listResponsesForApplication(id),
+        readFamilyLinks ? listFamilyLinks(id) : Promise.resolve(null),
+        readFamilyLinks ? loadDeceasedNameWarning() : Promise.resolve(''),
       ]);
-      const subject = subjectFromContext(ctx);
       const allowedKinds = CORRESPONDENCE_KINDS.filter((kind) =>
         maySendKind(kind, subject.permissions),
       );
@@ -207,6 +224,27 @@ export default async function ApplicationDetailPage({
                 application.applicantUserId === ctx.userId &&
                 hasPermission(subject, 'evidence:upload-own')
               ),
+          },
+        },
+        familyLinks: familyLinks && {
+          applicationId: id,
+          currentUserId: ctx.userId,
+          deceasedWarning,
+          links: familyLinks.map((link) => ({
+            id: link.id,
+            relationship: link.relationship,
+            relativeName: link.relativeName,
+            community: link.community,
+            notes: link.notes,
+            relativeDeceased: link.relativeDeceased,
+            status: link.status,
+            requestedByUserId: link.requestedByUserId,
+            decisionNote: link.decisionNote,
+            createdAt: link.createdAt.toISOString(),
+          })),
+          permissions: {
+            request: hasPermission(subject, 'family-link:request'),
+            approve: hasPermission(subject, 'family-link:approve'),
           },
         },
         governance: {
@@ -354,6 +392,8 @@ export default async function ApplicationDetailPage({
         key={`case:${data.workspace.status}`}
         {...data.workspace}
       />
+
+      {data.familyLinks ? <FamilyLinksPanel {...data.familyLinks} /> : null}
 
       <CaseGovernanceWorkspace
         key={`governance:${data.workspace.status}`}

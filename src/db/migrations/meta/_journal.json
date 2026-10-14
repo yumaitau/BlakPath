@@ -281,6 +281,13 @@
       "when": 1792008215950,
       "tag": "0039_correspondence_letters",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1792010517784,
+      "tag": "0040_family_link_deceased",
+      "breakpoints": true
     }
   ]
 }

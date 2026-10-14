@@ -18,6 +18,7 @@ const CANARY = {
   relativeName: 'Relative Canary',
   community: 'Community Canary',
   familyNotes: 'family-notes-canary',
+  familyDecisionNote: 'family-decision-note-canary',
   answer: 'answer-secret-canary',
   respondentEmail: 'respondent-canary@example.test',
   contactEmail: 'client-canary@example.test',
@@ -127,6 +128,7 @@ integration('inventoried columns are tenant ciphertext', () => {
       relativeName: CANARY.relativeName,
       community: CANARY.community,
       notes: CANARY.familyNotes,
+      decisionNote: CANARY.familyDecisionNote,
     });
     formId = randomUUID();
     await runtime.db.insert(runtime.schema.forms).values({
@@ -287,6 +289,8 @@ integration('inventoried columns are tenant ciphertext', () => {
       select community from family_links where organisation_id = ${organisationId}
       union all
       select notes from family_links where organisation_id = ${organisationId}
+      union all
+      select decision_note from family_links where organisation_id = ${organisationId}
       union all
       select answers::text from form_responses where organisation_id = ${organisationId}
       union all
