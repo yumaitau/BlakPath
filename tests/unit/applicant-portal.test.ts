@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { applicantMayActOnCase, destinationForRoles } from '@/lib/auth/landing';
-import { safeReturnPath } from '@/lib/auth/return-path';
+import {
+  applicantMayActOnCase,
+  destinationForRoles,
+  POST_SIGN_IN_PATH,
+} from '@/lib/auth/landing';
+import { safeReturnTo } from '@/lib/auth/return-to';
 import {
   isPubliclyAcceptingApplications,
   toPublicDirectory,
@@ -312,23 +316,19 @@ describe('role routing after sign-in', () => {
   });
 });
 
-describe('safe return paths', () => {
+describe('post-sign-in return paths', () => {
   const portalId = '33333333-3333-4333-8333-333333333333';
+  const back = (raw: string | null) => safeReturnTo(raw, POST_SIGN_IN_PATH);
 
-  it('allows portal, apply and invitation paths, and rejects everything else', () => {
-    expect(safeReturnPath(null)).toBe('/home');
-    expect(safeReturnPath('/dashboard')).toBe('/home');
-    expect(safeReturnPath('https://evil.example')).toBe('/home');
-    expect(safeReturnPath('//evil.example/portal')).toBe('/home');
-    expect(safeReturnPath('/portal')).toBe('/portal');
-    expect(safeReturnPath(`/portal/${portalId}`)).toBe(`/portal/${portalId}`);
-    expect(safeReturnPath('/organisations/dev-org/apply')).toBe(
-      '/organisations/dev-org/apply',
-    );
-    expect(safeReturnPath('/organisations/Dev-Org/apply')).toBe('/home');
-    expect(safeReturnPath(`/join/${'a'.repeat(20)}`)).toBe(`/join/${'a'.repeat(20)}`);
-    expect(safeReturnPath(`/join/${'a'.repeat(200)}`)).toBe(`/join/${'a'.repeat(200)}`);
-    expect(safeReturnPath(`/join/${'a'.repeat(19)}`)).toBe('/home');
-    expect(safeReturnPath(`/join/${'a'.repeat(201)}`)).toBe('/home');
+  it('falls back to role routing and keeps portal and apply paths', () => {
+    expect(POST_SIGN_IN_PATH).toBe('/home');
+    expect(back(null)).toBe('/home');
+    expect(back('https://evil.example')).toBe('/home');
+    expect(back('//evil.example/portal')).toBe('/home');
+    expect(back('/select-organisation')).toBe('/home');
+    expect(back('/portal')).toBe('/portal');
+    expect(back(`/portal/${portalId}`)).toBe(`/portal/${portalId}`);
+    expect(back('/organisations/dev-org/apply')).toBe('/organisations/dev-org/apply');
+    expect(back(`/join/${'a'.repeat(20)}`)).toBe(`/join/${'a'.repeat(20)}`);
   });
 });

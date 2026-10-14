@@ -41,3 +41,5 @@ data:
   # On-call mailbox for tenant key health changes. Not a secret.
   # OPERATOR_ONCALL_EMAIL: oncall@blakpath.yumait.au
   OTEL_SERVICE_NAME: blakpath
+  # OTEL_EXPORTER_OTLP_ENDPOINT is optional. Leave it unset to keep tracing
+  # off. When set, the release gate requires https on a non-local host.

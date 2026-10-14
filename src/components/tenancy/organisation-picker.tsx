@@ -4,6 +4,8 @@ import { Check, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 
 import { Alert } from '@/components/ui/alert';
+import { POST_SIGN_IN_PATH } from '@/lib/auth/landing';
+import { safeReturnTo } from '@/lib/auth/return-to';
 import { cn } from '@/lib/utils';
 
 /**
@@ -11,8 +13,9 @@ import { cn } from '@/lib/utils';
  *
  * Renders the user's active memberships as an accessible list of buttons. When
  * one is chosen it POSTs the id to `/api/organisations/active`; on success it
- * navigates to /home, which sends staff to the dashboard and applicant-only
- * accounts to the portal.
+ * navigates to `returnTo` (the page the person was heading for, else /home,
+ * which sends staff to the dashboard and applicant-only accounts to the
+ * portal) so server components re-read the new active organisation.
  *
  * The selection endpoint updates the authoritative session row. The auth
  * configuration does not cache session data in the browser, so the following
@@ -29,9 +32,12 @@ export interface PickerOrganisation {
 export function OrganisationPicker({
   organisations,
   activeOrganisationId,
+  returnTo = POST_SIGN_IN_PATH,
 }: {
   organisations: readonly PickerOrganisation[];
   activeOrganisationId: string | null;
+  /** Destination after selection; re-validated before navigating. */
+  returnTo?: string;
 }) {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +59,7 @@ export function OrganisationPicker({
       // Cross the tenant-selection boundary with a full navigation. This avoids
       // racing a client-side push against a refresh of the picker route and
       // guarantees every server component reads the updated session row.
-      window.location.assign('/home');
+      window.location.assign(safeReturnTo(returnTo, POST_SIGN_IN_PATH));
     } catch {
       setError('We could not switch to that organisation. Please try again.');
       setPendingId(null);

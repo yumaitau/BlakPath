@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { z } from 'zod';
+import { validateProductionReadiness } from '@/lib/production-readiness';
 
 /**
  * Centralised, validated environment configuration.
@@ -8,6 +9,17 @@ import { z } from 'zod';
  * configuration. Secrets are never logged. Import `env` everywhere instead
  * of reading `process.env` directly so that every value is typed and checked.
  */
+
+/** Next sets this while `next build` imports modules. Runtime boots do not. */
+const NEXT_PRODUCTION_BUILD = 'phase-production-build';
+
+/**
+ * Release-gate keys a runtime process cannot satisfy. Web and worker never
+ * mount the migrator secret, so DATABASE_MIGRATION_URL is checked only by the
+ * release-check Job and the migrate Job.
+ */
+const NOT_CHECKED_AT_BOOT = new Set(['DATABASE_MIGRATION_URL']);
+
 /**
  * Parse a string flag into a boolean. Zod v4 requires the `.default()` to sit
  * before `.transform()` so the default is a valid *input* to the enum.
@@ -41,6 +53,9 @@ const serverSchema = z
     // Better Auth
     BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be >= 32 chars'),
     BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
+    // Staff UI inactivity sign-out. A warning appears two minutes before the
+    // session is ended; activity in any open tab resets the timer.
+    STAFF_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(5).max(720).default(30),
     // Shared with the Cloudflare zone. Present on origin requests as
     // `x-blakpath-origin-verify`. Unset locally. Required before production
     // traffic is accepted (see the release check).
@@ -219,16 +234,37 @@ const serverSchema = z
 
 export type ServerEnv = z.infer<typeof serverSchema>;
 
-function loadEnv(): ServerEnv {
-  const parsed = serverSchema.safeParse(process.env);
-  if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
-      .join('\n');
+/** Parse an environment mapping. Throws the same boot error as `env`. */
+export function parseEnv(
+  source: Readonly<Record<string, string | undefined>>,
+): ServerEnv {
+  const parsed = serverSchema.safeParse(source);
+  const issues: { path: string; message: string }[] = parsed.success
+    ? []
+    : parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
+  // Production boot runs the release gate on the raw input, so a process that
+  // skipped the pre-deploy Job still refuses a bad configuration. The image
+  // build imports this module without runtime secrets and is exempt.
+  if (
+    source.NODE_ENV === 'production' &&
+    process.env.NEXT_PHASE !== NEXT_PRODUCTION_BUILD
+  ) {
+    for (const issue of validateProductionReadiness(source)) {
+      if (NOT_CHECKED_AT_BOOT.has(issue.key)) continue;
+      if (issues.some((existing) => existing.path === issue.key)) continue;
+      issues.push({ path: issue.key, message: issue.message });
+    }
+  }
+  if (!parsed.success || issues.length > 0) {
     // Do not print values — only the keys that failed validation.
-    throw new Error(`Invalid environment configuration:\n${issues}`);
+    const lines = issues.map((i) => `  - ${i.path}: ${i.message}`).join('\n');
+    throw new Error(`Invalid environment configuration:\n${lines}`);
   }
   return parsed.data;
+}
+
+function loadEnv(): ServerEnv {
+  return parseEnv(process.env);
 }
 
 /**
