@@ -1,6 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { auditK8sDirectory, auditRenderedImages } from './k8s-image-digests';
+import {
+  auditK8sDirectory,
+  auditRenderedImages,
+  kustomizationRoots,
+} from './k8s-image-digests';
 
 function argument(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -33,7 +37,11 @@ const issues = audited.issues;
 if (render) {
   const bin = argument('--kustomize') ?? 'kubectl';
   try {
-    const rendered = renderManifest(bin, root);
+    // Root plus standalone overlays (e.g. jobs/invite-admin), so every
+    // container under root is rendered through the shared pin.
+    const rendered = kustomizationRoots(root)
+      .map((directory) => renderManifest(bin, directory))
+      .join('\n---\n');
     issues.push(...auditRenderedImages(rendered, audited.containers));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

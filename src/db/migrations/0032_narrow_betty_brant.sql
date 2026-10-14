@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "certificates_live_decision_unique" ON "certificates" USING btree ("decision_id") WHERE "certificates"."deleted_at" is null and "certificates"."status" <> 'revoked';

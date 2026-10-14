@@ -319,6 +319,21 @@ export function auditRenderedImages(
   return issues;
 }
 
+/**
+ * Directories under `root` (root first) whose kustomization.yaml is a
+ * `Kustomization`, not a `Component`. Each is rendered on its own.
+ */
+export function kustomizationRoots(root: string): string[] {
+  return readYamlFiles(root)
+    .filter(
+      (file) =>
+        path.basename(file.path) === 'kustomization.yaml' &&
+        /^kind:\s*Kustomization\s*$/m.test(file.text),
+    )
+    .map((file) => path.dirname(file.path))
+    .sort((a, b) => a.length - b.length || a.localeCompare(b));
+}
+
 function readYamlFiles(root: string): SourceFile[] {
   const files: string[] = [];
   const walk = (directory: string) => {

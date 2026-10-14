@@ -5,7 +5,9 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - serviceaccounts.yaml
+  - secretstore.yaml
   - externalsecret.yaml
+  - migrator-externalsecret.yaml
   - web-deployment.yaml
   - worker-deployment.yaml
   - jobs/migrate.yaml

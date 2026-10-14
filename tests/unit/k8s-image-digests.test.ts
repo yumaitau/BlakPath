@@ -6,6 +6,7 @@ import {
   auditImageSources,
   auditK8sDirectory,
   auditRenderedImages,
+  kustomizationRoots,
   parseContainerImages,
 } from '../../scripts/k8s-image-digests';
 
@@ -136,6 +137,7 @@ describe('k8s image digest audit', () => {
     );
     expect(byName.worker).toBe(byName.migrate);
     expect(byName.worker).toBe(byName.seed);
+    expect(byName.worker).toBe(byName['invite-admin']);
     expect(byName.web).toBe(`${app}@${UNRESOLVED_DIGEST}`);
     expect(byName.worker).toBe(`${worker}@${UNRESOLVED_DIGEST}`);
     expect(byName.clamav).toBe(
@@ -145,6 +147,14 @@ describe('k8s image digest audit', () => {
     expect(audit.issues).toEqual([
       `components/images/kustomization.yaml: ${app} digest is unresolved placeholder (${UNRESOLVED_DIGEST})`,
       `components/images/kustomization.yaml: ${worker} digest is unresolved placeholder (${UNRESOLVED_DIGEST})`,
+    ]);
+  });
+
+  it('renders the root and the standalone invite-admin overlay, not the component', () => {
+    const k8s = path.join(process.cwd(), 'infra/k8s');
+    expect(kustomizationRoots(k8s).map((dir) => path.relative(k8s, dir))).toEqual([
+      '',
+      'jobs/invite-admin',
     ]);
   });
 

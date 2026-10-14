@@ -1,0 +1,42 @@
+# One-shot: email the first organisation administrator.
+# Run after migrate and seed. Does not create a password or print a join link.
+# Replace the three REPLACE_* values, then:
+#   kubectl kustomize infra/k8s/jobs/invite-admin | kubectl apply -f -
+# The invitee must enrol a passkey or authenticator before organisation access.
+# Not in infra/k8s/kustomization.yaml. Its own kustomization takes the worker
+# digest from components/images.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blakpath-invite-admin
+  namespace: blakpath
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      serviceAccountName: blakpath
+      restartPolicy: Never
+      containers:
+        - name: invite-admin
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
+          imagePullPolicy: IfNotPresent
+          command: [pnpm, exec, tsx, scripts/invite-first-admin.ts]
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          env:
+            - name: FIRST_ADMIN_EMAIL
+              value: REPLACE_WITH_ADMIN_EMAIL
+            - name: ORGANISATION_LEGAL_NAME
+              value: REPLACE_WITH_LEGAL_NAME
+            - name: ORGANISATION_SLUG
+              value: REPLACE_WITH_SLUG
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi

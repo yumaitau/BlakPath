@@ -1,5 +1,6 @@
 # Production seed: permission catalogue + system role templates only.
-# Developer bootstrap is refused when NODE_ENV=production (see src/db/seeds).
+# Developer accounts require ALLOW_DEV_SEED=1 and a loopback database host.
+# NODE_ENV=production never creates them (see src/db/seeds).
 # Image digest comes from components/images (worker), via
 # `kubectl kustomize infra/k8s`. Delete this Job before a new digest.
 apiVersion: batch/v1
