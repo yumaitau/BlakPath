@@ -11,14 +11,14 @@ data on its own — that comes from a DB-verified membership plus permissions
 
 ## Tables and what they hold
 
-| Table           | Better Auth model | Notes                                                                                                                                                                                |
-| --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `users`         | `user`            | Account identity. `isPlatformOperator` marks BlakPath staff and grants **no** tenant access. `twoFactorEnabled` is set only after a TOTP code is confirmed.                          |
-| `accounts`      | `account`         | Credential/OAuth links. `password` is **Better-Auth-hashed** (argon2) — never plaintext.                                                                                             |
-| `sessions`      | `session`         | Active sessions. `activeOrganisationId` is advisory; `lastAuthenticatedAt` drives step-up.                                                                                           |
-| `verifications` | `verification`    | Single-use, expiring values for email verification, reset, OTP.                                                                                                                      |
-| `passkeys`      | passkey plugin    | WebAuthn credentials; **public key only**, no private material stored. Includes the authenticator `aaguid`.                                                                          |
-| `twoFactors`    | twoFactor plugin  | TOTP `secret` and `backupCodes` stored **envelope-encrypted (AES-256-GCM)** — ciphertext only. `verified`, `failedVerificationCount` and `lockedUntil` record enrolment and lockout. |
+| Table           | Better Auth model | Notes                                                                                                                                                                                                                                                              |
+| --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `users`         | `user`            | Account identity. `isPlatformOperator` marks BlakPath staff and grants **no** tenant access. `twoFactorEnabled` is set only after a TOTP code is confirmed.                                                                                                        |
+| `accounts`      | `account`         | Credential/OAuth links. `password` is **Better-Auth-hashed** (argon2) — never plaintext.                                                                                                                                                                           |
+| `sessions`      | `session`         | Active sessions. `activeOrganisationId` is advisory; `lastAuthenticatedAt` drives step-up.                                                                                                                                                                         |
+| `verifications` | `verification`    | Single-use, expiring values for email verification, reset, OTP.                                                                                                                                                                                                    |
+| `passkeys`      | passkey plugin    | WebAuthn credentials; **public key only**, no private material stored. Includes the authenticator `aaguid`.                                                                                                                                                        |
+| `twoFactors`    | twoFactor plugin  | TOTP `secret` and `backupCodes` encrypted by Better Auth 1.6 (`symmetricEncrypt`: XChaCha20-Poly1305 under SHA-256 of `BETTER_AUTH_SECRET`). Not `encryptField` and not KMS. `verified`, `failedVerificationCount` and `lockedUntil` record enrolment and lockout. |
 
 ## Better Auth setup
 
@@ -49,8 +49,10 @@ data on its own — that comes from a DB-verified membership plus permissions
   `verifications` values delivered over SMTP (Mailpit locally).
 - **Passkeys (WebAuthn)** — phishing-resistant, preferred for staff. Only the
   COSE public key, credential id and counter are stored (`passkeys`).
-- **TOTP** two-factor with **recovery codes**. The TOTP secret and recovery codes
-  are envelope-encrypted before they touch `twoFactors`.
+- **TOTP** two-factor with **recovery codes**. Better Auth encrypts the TOTP
+  secret and the backup codes with `symmetricEncrypt` before they are written
+  to `twoFactors`. The key is SHA-256(`BETTER_AUTH_SECRET`). BlakPath's
+  `encryptField` helper is not on this path.
 
 ## Staff MFA requirement
 
@@ -167,8 +169,9 @@ sequenceDiagram
 
 ## Recovery and lockout
 
-- **Recovery codes** are issued at TOTP enrolment, envelope-encrypted, and each
-  is single-use. Using one is an audited event.
+- **Recovery codes** are issued at TOTP enrolment, stored as Better Auth
+  ciphertext (see the table above), and each is single-use. Using one is an
+  audited event.
 - Repeated failed sign-in attempts are limited per client address and, separately,
   delayed then locked per account. The counters live in Redis and are shared
   across replicas. See `docs/rate-limits.md`. The address in the bucket is
