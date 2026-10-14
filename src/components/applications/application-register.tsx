@@ -118,6 +118,7 @@ export function ApplicationRegister({
                   <select
                     id="applicant-account"
                     value={applicantUserId}
+                    disabled={!hydrated}
                     onChange={(event) => setApplicantUserId(event.target.value)}
                     className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
                   >
@@ -138,6 +139,7 @@ export function ApplicationRegister({
                   <select
                     id="application-priority"
                     value={priority}
+                    disabled={!hydrated}
                     onChange={(event) => setPriority(event.target.value)}
                     className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
                   >

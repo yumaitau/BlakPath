@@ -71,7 +71,8 @@ export function MemberManagement({
 
   const selectedRole = roles.find((role) => role.id === roleId);
   const hydrated = useHydrated();
-  // Actions stay disabled until hydrated so an early click is never lost.
+  // Actions and selects stay disabled until hydrated: an early click is lost
+  // and React does not replay a select change made before hydration.
   const busy = busyKey !== null || !hydrated;
 
   async function invite(event: React.FormEvent<HTMLFormElement>) {
@@ -277,6 +278,7 @@ export function MemberManagement({
               <select
                 id="invitation-role"
                 value={roleId}
+                disabled={!hydrated}
                 onChange={(event) => setRoleId(event.target.value)}
                 className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
               >
@@ -410,6 +412,7 @@ export function MemberManagement({
                   <select
                     id={`member-role-${member.id}`}
                     value={roleSelections[member.id] ?? ''}
+                    disabled={!hydrated}
                     onChange={(event) =>
                       setRoleSelections((current) => ({
                         ...current,

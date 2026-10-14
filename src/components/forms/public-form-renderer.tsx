@@ -314,6 +314,8 @@ function FieldControl({
 }) {
   const id = `${baseId}-${field.key}`;
   const helpText = field.helpText ?? undefined;
+  // React does not replay a select change made before hydration.
+  const hydrated = useHydrated();
 
   // Boolean and multiselect are group-shaped, so they manage their own labelling
   // rather than going through the single-control Field wrapper.
@@ -474,6 +476,7 @@ function FieldControl({
                 {...props}
                 aria-required={field.required}
                 value={stringValue}
+                disabled={!hydrated}
                 onChange={(e) => onValueChange(e.target.value)}
                 className={cn(
                   'border-input bg-surface text-foreground flex h-11 w-full rounded-md border px-3 py-2 text-base',
