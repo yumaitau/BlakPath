@@ -9,9 +9,20 @@ function watchForPageErrors(page: Page): Error[] {
   return errors;
 }
 
-test('auth: anonymous users hit sign-in gate', async ({ page }) => {
+test('auth: anonymous users hit sign-in gate, keeping their destination', async ({
+  page,
+}) => {
   await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
+});
+
+test('auth: unknown pages show the branded 404', async ({ page }) => {
+  const response = await page.goto('/this-page-does-not-exist');
+  expect(response?.status()).toBe(404);
+  await expect(
+    page.getByRole('heading', { name: 'We can’t find that page' }),
+  ).toBeVisible();
+  await expect(page.getByText('Error 404')).toBeVisible();
 });
 
 test('auth: sign-in, org picker, security, sign-out journey', async ({ page }) => {
