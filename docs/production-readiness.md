@@ -80,16 +80,17 @@ stays on `/api/ready` and does not use the detailed report.
 Alert on:
 
 - any `audit chain verification FAILED` worker event;
-- evidence scans that exhaust their retry policy or remain quarantined beyond
-  the agreed handling target;
+- evidence scans that exhaust their retry policy, a malware-scan dead-letter
+  depth above zero, or quarantined evidence older than 30 minutes
+  (`evidence_quarantine_backlog`);
 - failed or dead-lettered email, export, retention and webhook jobs;
 - failed backup jobs or restore-drill failures;
 - sustained 5xx/readiness failures;
 - ClamAV signature age above 48 hours.
 
 The stable log signals are `queue_job_exhausted`, `audit_integrity_failure`,
-`clamav_unavailable`, `clamav_signature_age` and `readiness_dependency_down`.
-Response steps are in
+`clamav_unavailable`, `clamav_signature_age`, `evidence_quarantine_backlog`
+and `readiness_dependency_down`. Response steps are in
 [`operations-runbook.md`](operations-runbook.md). Signal records contain only
 opaque ids and coarse dependency states; job payloads and applicant data are not
 included.

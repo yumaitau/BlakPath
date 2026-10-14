@@ -29,6 +29,15 @@ Mappings:
     KeyHealth:
       Name: key_health_state_change
       Metric: KeyHealthStateChanges
+    QuarantineAge:
+      Name: evidence_quarantine_backlog
+      Metric: OldestQuarantinedAgeSeconds
+    QuarantineCount:
+      Name: evidence_quarantine_backlog
+      Metric: QuarantinedEvidenceCount
+    MalwareScanDlq:
+      Name: evidence_quarantine_backlog
+      Metric: MalwareScanDlqDepth
 
 Resources:
   ExhaustedJobFilter:
@@ -185,6 +194,64 @@ Resources:
       Statistic: Sum
       Period: 60
       EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  # One sweep log carries the three evidence-recovery gauges. 1800 seconds
+  # matches EVIDENCE_QUARANTINE_ALARM_AGE_SECONDS (30 minute handling target).
+  QuarantineBacklogFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationLogGroupName
+      FilterPattern: '{ $.signal = "evidence_quarantine_backlog" }'
+      MetricTransformations:
+        - MetricNamespace: BlakPath/Operations
+          MetricName: OldestQuarantinedAgeSeconds
+          MetricValue: $.oldestQuarantinedAgeSeconds
+          DefaultValue: 0
+        - MetricNamespace: BlakPath/Operations
+          MetricName: QuarantinedEvidenceCount
+          MetricValue: $.quarantinedCount
+          DefaultValue: 0
+        - MetricNamespace: BlakPath/Operations
+          MetricName: MalwareScanDlqDepth
+          MetricValue: $.dlqDepth
+          DefaultValue: 0
+
+  OldestQuarantinedAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-oldest-quarantined-age
+      AlarmDescription: >-
+        Evidence has stayed quarantined for at least 30 minutes. The sweep
+        redrives scans automatically; page when the backlog is not draining.
+        Do not mark evidence clean by hand.
+      Namespace: BlakPath/Operations
+      MetricName: OldestQuarantinedAgeSeconds
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1800
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  MalwareScanDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-malware-scan-dlq
+      AlarmDescription: >-
+        Malware-scan dead letters remain after the sweep. Restore ClamAV and
+        confirm redrive; do not mark evidence clean by hand.
+      Namespace: BlakPath/Operations
+      MetricName: MalwareScanDlqDepth
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
