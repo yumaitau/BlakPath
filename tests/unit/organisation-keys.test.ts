@@ -270,10 +270,17 @@ describe('escrow opt-in', () => {
   });
 
   it('clears escrow when the key is rotated', async () => {
+    const nextArn =
+      'arn:aws:kms:ap-southeast-2:333333333333:key/cccccccc-1234-4678-9abc-def012345678';
     currentKey({ ...escrowRow, escrow: true, escrowPackageDigest: digest });
-    const set = updateReturns({ ...escrowRow, keyVersion: 2 });
+    const set = updateReturns({ ...escrowRow, keyVersion: 2, kmsKeyArn: nextArn });
+    insert.mockReturnValue({
+      values: () => ({
+        returning: async () => [{ id: '018f0000-0000-7000-8000-000000000099' }],
+      }),
+    });
     const { rotateOrganisationKey } = await import('@/domains/organisation-keys');
-    await rotateOrganisationKey(row.organisationId, crossAccountArn);
+    await rotateOrganisationKey(row.organisationId, nextArn);
 
     expect(set).toHaveBeenCalledWith(
       expect.objectContaining({
