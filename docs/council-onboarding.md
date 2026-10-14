@@ -57,7 +57,11 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 1. Complete `docs/production-readiness.md` release gate in exact EKS images.
 2. Run EKS restore drill (`docs/eks-runbook.md`), attach record.
 3. `POST /api/organisation/activation` (step-up). It refuses unless the key
-   is validated. Then open `publicApplicationsOpen` when ready.
+   is validated. Then open `publicApplicationsOpen` when ready. Platform
+   operators suspend, close or reactivate with
+   `POST /api/admin/organisations/{id}/status` (recent sign-in); the change is
+   appended to the platform audit chain, and a move to `active` still needs a
+   validated key.
 4. Confirm audit chain clean, alarms firing to on-call, SES suppression flow
    wired (`POST /api/email/events` checks the pinned SNS topic) and the email
    checks in `docs/eks-runbook.md` passed (`dkim=pass spf=pass dmarc=pass`).
