@@ -104,6 +104,17 @@ export const evidenceRequestStatus = pgEnum('evidence_request_status', [
 ]);
 
 /**
+ * How a file was received when staff record it for an applicant.
+ * Absent when the applicant uploaded the file themselves. This is a receipt
+ * fact, not a judgement about the person.
+ */
+export const EVIDENCE_RECEIPT_CHANNELS = ['post', 'in_person', 'email', 'other'] as const;
+export const evidenceReceiptChannel = pgEnum(
+  'evidence_receipt_channel',
+  EVIDENCE_RECEIPT_CHANNELS,
+);
+
+/**
  * Lifecycle of a review of an application. A review records a human reviewer's
  * observations for the committee — never a determination. `finalised` means the
  * observations are locked into the record put before the committee.

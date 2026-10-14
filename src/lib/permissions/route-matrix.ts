@@ -78,6 +78,12 @@ const APPLICATION_PATCH = [
   'retention:manage',
 ] as const satisfies readonly Permission[];
 
+/** requestUpload and completeUpload: the applicant's own upload, or staff recording a received file. */
+const EVIDENCE_UPLOAD = [
+  'evidence:upload-own',
+  'evidence:upload-on-behalf',
+] as const satisfies readonly Permission[];
+
 const APPLICATION_READ = [
   'application:read-any',
   'application:read-assigned',
@@ -235,7 +241,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     body: { operation: 'assign_self' },
   }),
   route('POST', '/api/applications/[id]/decisions', anyOf(['decision:propose'])),
-  route('POST', '/api/applications/[id]/evidence', anyOf(['evidence:upload-own'])),
+  route('POST', '/api/applications/[id]/evidence', anyOf(EVIDENCE_UPLOAD)),
   route('POST', '/api/applications/[id]/evidence-requests', anyOf(['evidence:request'])),
   route('POST', '/api/applications/[id]/reviews', anyOf(['review:create'])),
   route('GET', '/api/auth/[...all]', { kind: 'auth' }, { skipProbe: true }),
@@ -348,7 +354,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   }),
   route('POST', '/api/email/events', { kind: 'webhook-secret' }),
   route('GET', '/api/evidence/[id]/download', anyOf(['evidence:download'])),
-  route('POST', '/api/evidence/[id]/complete', anyOf(['evidence:upload-own'])),
+  route('POST', '/api/evidence/[id]/complete', anyOf(EVIDENCE_UPLOAD)),
   route('POST', '/api/evidence/[id]/classification', anyOf(['evidence:classify']), {
     body: { classification: 'Matrix label' },
   }),
