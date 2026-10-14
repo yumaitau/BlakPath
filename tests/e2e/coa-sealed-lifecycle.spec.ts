@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
 
@@ -68,7 +68,9 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
       data: { decisionId },
     })
   ).json()) as { id: string };
-  const sign = await api.post(`/api/certificates/${cert.id}/sign`);
+  const sign = await api.post(`/api/certificates/${cert.id}/sign`, {
+    headers: { 'Content-Type': 'application/json' },
+  });
   expect(sign.status()).toBe(200);
 
   const { items } = (await api

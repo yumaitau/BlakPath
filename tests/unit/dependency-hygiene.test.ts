@@ -27,9 +27,10 @@ const productionReview: Record<string, Review> = {
   '@dnd-kit/utilities': { latestMajor: 3 },
   '@node-rs/argon2': { latestMajor: 2 },
   '@opentelemetry/api': { latestMajor: 1 },
-  '@opentelemetry/auto-instrumentations-node': { latestMajor: 0, trackingIssue: '30' },
-  '@opentelemetry/exporter-trace-otlp-http': { latestMajor: 0, trackingIssue: '30' },
-  '@opentelemetry/sdk-node': { latestMajor: 0, trackingIssue: '30' },
+  '@opentelemetry/auto-instrumentations-node': { latestMajor: 0 },
+  '@opentelemetry/exporter-trace-otlp-http': { latestMajor: 0 },
+  '@opentelemetry/sdk-node': { latestMajor: 0 },
+  '@pdf-lib/fontkit': { latestMajor: 1 },
   '@radix-ui/react-dropdown-menu': { latestMajor: 2 },
   '@radix-ui/react-label': { latestMajor: 2 },
   '@radix-ui/react-slot': { latestMajor: 1 },
@@ -47,9 +48,12 @@ const productionReview: Record<string, Review> = {
   'pdf-lib': { latestMajor: 1 },
   pino: { latestMajor: 10 },
   postgres: { latestMajor: 3 },
+  qrcode: { latestMajor: 1 },
   react: { latestMajor: 19 },
   'react-dom': { latestMajor: 19 },
+  'shamir-secret-sharing': { latestMajor: 0 },
   'tailwind-merge': { latestMajor: 3 },
+  undici: { latestMajor: 8 },
   uuidv7: { latestMajor: 1 },
   zod: { latestMajor: 4 },
 };
@@ -129,16 +133,18 @@ describe('dependency hygiene', () => {
     }
   });
 
-  it('documents every ignored advisory with issue 30 and the review date', () => {
+  it('documents every ignored advisory with a review date and removal condition', () => {
     const pkg = readJson('package.json') as {
       pnpm: { auditConfig: { ignoreGhsas: string[] } };
     };
     const doc = readFileSync(join(root, 'docs/supply-chain.md'), 'utf8');
-    expect(pkg.pnpm.auditConfig.ignoreGhsas).toEqual(['GHSA-q7rr-3cgh-j5r3']);
-    expect(doc).toContain('GHSA-q7rr-3cgh-j5r3');
-    expect(doc).toContain('#30');
+    // GHSA-q7rr-3cgh-j5r3 was dropped when the OpenTelemetry v2 upgrade (#30) landed.
+    expect(pkg.pnpm.auditConfig.ignoreGhsas).not.toContain('GHSA-q7rr-3cgh-j5r3');
     expect(doc).toContain('2026-10-13');
     expect(doc).toContain('Remove when');
+    for (const ghsa of pkg.pnpm.auditConfig.ignoreGhsas) {
+      expect(doc, ghsa).toMatch(new RegExp(`\\|[^\\n]*${ghsa}[^\\n]*\\|`));
+    }
   });
 
   it('keeps production dependencies within one major of the review, or tracks them', () => {
@@ -205,8 +211,9 @@ describe('dependency hygiene', () => {
   it('does not reference a floating latest image tag', () => {
     const files: string[] = [];
     walk(root, files);
-    const floating = ':' + 'latest';
-    const hits = files.filter((path) => readFileSync(path, 'utf8').includes(floating));
+    // An image reference ending in the floating tag, e.g. `repo/name:<tag>`.
+    const floating = new RegExp('[A-Za-z0-9._/-]+:' + 'latest\\b');
+    const hits = files.filter((path) => floating.test(readFileSync(path, 'utf8')));
     expect(hits.map((path) => relative(root, path))).toEqual([]);
   });
 });

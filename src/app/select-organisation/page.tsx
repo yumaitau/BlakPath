@@ -3,11 +3,13 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { OrganisationPicker } from '@/components/tenancy/organisation-picker';
+import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { getServerSession } from '@/lib/auth/session';
 import {
   getActiveOrganisationId,
+  hasUnavailableOrganisationMembership,
   listMembershipsForUser,
 } from '@/lib/tenancy/memberships';
 
@@ -42,6 +44,13 @@ export default async function SelectOrganisationPage() {
     organisations.some((org) => org.organisationId === activeOrganisationId)
   ) {
     redirect('/dashboard');
+  }
+
+  if (
+    organisations.length === 0 &&
+    (await hasUnavailableOrganisationMembership(session.user.id))
+  ) {
+    return <OrganisationUnavailable />;
   }
 
   return (

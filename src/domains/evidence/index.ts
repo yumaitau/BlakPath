@@ -11,15 +11,21 @@ export {
   ALLOWED_CONTENT_TYPES,
   EVIDENCE_STATUSES,
   MAX_EVIDENCE_BYTES,
+  UPLOAD_ACCEPT,
   contentTypeAcceptable,
+  inferUploadContentType,
   isAllowedContentType,
   isServable,
   isTerminalEvidenceStatus,
+  uploadProblem,
+  uploadSizeAcceptable,
+  verifiedContentType,
   type EvidenceStatus,
 } from './status';
 
 export {
   classifyEvidenceSchema,
+  onBehalfReceiptSchema,
   requestEvidenceSchema,
   requestUploadSchema,
   type ClassifyEvidenceInput,

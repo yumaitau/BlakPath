@@ -26,6 +26,36 @@ describe('csv serialiser', () => {
     );
     expect(csv.split('\r\n')[1]).toBe('2026-01-02T03:04:05.000Z,true,');
   });
+
+  it('prefixes cells that begin with a spreadsheet formula character', () => {
+    const hyperlink = '=HYPERLINK("http://example.test/a","click")';
+    const csv = toCsv(
+      ['value'],
+      [
+        [hyperlink],
+        ['=1+1'],
+        ['+1+1'],
+        ['-1+1'],
+        ['@SUM(1)'],
+        ['\tcmd'],
+        ['\rcmd'],
+        ['safe name'],
+        [-2],
+      ],
+    );
+    const lines = csv.split('\r\n');
+    expect(lines[1]).toBe(`"'=HYPERLINK(""http://example.test/a"",""click"")"`);
+    expect(lines[1]).toContain("'=HYPERLINK(");
+    expect(lines[2]).toBe("'=1+1");
+    expect(lines[3]).toBe("'+1+1");
+    expect(lines[4]).toBe("'-1+1");
+    expect(lines[5]).toBe("'@SUM(1)");
+    expect(lines[6]).toBe("'\tcmd");
+    expect(lines[7]).toBe('"\'\rcmd"');
+    expect(lines[8]).toBe('safe name');
+    // Negative numbers stringify with a leading minus, so they are text too.
+    expect(lines[9]).toBe("'-2");
+  });
 });
 
 describe('report registry + schema', () => {

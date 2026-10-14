@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Same digest as docker-compose.yml and .github/workflows/ci.yml.
+# `--user 0:0` on the mirror containers: this image defaults to uid 65532, and
+# the backup volume is created root-owned.
+object_storage_image="chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56"
+
 source_project="${RESTORE_SOURCE_PROJECT:-blakpath-restore-source}"
 target_project="${RESTORE_TARGET_PROJECT:-blakpath-restore-target}"
 backup_volume="${source_project}-backup-$$"
@@ -78,7 +83,7 @@ docker volume create "$backup_volume" >/dev/null
 docker run --rm \
   --network "${source_project}_default" \
   -v "${backup_volume}:/backup" \
-  --entrypoint /bin/sh minio/mc:RELEASE.2025-08-13T08-35-41Z -c '
+  --user 0:0 --entrypoint /bin/sh "$object_storage_image" -c '
     mkdir -p /backup/evidence /backup/quarantine &&
     mc alias set source http://minio:9000 blakpath blakpath-dev-secret >/dev/null &&
     mc mirror --overwrite source/blakpath-evidence /backup/evidence &&
@@ -108,7 +113,7 @@ target_compose exec -T postgres pg_restore \
 docker run --rm \
   --network "${target_project}_default" \
   -v "${backup_volume}:/backup:ro" \
-  --entrypoint /bin/sh minio/mc:RELEASE.2025-08-13T08-35-41Z -c '
+  --user 0:0 --entrypoint /bin/sh "$object_storage_image" -c '
     mc alias set target http://minio:9000 blakpath blakpath-dev-secret >/dev/null &&
     mc mirror --overwrite /backup/evidence target/blakpath-evidence &&
     mc mirror --overwrite /backup/quarantine target/blakpath-quarantine

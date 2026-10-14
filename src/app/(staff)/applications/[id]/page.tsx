@@ -21,7 +21,7 @@ import {
 import { listCertificates } from '@/domains/certificates';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
-import { listReviewsForApplication } from '@/domains/reviews';
+import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/check';
 
@@ -91,6 +91,8 @@ export default async function ApplicationDetailPage({
             classification: item.classification,
             sizeBytes: item.sizeBytes,
             createdAt: item.createdAt.toISOString(),
+            receiptChannel: item.receiptChannel,
+            receivedOn: item.receivedOn,
           })),
           evidenceRequests: evidenceRequests.map((request) => ({
             id: request.id,
@@ -117,25 +119,41 @@ export default async function ApplicationDetailPage({
             assign: hasPermission(subject, 'application:assign'),
             requestEvidence: hasPermission(subject, 'evidence:request'),
             downloadEvidence: hasPermission(subject, 'evidence:download'),
+            classifyEvidence: hasPermission(subject, 'evidence:classify'),
             addNote: hasAny(subject, [
               'application:read-any',
               'application:read-assigned',
               'application:update-intake',
             ]),
             uploadEvidence:
-              application.applicantUserId === ctx.userId &&
-              hasPermission(subject, 'evidence:upload-own'),
+              (application.applicantUserId === ctx.userId &&
+                hasPermission(subject, 'evidence:upload-own')) ||
+              hasPermission(subject, 'evidence:upload-on-behalf'),
+            // Receipt fields when this is not the applicant uploading their own file.
+            uploadOnBehalf:
+              hasPermission(subject, 'evidence:upload-on-behalf') &&
+              !(
+                application.applicantUserId === ctx.userId &&
+                hasPermission(subject, 'evidence:upload-own')
+              ),
           },
         },
         governance: {
           applicationId: id,
           applicationStatus: application.status,
-          reviews: reviews.map((review) => ({
-            id: review.id,
-            status: review.status,
-            content: review.content,
-            createdAt: review.createdAt.toISOString(),
-          })),
+          reviews: await Promise.all(
+            reviews.map(async (review) => ({
+              id: review.id,
+              status: review.status,
+              content: review.content,
+              createdAt: review.createdAt.toISOString(),
+              comments: (await listReviewComments(review.id)).map((comment) => ({
+                id: comment.id,
+                body: comment.body,
+                createdAt: comment.createdAt.toISOString(),
+              })),
+            })),
+          ),
           decisions: decisionDetails.map(({ decision, votes, tally }) => ({
             id: decision.id,
             status: decision.status,

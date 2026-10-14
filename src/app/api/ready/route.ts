@@ -6,9 +6,11 @@ import { readinessReport } from '@/lib/health/checks';
  *
  * Reports whether the service can serve traffic by checking core dependencies
  * (database, Redis, object storage) and surfacing ClamAV status for visibility.
+ * A missing scanner does not fail readiness and cannot hold the response open.
  * Returns 503 when not ready so a load balancer removes the instance from
- * rotation. The response contains only coarse statuses — never hosts, secrets,
- * or connection details.
+ * rotation. Dependency results are cached for a few seconds per process. The
+ * response contains only coarse statuses — never hosts, secrets, or connection
+ * details.
  */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
