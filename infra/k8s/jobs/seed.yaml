@@ -1,5 +1,6 @@
 # Production seed: permission catalogue + system role templates only.
-# Developer bootstrap is refused when NODE_ENV=production (see src/db/seeds).
+# Developer accounts require ALLOW_DEV_SEED=1 and a loopback database host.
+# NODE_ENV=production never creates them (see src/db/seeds).
 #   kubectl apply -f infra/k8s/jobs/seed.yaml
 apiVersion: batch/v1
 kind: Job

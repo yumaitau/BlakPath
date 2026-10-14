@@ -65,17 +65,51 @@ function sliceBetween(text: string, start: string, end: string | null): string {
   return rest.slice(0, to);
 }
 
+/** Policy statements keyed by Sid. */
+function statements(policy: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const parts = policy.split(/^\s*- Sid:\s*/m).slice(1);
+  for (const part of parts) {
+    const sid = part.split('\n', 1)[0]?.trim() ?? '';
+    found.set(sid, part);
+  }
+  return found;
+}
+
+function allowedActions(policy: string): string[] {
+  const found = new Set<string>();
+  for (const body of statements(policy).values()) {
+    if (!/^\s*Effect:\s*Allow\s*$/m.test(body)) continue;
+    for (const action of actions(body)) found.add(action);
+  }
+  return [...found].sort();
+}
+
+function deniedActions(policy: string): string[] {
+  const found = new Set<string>();
+  for (const body of statements(policy).values()) {
+    if (!/^\s*Effect:\s*Deny\s*$/m.test(body)) continue;
+    for (const action of actions(body)) found.add(action);
+  }
+  return [...found].sort();
+}
+
 const podFiles = [
   'infra/k8s/web-deployment.yaml',
   'infra/k8s/worker-deployment.yaml',
+  'infra/k8s/clamav.yaml',
+  'infra/k8s/clamav-mirror.yaml',
   'infra/k8s/jobs/migrate.yaml',
   'infra/k8s/jobs/seed.yaml',
+  'infra/k8s/jobs/invite-admin.yaml',
 ];
+
+const podKinds = new Set(['Deployment', 'StatefulSet', 'Job']);
 
 describe('pod security and workload identities', () => {
   const pods = podFiles.flatMap((path) =>
     documents(read(path))
-      .filter((doc) => kindOf(doc) === 'Deployment' || kindOf(doc) === 'Job')
+      .filter((doc) => podKinds.has(kindOf(doc) ?? ''))
       .map((doc) => ({ path, doc, name: nameOf(doc) })),
   );
 
@@ -89,6 +123,8 @@ describe('pod security and workload identities', () => {
     expect(pods.map((pod) => pod.name).sort()).toEqual([
       'blakpath-app',
       'blakpath-clamav',
+      'blakpath-clamav-mirror',
+      'blakpath-invite-admin',
       'blakpath-migrate',
       'blakpath-seed',
       'blakpath-worker',
@@ -98,6 +134,7 @@ describe('pod security and workload identities', () => {
       expect(pod.doc, pod.name).toContain('runAsNonRoot: true');
       expect(pod.doc, pod.name).toContain('allowPrivilegeEscalation: false');
       expect(pod.doc, pod.name).toContain('drop: [ALL]');
+      expect(pod.doc, pod.name).toContain('readOnlyRootFilesystem: true');
       expect(pod.doc, pod.name).toMatch(/seccompProfile:\n\s+type: RuntimeDefault/);
       expect(pod.doc, pod.name).not.toContain('privileged: true');
       expect(pod.doc, pod.name).not.toContain('hostNetwork:');
@@ -106,47 +143,61 @@ describe('pod security and workload identities', () => {
     }
   });
 
-  it('runs web and worker with a read-only root filesystem', () => {
+  it('runs web, worker and jobs with a writable /tmp only', () => {
+    for (const name of [
+      'blakpath-app',
+      'blakpath-worker',
+      'blakpath-migrate',
+      'blakpath-seed',
+      'blakpath-invite-admin',
+    ]) {
+      const pod = pods.find((candidate) => candidate.name === name);
+      expect(pod?.doc, name).toContain('mountPath: /tmp');
+    }
     const web = pods.find((pod) => pod.name === 'blakpath-app');
     const worker = pods.find((pod) => pod.name === 'blakpath-worker');
-    expect(web?.doc).toContain('readOnlyRootFilesystem: true');
-    expect(web?.doc).toContain('mountPath: /tmp');
     expect(web?.doc).toContain('serviceAccountName: blakpath-web');
-    expect(worker?.doc).toContain('readOnlyRootFilesystem: true');
-    expect(worker?.doc).toContain('mountPath: /tmp');
     expect(worker?.doc).toContain('serviceAccountName: blakpath-worker');
   });
 
-  it('gives ClamAV and jobs no AWS credentials', () => {
+  it('gives ClamAV and the database jobs no AWS credentials', () => {
     const accounts = read('infra/k8s/serviceaccounts.yaml');
     expect(accounts).toContain('name: blakpath-web');
     expect(accounts).toContain('name: blakpath-worker');
-    expect(accounts).toContain('name: blakpath-clamav');
     expect(accounts).toContain('name: blakpath-migrate');
-    expect(accounts).not.toMatch(/^  name: blakpath$/m);
+    expect(accounts).not.toMatch(/^ {2}name: blakpath$/m);
 
-    const clamavAccount = sliceBetween(
+    const migrateAccount = sliceBetween(
       accounts,
-      'name: blakpath-clamav',
       'name: blakpath-migrate',
+      'name: blakpath-external-secrets',
     );
-    const migrateAccount = sliceBetween(accounts, 'name: blakpath-migrate', null);
-    expect(clamavAccount).toContain('automountServiceAccountToken: false');
     expect(migrateAccount).toContain('automountServiceAccountToken: false');
 
-    const clamav = pods.find((pod) => pod.name === 'blakpath-clamav');
-    expect(clamav?.doc).toContain('serviceAccountName: blakpath-clamav');
-    expect(clamav?.doc).toContain('automountServiceAccountToken: false');
-    expect(clamav?.doc).toContain('command: [/init-unprivileged]');
-    expect(clamav?.doc).toContain('runAsUser: 1000');
-    expect(clamav?.doc).not.toContain('readOnlyRootFilesystem:');
+    const clamavAccount = documents(read('infra/k8s/clamav.yaml')).find(
+      (doc) => kindOf(doc) === 'ServiceAccount',
+    );
+    expect(clamavAccount).toContain('name: blakpath-clamav');
+    expect(clamavAccount).toContain('automountServiceAccountToken: false');
+    expect(clamavAccount).not.toContain('eks.amazonaws.com/role-arn');
+
+    for (const name of ['blakpath-clamav', 'blakpath-clamav-mirror']) {
+      const pod = pods.find((candidate) => candidate.name === name);
+      expect(pod?.doc, name).toContain('serviceAccountName: blakpath-clamav');
+      expect(pod?.doc, name).toContain('automountServiceAccountToken: false');
+      expect(pod?.doc, name).toContain("command: ['/init-unprivileged']");
+      expect(pod?.doc, name).toContain('runAsUser: 1000');
+    }
 
     for (const name of ['blakpath-migrate', 'blakpath-seed']) {
       const job = pods.find((pod) => pod.name === name);
       expect(job?.doc, name).toContain('serviceAccountName: blakpath-migrate');
       expect(job?.doc, name).toContain('automountServiceAccountToken: false');
-      expect(job?.doc, name).toContain('readOnlyRootFilesystem: true');
     }
+
+    // Sends mail through SES, so it borrows the web identity.
+    const invite = pods.find((pod) => pod.name === 'blakpath-invite-admin');
+    expect(invite?.doc).toContain('serviceAccountName: blakpath-web');
 
     const rendered = podFiles.map((path) => read(path)).join('\n');
     expect(rendered).not.toMatch(/serviceAccountName: blakpath$/m);
@@ -159,10 +210,8 @@ describe('EKS Pod Identity roles', () => {
   const worker = sliceBetween(roles, 'WorkerWorkloadRole:', 'WebPodIdentity:');
   const webPolicy = sliceBetween(web, 'Policies:', null);
   const workerPolicy = sliceBetween(worker, 'Policies:', null);
-  const webAllow = sliceBetween(webPolicy, 'Statement:', 'Sid: DenyEvidenceDelete');
-  const webDeny = sliceBetween(webPolicy, 'Sid: DenyEvidenceDelete', null);
-  const workerAllow = sliceBetween(workerPolicy, 'Statement:', 'Sid: DenyCoaSigning');
-  const workerDeny = sliceBetween(workerPolicy, 'Sid: DenyCoaSigning', null);
+  const webStatements = statements(webPolicy);
+  const workerStatements = statements(workerPolicy);
 
   it('trusts pods.eks.amazonaws.com for web and worker only', () => {
     expect(roles).not.toContain('ecs-tasks.amazonaws.com');
@@ -188,41 +237,96 @@ describe('EKS Pod Identity roles', () => {
     expect(roles.match(/AWS::EKS::PodIdentityAssociation/g)).toHaveLength(2);
   });
 
-  it('keeps evidence delete off the web role and kms:Sign off the worker role', () => {
-    expect(actions(webAllow)).toEqual([
+  it('keeps evidence delete off the web role', () => {
+    expect(allowedActions(webPolicy)).toEqual([
       'kms:Decrypt',
+      'kms:Encrypt',
       'kms:GenerateDataKey',
       'kms:GetPublicKey',
       'kms:Sign',
       's3:GetObject',
       's3:ListBucket',
       's3:PutObject',
-      'ses:SendEmail',
     ]);
-    expect(actions(webDeny)).toEqual(['s3:DeleteObject', 's3:DeleteObjectVersion']);
-    expect(webAllow).toContain('${EvidenceBucketArn}/*/certificates/*');
-    expect(webAllow).not.toContain('s3:DeleteObject');
+    expect(deniedActions(webPolicy)).toEqual([
+      's3:DeleteObject',
+      's3:DeleteObjectVersion',
+    ]);
+    expect(webStatements.get('DenyEvidenceDelete')).toContain("'${EvidenceBucketArn}/*'");
+    expect(webStatements.get('CertificatePdfWrite')).toContain(
+      '${EvidenceBucketArn}/*/certificates/*',
+    );
+    expect(webStatements.get('CoaSignAndPublicKey')).toContain(
+      'Resource: !Ref CoaSigningKeyArn',
+    );
+    expect(webPolicy).not.toContain('AuditAnchor');
+  });
 
-    expect(actions(workerAllow)).toEqual([
+  it('lets the worker sign only with the audit anchor key', () => {
+    expect(allowedActions(workerPolicy)).toEqual([
       'kms:Decrypt',
+      'kms:DescribeKey',
+      'kms:Encrypt',
       'kms:GenerateDataKey',
+      'kms:GetPublicKey',
+      'kms:Sign',
       's3:DeleteObject',
       's3:GetObject',
+      's3:ListBucket',
       's3:PutObject',
-      'ses:SendEmail',
     ]);
-    expect(actions(workerDeny)).toEqual(['kms:Sign']);
-    expect(workerDeny).toContain("Resource: '*'");
-    expect(workerPolicy).not.toContain('certificates');
-    expect(workerPolicy).not.toContain('s3:ListBucket');
-    expect(workerPolicy).not.toContain('kms:GetPublicKey');
+    const signers = [...workerStatements.entries()].filter(
+      ([, body]) => /^\s*Effect:\s*Allow\s*$/m.test(body) && body.includes('kms:Sign'),
+    );
+    expect(signers.map(([sid]) => sid)).toEqual(['AuditAnchorSign']);
+    expect(workerStatements.get('AuditAnchorSign')).toContain(
+      'Resource: !Ref AuditAnchorSigningKeyArn',
+    );
 
+    const denyCoa = workerStatements.get('DenyCoaSigning');
+    expect(denyCoa).toMatch(/^\s*Effect:\s*Deny\s*$/m);
+    expect(denyCoa).toContain('Action: kms:Sign');
+    expect(denyCoa).toContain('NotResource: !Ref AuditAnchorSigningKeyArn');
+    expect(deniedActions(workerPolicy)).toEqual([
+      'kms:Sign',
+      's3:BypassGovernanceRetention',
+      's3:DeleteObject',
+      's3:DeleteObjectVersion',
+    ]);
+
+    expect(workerPolicy).not.toContain('certificates');
+    expect(workerPolicy).not.toContain('CoaSigningKeyArn');
+    expect(workerStatements.get('AuditAnchorList')).toContain(
+      'Resource: !Ref AuditAnchorBucketArn',
+    );
+  });
+
+  it('scopes tenant kms:Encrypt by encryption context or S3', () => {
+    for (const policy of [webStatements, workerStatements]) {
+      for (const [sid, body] of policy) {
+        if (!body.includes('kms:Encrypt')) continue;
+        expect(body, sid).toMatch(/kms:EncryptionContext:(purpose|aws:s3:arn)/);
+      }
+    }
     for (const policy of [webPolicy, workerPolicy]) {
       expect(policy).toContain("'kms:ViaService'");
-      expect(policy).not.toContain('kms:Encrypt');
       expect(policy).not.toContain('kms:Verify');
-      expect(policy).not.toContain('kms:DescribeKey');
+      expect(policy).not.toContain('ses:');
     }
+    expect(webStatements.get('TenantEnvelopeKeys')).toContain('- key_health');
+    expect(workerStatements.get('TenantEnvelopeKeys')).not.toContain('key_health');
+  });
+
+  it('attaches mail send to the web and worker roles from one address', () => {
+    const boundary = read('infra/aws/eks-boundary.example.yaml');
+    const mail = sliceBetween(boundary, 'WorkloadMailSend:', 'Outputs:');
+    expect(mail).toContain('- !Ref WebRoleName');
+    expect(mail).toContain('- !Ref WorkerRoleName');
+    expect(mail).toContain('ses:FromAddress');
+    expect(boundary).toContain('Default: blakpath-web');
+    expect(boundary).toContain('Default: blakpath-worker');
+    expect(boundary).not.toContain('AWS::EKS::PodIdentityAssociation');
+    expect(boundary).not.toContain('blakpath-eks-runtime');
   });
 
   it('records an unused-access analyzer and the per-role review', () => {

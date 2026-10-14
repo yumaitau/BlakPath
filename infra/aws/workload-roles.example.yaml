@@ -2,7 +2,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Least-privilege BlakPath EKS Pod Identity roles. Web and worker only.
   ClamAV and migrate have no role. No standing access keys. Reviewed in
-  infra/aws/unused-access-review.md.
+  infra/aws/unused-access-review.md. Mail send is attached by
+  eks-boundary.example.yaml (one From address).
 
 Parameters:
   ClusterName:
@@ -18,9 +19,20 @@ Parameters:
   CoaSigningKeyArn:
     Type: String
     Description: Asymmetric SIGN_VERIFY CMK (alias/blakpath-coa-signing). Web only.
-  SesIdentityArn:
+  AuditAnchorBucketArn:
     Type: String
-    Description: SES identity ARN the web and worker roles may send from.
+  AuditAnchorSigningKeyArn:
+    Type: String
+    Description: Asymmetric SIGN_VERIFY CMK for daily audit anchors. Worker only.
+  # Informational. Tenant and platform envelope calls are authorised by the
+  # encryption-context condition below, because BYOK / XKS ARNs are not known
+  # when this role is deployed. The customer key policy must grant these roles
+  # kms:Decrypt, kms:Encrypt, kms:GenerateDataKey and kms:DescribeKey.
+  # DescribeKey has no encryption context, so it is a separate statement on
+  # the worker role only. S3 object encryption uses the tenant CMK via
+  # kms:ViaService, not the purpose condition.
+  PlatformKmsKeyArn:
+    Type: String
 
 Resources:
   WebWorkloadRole:
@@ -83,10 +95,43 @@ Resources:
                   - kms:Sign
                   - kms:GetPublicKey
                 Resource: !Ref CoaSigningKeyArn
-              - Sid: SendAuthMail
+              - Sid: PlatformEnvelopeKey
                 Effect: Allow
-                Action: ses:SendEmail
-                Resource: !Ref SesIdentityArn
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref PlatformKmsKeyArn
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
+                      - blind-index
+                      - key_validation
+                      # Wrap-and-unwrap check from Settings → Encryption keys.
+                      # Web only; no record data is wrapped under it.
+                      - key_health
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
               - Sid: DenyEvidenceDelete
                 Effect: Deny
                 Action:
@@ -98,7 +143,9 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: blakpath-worker
-      Description: BlakPath worker. Evidence lifecycle and queued mail. Cannot kms:Sign.
+      Description: >
+        BlakPath worker. Evidence lifecycle, key rewrap, audit anchors and queued
+        mail. Cannot kms:Sign anything except the audit anchor key.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -131,6 +178,11 @@ Resources:
                 Resource:
                   - !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
                   - !Sub '${EvidenceBucketArn}/*/exports/*'
+              # Tenant key rewrap copies each evidence object onto itself.
+              - Sid: EvidenceRewrapRead
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
               - Sid: EvidenceRetentionDelete
                 Effect: Allow
                 Action: s3:DeleteObject
@@ -144,14 +196,76 @@ Resources:
                 Condition:
                   StringEquals:
                     'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
-              - Sid: SendQueuedMail
+              - Sid: AuditAnchorList
                 Effect: Allow
-                Action: ses:SendEmail
-                Resource: !Ref SesIdentityArn
+                Action: s3:ListBucket
+                Resource: !Ref AuditAnchorBucketArn
+              - Sid: AuditAnchorObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub '${AuditAnchorBucketArn}/*'
+              - Sid: AuditAnchorSign
+                Effect: Allow
+                Action:
+                  - kms:Sign
+                  - kms:GetPublicKey
+                  - kms:DescribeKey
+                Resource: !Ref AuditAnchorSigningKeyArn
+              - Sid: AuditAnchorNoDelete
+                Effect: Deny
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:BypassGovernanceRetention
+                Resource:
+                  - !Ref AuditAnchorBucketArn
+                  - !Sub '${AuditAnchorBucketArn}/*'
+              - Sid: PlatformEnvelopeKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref PlatformKmsKeyArn
+              - Sid: TenantEnvelopeKeys
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose:
+                      - field
+                      - platform
+                      - blind-index
+                      - key_validation
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
+              - Sid: TenantKeyDescribe
+                Effect: Allow
+                Action: kms:DescribeKey
+                Resource: '*'
+              # Certificates are signed by web. The only key this role may sign
+              # with is the audit anchor key, even if a later statement allows more.
               - Sid: DenyCoaSigning
                 Effect: Deny
                 Action: kms:Sign
-                Resource: '*'
+                NotResource: !Ref AuditAnchorSigningKeyArn
 
   WebPodIdentity:
     Type: AWS::EKS::PodIdentityAssociation

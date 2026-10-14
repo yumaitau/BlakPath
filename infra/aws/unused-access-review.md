@@ -34,48 +34,58 @@ Object keys the policies follow:
 
 ## blakpath-web — kept
 
-| Action                               | Resource                                               | Caller                                                           |
-| ------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------- |
-| `s3:ListBucket`                      | evidence bucket                                        | `checkS3` (`HeadBucket`) from `/api/ready`                       |
-| `s3:PutObject`                       | quarantine `*/applications/*/evidence/*`               | `presignUpload`                                                  |
-| `s3:PutObject`                       | evidence `*/certificates/*`                            | `putObjectBytes` in `src/domains/certificates/service.ts`        |
-| `s3:GetObject`                       | evidence application, certificate, and export prefixes | `presignDownload` for evidence, certificates, and exports        |
-| `kms:Decrypt`, `kms:GenerateDataKey` | evidence CMK, `kms:ViaService` = S3                    | SSE-KMS on those puts and gets                                   |
-| `kms:Sign`, `kms:GetPublicKey`       | CoA signing CMK only                                   | `signCoaPayload` / `getCoaPublicKeyPem` in `src/lib/kms/sign.ts` |
-| `ses:SendEmail`                      | the configured SES identity                            | synchronous auth mail in `src/lib/email/mailer.ts`               |
+| Action                                              | Resource                                                                                                    | Caller                                                                                          |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `s3:ListBucket`                                     | evidence bucket                                                                                             | `checkS3` (`HeadBucket`) from `/api/ready`                                                      |
+| `s3:PutObject`                                      | quarantine `*/applications/*/evidence/*`                                                                    | `presignUpload`                                                                                 |
+| `s3:PutObject`                                      | evidence `*/certificates/*`                                                                                 | `putObjectBytes` in `src/domains/certificates/service.ts`                                       |
+| `s3:GetObject`                                      | evidence application, certificate, and export prefixes                                                      | `presignDownload` for evidence, certificates, and exports                                       |
+| `kms:Decrypt`, `kms:GenerateDataKey`                | evidence CMK, `kms:ViaService` = S3                                                                         | SSE-KMS on those puts and gets                                                                  |
+| `kms:Sign`, `kms:GetPublicKey`                      | CoA signing CMK only                                                                                        | `signCoaPayload` / `getCoaPublicKeyPem` in `src/lib/kms/sign.ts`                                |
+| `kms:Decrypt`, `kms:GenerateDataKey`                | platform CMK                                                                                                | platform-scope envelopes in `src/lib/encryption/scope.ts`                                       |
+| `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey` | any key, encryption-context `purpose` in `field`, `platform`, `blind-index`, `key_validation`, `key_health` | tenant envelopes, blind index, key handshake and the Settings key check (`src/lib/encryption/`) |
+| `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey` | any key via S3, object ARN in evidence or quarantine                                                        | SSE-KMS under the tenant CMK on presigned puts and gets                                         |
+| `ses:SendEmail`                                     | the application From address                                                                                | synchronous auth mail in `src/lib/email/mailer.ts`. Attached by `eks-boundary.example.yaml`     |
 
 ## blakpath-web — denied or not granted
 
-| Action                                                          | Decision                                                                                                                                       |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `s3:DeleteObject`, `s3:DeleteObjectVersion` on evidence objects | **Explicit deny.** Scan rejection and retention run on the worker. The web role cannot delete evidence.                                        |
-| `s3:GetObject` on quarantine                                    | Not granted. The web tier presigns the upload and never reads unscanned bytes.                                                                 |
-| `s3:PutObject` on evidence outside `certificates/`              | Not granted. Promotion and exports are worker writes.                                                                                          |
-| `kms:Encrypt`, `kms:DescribeKey`, `kms:Verify`                  | Not granted. S3 calls `GenerateDataKey`. Verification uses the public key locally after `GetPublicKey`. `sign.ts` does not call `DescribeKey`. |
-| `kms:Sign` on the evidence CMK                                  | Not granted. Sign is only on the CoA signing key.                                                                                              |
-| `secretsmanager:*`                                              | Not granted.                                                                                                                                   |
+| Action                                                             | Decision                                                                                                                                                                                              |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `s3:DeleteObject`, `s3:DeleteObjectVersion` on evidence objects    | **Explicit deny.** Scan rejection and retention run on the worker. The web role cannot delete evidence.                                                                                               |
+| `s3:GetObject` on quarantine                                       | Not granted. The web tier presigns the upload and never reads unscanned bytes.                                                                                                                        |
+| `s3:PutObject` on evidence outside `certificates/`                 | Not granted. Promotion and exports are worker writes.                                                                                                                                                 |
+| `kms:Encrypt` on the evidence CMK, `kms:DescribeKey`, `kms:Verify` | Not granted. S3 calls `GenerateDataKey`. Verification uses the public key locally after `GetPublicKey`. `sign.ts` does not call `DescribeKey`. Tenant `kms:Encrypt` is limited by encryption context. |
+| `kms:Sign` on the evidence CMK                                     | Not granted. Sign is only on the CoA signing key.                                                                                                                                                     |
+| `secretsmanager:*`                                                 | Not granted.                                                                                                                                                                                          |
 
 ## blakpath-worker — kept
 
-| Action                               | Resource                                      | Caller                                                                                                                   |
-| ------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `s3:GetObject`, `s3:DeleteObject`    | quarantine evidence prefix                    | scan reads bytes; rejection, infection, and post-copy delete                                                             |
-| `s3:PutObject`                       | evidence application prefix and `*/exports/*` | `CopyObject` promote; `processExport` CSV                                                                                |
-| `s3:DeleteObject`                    | evidence application prefix only              | retention sweep. Creates a delete marker. `DeleteObjectVersion` is not granted, so versions are not purged by this role. |
-| `kms:Decrypt`, `kms:GenerateDataKey` | evidence CMK via S3                           | SSE-KMS on the scan read, the promote, and the export write                                                              |
-| `ses:SendEmail`                      | the same SES identity                         | worker email and notification processors                                                                                 |
+| Action                                              | Resource                                                                   | Caller                                                                                                                   |
+| --------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `s3:GetObject`, `s3:DeleteObject`                   | quarantine evidence prefix                                                 | scan reads bytes; rejection, infection, and post-copy delete                                                             |
+| `s3:PutObject`                                      | evidence application prefix and `*/exports/*`                              | `CopyObject` promote; `processExport` CSV                                                                                |
+| `s3:DeleteObject`                                   | evidence application prefix only                                           | retention sweep. Creates a delete marker. `DeleteObjectVersion` is not granted, so versions are not purged by this role. |
+| `s3:GetObject`                                      | evidence application prefix                                                | tenant key rewrap copies each evidence object onto itself (`src/lib/storage/object-rewrap.ts`)                           |
+| `kms:Decrypt`, `kms:GenerateDataKey`                | evidence CMK via S3                                                        | SSE-KMS on the scan read, the promote, and the export write                                                              |
+| `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`     | audit anchor bucket only                                                   | daily chain-head anchors (`src/domains/audit/anchor-s3.ts`). Delete and governance bypass are explicitly denied.         |
+| `kms:Sign`, `kms:GetPublicKey`, `kms:DescribeKey`   | audit anchor signing CMK only                                              | `loadAnchorSigner` in `src/domains/audit/anchor-sign.ts`                                                                 |
+| `kms:Decrypt`, `kms:GenerateDataKey`                | platform CMK                                                               | platform-scope envelopes                                                                                                 |
+| `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey` | any key, `purpose` in `field`, `platform`, `blind-index`, `key_validation` | tenant envelopes and key rewrap                                                                                          |
+| `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey` | any key via S3, object ARN in evidence or quarantine                       | SSE-KMS under the tenant CMK on scan, promote and rewrap                                                                 |
+| `kms:DescribeKey`                                   | any key                                                                    | tenant key checks in `src/lib/encryption/kms-provider.ts`. No encryption context exists for `DescribeKey`.               |
+| `ses:SendEmail`                                     | the application From address                                               | worker email and notification processors. Attached by `eks-boundary.example.yaml`                                        |
 
 ## blakpath-worker — denied or not granted
 
-| Action                                             | Decision                                                                                                                                                    |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kms:Sign`                                         | **Explicit deny on `*`.** Certificate signing is a human action served by the web process. The worker cannot sign even if another statement is added later. |
-| `kms:GetPublicKey`                                 | Not granted. Public verification is the web `/verify` route.                                                                                                |
-| `s3:GetObject` on evidence                         | Not granted. Download URLs are presigned by the web role.                                                                                                   |
-| `s3:DeleteObject` on `certificates/` or `exports/` | Not granted.                                                                                                                                                |
-| `s3:ListBucket`                                    | Not granted. The worker does not call `HeadBucket`.                                                                                                         |
-| `s3:PutObject` on quarantine                       | Not granted. Uploads are presigned by web.                                                                                                                  |
-| `secretsmanager:*`                                 | Not granted.                                                                                                                                                |
+| Action                                             | Decision                                                                                                                                                                                                                    |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kms:Sign`                                         | **Explicit deny on every key except the audit anchor key** (`NotResource`). Certificate signing is a human action served by the web process. The worker cannot sign a certificate even if another statement is added later. |
+| `kms:GetPublicKey` on the CoA key                  | Not granted. Public verification is the web `/verify` route.                                                                                                                                                                |
+| `s3:GetObject` on certificates or exports          | Not granted. Download URLs are presigned by the web role.                                                                                                                                                                   |
+| `s3:DeleteObject` on `certificates/` or `exports/` | Not granted.                                                                                                                                                                                                                |
+| `s3:ListBucket` on evidence or quarantine          | Not granted. The worker does not call `HeadBucket`.                                                                                                                                                                         |
+| `s3:PutObject` on quarantine                       | Not granted. Uploads are presigned by web.                                                                                                                                                                                  |
+| `secretsmanager:*`                                 | Not granted.                                                                                                                                                                                                                |
 
 ## ClamAV and migrate
 
