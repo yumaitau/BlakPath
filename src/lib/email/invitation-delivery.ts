@@ -8,7 +8,11 @@ import {
   organisations,
   roles,
 } from '@/db/schema';
-import { decryptField, type EncryptedField } from '@/lib/encryption/envelope';
+import type { EncryptedField } from '@/lib/encryption/envelope';
+import {
+  openInvitationToken,
+  type InvitationTable,
+} from '@/lib/encryption/tenant-fields';
 import { env } from '@/lib/env';
 import { sendEmail } from '@/lib/email/mailer';
 import {
@@ -40,9 +44,14 @@ function isSeal(value: unknown): value is EncryptedField {
   );
 }
 
-function openSeal(seal: EncryptedField): string {
+async function openSeal(
+  organisationId: string,
+  table: InvitationTable,
+  invitationId: string,
+  seal: EncryptedField,
+): Promise<string> {
   try {
-    return decryptField(seal);
+    return await openInvitationToken(organisationId, table, invitationId, seal);
   } catch {
     throw new Error('Invitation seal could not be opened');
   }
@@ -132,7 +141,7 @@ async function deliverFormInvitation(
     return;
   }
 
-  const token = openSeal(seal);
+  const token = await openSeal(organisationId, 'form_invitations', invitationId, seal);
   const message = renderFormInvitationEmail({
     recipientName: row.recipientName,
     formTitle: row.formTitle,
@@ -192,7 +201,12 @@ async function deliverMembershipInvitation(
     return;
   }
 
-  const token = openSeal(seal);
+  const token = await openSeal(
+    organisationId,
+    'membership_invitations',
+    invitationId,
+    seal,
+  );
   const message = renderMembershipInvitationEmail({
     organisationName: row.organisationName,
     roleName: row.roleName,

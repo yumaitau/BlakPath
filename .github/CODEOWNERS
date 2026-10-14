@@ -14,3 +14,8 @@
 /src/lib/http/                @jusso-dev
 /src/domains/audit/           @jusso-dev
 /src/domains/organisation-keys/ @jusso-dev
+
+# Licence and governance documents.
+/LICENSE                      @jusso-dev
+/SECURITY.md                  @jusso-dev
+/CONTRIBUTING.md              @jusso-dev

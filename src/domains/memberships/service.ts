@@ -21,7 +21,7 @@ import {
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { queueInvitationEmail } from '@/lib/email/queue';
-import { encryptField } from '@/lib/encryption/envelope';
+import { sealInvitationToken } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError, isAuthorizationError } from '@/lib/permissions/errors';
@@ -454,6 +454,12 @@ export async function createMembershipInvitation(input: {
       teamId = team.id;
     }
 
+    const tokenSeal = await sealInvitationToken(
+      scope.organisationId,
+      'membership_invitations',
+      invitationId,
+      token,
+    );
     await db.transaction(async (tx) => {
       await tx
         .update(membershipInvitations)
@@ -472,7 +478,7 @@ export async function createMembershipInvitation(input: {
         roleId: role.id,
         teamId,
         tokenHash: hashToken(token),
-        tokenSeal: encryptField(token),
+        tokenSeal,
         invitedByUserId,
         status: 'pending',
         expiresAt,
@@ -549,11 +555,17 @@ export async function resendMembershipInvitation(id: string): Promise<{
     const token = nanoid(36);
     const lastSentAt = new Date();
     const expiresAt = new Date(lastSentAt.getTime() + INVITATION_LIFETIME_MS);
+    const tokenSeal = await sealInvitationToken(
+      scope.organisationId,
+      'membership_invitations',
+      id,
+      token,
+    );
     await db
       .update(membershipInvitations)
       .set({
         tokenHash: hashToken(token),
-        tokenSeal: encryptField(token),
+        tokenSeal,
         expiresAt,
         lastSentAt,
       })

@@ -53,6 +53,8 @@ const serverSchema = z
     // The platform CMK wraps non-tenant data. The local root and the KMS
     // endpoint are development/CI only and are refused in production.
     // ENCRYPTION_MASTER_KEY remains only so version-1 ciphertext can be read.
+    // Nothing writes version 1. Once the encryption backfill has completed for
+    // every organisation, no stored value needs it and it can be unset.
     // See docs/adr/0001-customer-held-keys.md.
     PLATFORM_KMS_KEY_ARN: z.string().min(20).optional(),
     KMS_ENDPOINT: z.string().url().optional(),

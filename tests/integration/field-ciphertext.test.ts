@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { encryptFieldV1 } from '../helpers/legacy-envelope';
 
 /**
  * Raw SQL proof that inventoried tenant columns are version-2 ciphertext and
@@ -29,15 +30,18 @@ const CANARY = {
   mailSubject: 'mail-subject-canary',
   mailText: 'mail-text-canary',
   mailHtml: 'mail-html-canary',
+  memberToken: 'member-token-canary-v1',
+  formToken: 'form-token-canary-v1',
 } as const;
 
 async function loadRuntime() {
-  const [client, schema, tenancy, applications, organisationKeys, encryption] =
+  const [client, schema, tenancy, applications, forms, organisationKeys, encryption] =
     await Promise.all([
       import('@/db/client'),
       import('@/db/schema'),
       import('@/lib/tenancy/context'),
       import('@/domains/applications'),
+      import('@/domains/forms'),
       import('@/domains/organisation-keys'),
       import('@/lib/encryption/verify'),
     ]);
@@ -48,6 +52,7 @@ async function loadRuntime() {
     schema,
     tenancy,
     applications,
+    forms,
     organisationKeys,
     encryption,
     backfill,
@@ -60,9 +65,14 @@ type Runtime = Awaited<ReturnType<typeof loadRuntime>>;
 integration('inventoried columns are tenant ciphertext', () => {
   let runtime: Runtime;
   let organisationId: string;
+  let otherOrganisationId: string;
   let userId: string;
   let applicationId: string;
   let reference: string;
+  let formId: string;
+  let webhookId: string;
+  let memberInvitationId: string;
+  let formInvitationId: string;
 
   beforeAll(async () => {
     runtime = await loadRuntime();
@@ -118,7 +128,7 @@ integration('inventoried columns are tenant ciphertext', () => {
       community: CANARY.community,
       notes: CANARY.familyNotes,
     });
-    const formId = randomUUID();
+    formId = randomUUID();
     await runtime.db.insert(runtime.schema.forms).values({
       id: formId,
       organisationId,
@@ -147,7 +157,7 @@ integration('inventoried columns are tenant ciphertext', () => {
       proposedOutcome: 'confirmed',
       rationale: CANARY.rationale,
     });
-    const webhookId = randomUUID();
+    webhookId = randomUUID();
     const sealedWebhookSecret = await runtime.fields.sealWebhookSecret(
       organisationId,
       webhookId,
@@ -174,6 +184,43 @@ integration('inventoried columns are tenant ciphertext', () => {
       htmlBody: CANARY.mailHtml,
     });
 
+    // Version-1 token seals, as the platform-key writer left them.
+    const roleId = randomUUID();
+    await runtime.db.insert(runtime.schema.roles).values({
+      id: roleId,
+      organisationId,
+      slug: `cipher-role-${suffix}`,
+      name: 'Cipher Role',
+    });
+    memberInvitationId = randomUUID();
+    await runtime.db.insert(runtime.schema.membershipInvitations).values({
+      id: memberInvitationId,
+      organisationId,
+      email: `invitee-${suffix}@example.test`,
+      roleId,
+      tokenHash: `member-hash-${suffix}`,
+      tokenSeal: encryptFieldV1(CANARY.memberToken),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    formInvitationId = randomUUID();
+    await runtime.db.insert(runtime.schema.formInvitations).values({
+      id: formInvitationId,
+      organisationId,
+      formId,
+      tokenHash: `form-hash-${suffix}`,
+      tokenSeal: encryptFieldV1(CANARY.formToken),
+      recipientEmail: `form-invitee-${suffix}@example.test`,
+    });
+
+    otherOrganisationId = randomUUID();
+    await runtime.db.insert(runtime.schema.organisations).values({
+      id: otherOrganisationId,
+      legalName: 'Field Cipher Other Organisation',
+      slug: `field-cipher-other-${suffix}`,
+      status: 'active',
+    });
+    await runtime.organisationKeys.ensureOrganisationKey(otherOrganisationId);
+
     const before = await runtime.sqlClient.unsafe<{ residue: number }[]>(
       runtime.encryption.plaintextResidueSql(organisationId),
     );
@@ -192,6 +239,11 @@ integration('inventoried columns are tenant ciphertext', () => {
       await runtime.db
         .delete(runtime.schema.organisations)
         .where(eq(runtime.schema.organisations.id, organisationId));
+      if (otherOrganisationId) {
+        await runtime.db
+          .delete(runtime.schema.organisations)
+          .where(eq(runtime.schema.organisations.id, otherOrganisationId));
+      }
       await runtime.db
         .delete(runtime.schema.users)
         .where(eq(runtime.schema.users.id, userId));
@@ -259,6 +311,10 @@ integration('inventoried columns are tenant ciphertext', () => {
       select text_body from correspondence_messages where organisation_id = ${organisationId}
       union all
       select html_body from correspondence_messages where organisation_id = ${organisationId}
+      union all
+      select token_seal::text from membership_invitations where organisation_id = ${organisationId}
+      union all
+      select token_seal::text from form_invitations where organisation_id = ${organisationId}
     `;
     const blobs = stored.map((row) => row.blob);
     expect(blobs.every((blob) => /"v"\s*:\s*2/.test(blob))).toBe(true);
@@ -288,6 +344,114 @@ integration('inventoried columns are tenant ciphertext', () => {
     for (const canary of Object.values(CANARY)) {
       expect(audits.some((row) => row.after_meta?.includes(canary))).toBe(false);
     }
+  });
+
+  it('backfill rewrites version-1 token seals as tenant envelopes', async () => {
+    const [member] = await runtime.sqlClient<{ seal: Record<string, unknown> }[]>`
+      select token_seal as seal from membership_invitations where id = ${memberInvitationId}
+    `;
+    const [form] = await runtime.sqlClient<{ seal: Record<string, unknown> }[]>`
+      select token_seal as seal from form_invitations where id = ${formInvitationId}
+    `;
+    expect(member?.seal.v).toBe(2);
+    expect(form?.seal.v).toBe(2);
+    expect(member?.seal.kid).toEqual(expect.any(String));
+    expect(
+      await runtime.fields.openInvitationToken(
+        organisationId,
+        'membership_invitations',
+        memberInvitationId,
+        member?.seal,
+      ),
+    ).toBe(CANARY.memberToken);
+    expect(
+      await runtime.fields.openInvitationToken(
+        organisationId,
+        'form_invitations',
+        formInvitationId,
+        form?.seal,
+      ),
+    ).toBe(CANARY.formToken);
+  });
+
+  it('ciphertext moved to another row or tenant does not decrypt', async () => {
+    const [webhook] = await runtime.sqlClient<{ secret: string }[]>`
+      select secret from webhook_endpoints where id = ${webhookId}
+    `;
+    const [form] = await runtime.sqlClient<{ seal: Record<string, unknown> }[]>`
+      select token_seal as seal from form_invitations where id = ${formInvitationId}
+    `;
+    const secret = webhook?.secret ?? '';
+    expect(
+      await runtime.fields.openWebhookSecret(organisationId, webhookId, secret),
+    ).toBe(CANARY.webhookSecret);
+    await expect(
+      runtime.fields.openWebhookSecret(organisationId, randomUUID(), secret),
+    ).rejects.toThrow();
+    await expect(
+      runtime.fields.openWebhookSecret(otherOrganisationId, webhookId, secret),
+    ).rejects.toThrow();
+
+    await expect(
+      runtime.fields.openInvitationToken(
+        organisationId,
+        'form_invitations',
+        randomUUID(),
+        form?.seal,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      runtime.fields.openInvitationToken(
+        organisationId,
+        'membership_invitations',
+        formInvitationId,
+        form?.seal,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      runtime.fields.openInvitationToken(
+        otherOrganisationId,
+        'form_invitations',
+        formInvitationId,
+        form?.seal,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('a new form invitation stores its token seal as a tenant envelope', async () => {
+    const membershipId = (
+      await runtime.sqlClient<{ id: string }[]>`
+        select id from memberships where organisation_id = ${organisationId} limit 1
+      `
+    )[0]?.id;
+    const context = {
+      userId,
+      organisationId,
+      membershipId: membershipId ?? '',
+      permissions: new Set(['application:read-any', 'application:update-intake']),
+      roles: ['integration-tester'],
+      sessionId: randomUUID(),
+      correlationId: randomUUID(),
+      requestId: randomUUID(),
+    };
+    const created = await runtime.tenancy.runWithTenantContext(context, () =>
+      runtime.forms.createInvitation(formId, {
+        recipientEmail: 'new-invitee@example.test',
+      }),
+    );
+    const [row] = await runtime.sqlClient<{ seal: Record<string, unknown> }[]>`
+      select token_seal as seal from form_invitations where id = ${created.invitation.id}
+    `;
+    expect(row?.seal.v).toBe(2);
+    expect(JSON.stringify(row?.seal)).not.toContain(created.token);
+    expect(
+      await runtime.fields.openInvitationToken(
+        organisationId,
+        'form_invitations',
+        created.invitation.id,
+        row?.seal,
+      ),
+    ).toBe(created.token);
   });
 
   it('finds the matter by reference and by a whole name token', async () => {
