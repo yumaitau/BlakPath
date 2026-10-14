@@ -40,15 +40,34 @@ incident ticket.
 3. Restore the scanner and watch BullMQ retries drain. Page if two consecutive
    five-minute periods report the signal.
 
+## `clamav_signature_age`
+
+The worker logs this about every 15 minutes with `ageHours`. The alarm fires
+when that value stays above 48.
+
+1. Check the private mirror pod `blakpath-clamav-mirror` is Ready and that
+   freshclam is still writing `/var/lib/clamav`. The scanner pods do not
+   download from the public mirrors.
+2. Do not restart the scanner to "force" an update unless freshclam is stuck.
+   A reload with `ConcurrentDatabaseReload no` already blocks new scans on that
+   pod; the other replica keeps serving. A restart drops a Ready endpoint.
+3. Leave infected and unscanned objects in quarantine. Stale signatures are not
+   a reason to mark evidence clean.
+4. Confirm the next `clamav_signature_age` event is at or under 48 hours before
+   closing the page.
+
 ## `readiness_dependency_down`
 
 1. The load balancer should already have removed the affected web task because
-   `/api/ready` returns 503.
+   `/api/ready` returns 503. Liveness is `/api/live`, so the pod goes NotReady
+   and is not restarted.
 2. Check the coarse `database`, `redis` and `storage` statuses in the same event,
    then use the managed service’s own telemetry. Connection strings never belong
-   in logs or tickets.
+   in logs or tickets. Read `/api/health` from inside the VPC; the public edge
+   refuses that report.
 3. Restore the dependency, confirm `/api/live` remained healthy and `/api/ready`
-   returns 200, then confirm the alarm returns to OK.
+   returns 200, then confirm the alarm returns to OK. Cached readiness can lag
+   the recovery by about five seconds.
 
 ## Error page reference (`request error`)
 

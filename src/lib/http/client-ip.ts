@@ -123,6 +123,27 @@ export function originRequestAllowed(input: {
   );
 }
 
+/**
+ * Cloudflare-only headers. `x-forwarded-for` is not one: the Next.js server
+ * adds it to every request, including kubelet probes, and the ALB strips it.
+ */
+const EDGE_FORWARDING_HEADERS = ['cf-connecting-ip', 'cf-ray'] as const;
+
+/**
+ * True when the request carries a non-empty Cloudflare edge header. This is a
+ * route signal (the request came through Cloudflare), never a client
+ * identity. Kubelet probes and in-VPC calls to the pod carry none.
+ */
+export function arrivedThroughEdge(headers: {
+  get(name: string): string | null;
+}): boolean {
+  for (const name of EDGE_FORWARDING_HEADERS) {
+    const value = headers.get(name);
+    if (value !== null && value.trim() !== '') return true;
+  }
+  return false;
+}
+
 /** Shared rate-limit identity when the origin has not been verified. */
 export const UNKNOWN_CLIENT_IP = 'unknown';
 

@@ -7,7 +7,8 @@ import { resolveTenantContext, type ResolveTenantInput } from './resolve';
  *
  * This is the ergonomic wrapper route handlers, server actions and jobs use:
  * it performs the DB-verified tenancy resolution (which throws for an
- * unauthorised org) and, only on success, establishes the ambient context via
+ * unauthorised or unavailable org) and, only on success, establishes the
+ * ambient context via
  * `runWithTenantContext` so `currentScope()` / `requireTenantContext()` work
  * for the duration of `fn`. If resolution throws, `fn` is never called — there
  * is no window in which tenant-scoped code runs without a verified context.

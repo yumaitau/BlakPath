@@ -10,19 +10,28 @@ import { getServerSession, type ServerSession } from '@/lib/auth/session';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,
+  organisationAccessForUser,
   type UserMembership,
 } from './memberships';
 
-export interface StaffShellData {
-  readonly session: ServerSession;
-  readonly organisations: UserMembership[];
-  readonly activeOrganisationId: string;
-}
+export type StaffShellData =
+  | {
+      readonly unavailable: false;
+      readonly session: ServerSession;
+      readonly organisations: UserMembership[];
+      readonly activeOrganisationId: string;
+    }
+  | {
+      /** Active membership of a suspended or closed organisation. */
+      readonly unavailable: true;
+      /** The user has another operational organisation to switch to. */
+      readonly canSwitch: boolean;
+    };
 
 /**
  * Session and membership guard shared by the staff layouts. No staff route
- * renders until the session and active membership have been checked against
- * the database.
+ * renders until the session, active membership and organisation status have
+ * been checked against the database.
  *
  * Redirects carry the requested page as `returnTo` (validated by
  * `safeReturnTo` before any use) so sign-in and the organisation picker can
@@ -45,10 +54,17 @@ export async function loadStaffShell(): Promise<StaffShellData> {
   if (!activeOrganisationId) redirect(selectOrganisationPath(currentPath));
 
   const organisations = await listMembershipsForUser(session.user.id);
+  // An active membership of a suspended or closed organisation is refused
+  // before any staff page renders. The caller shows a generic message that does
+  // not name the status.
+  const access = await organisationAccessForUser(session.user.id, activeOrganisationId);
+  if (access === 'unavailable') {
+    return { unavailable: true, canSwitch: organisations.length > 0 };
+  }
   // A stale session can name a membership that was revoked after sign-in. Treat
   // it exactly like no selection, instead of rendering a misleading shell.
   if (!organisations.some((org) => org.organisationId === activeOrganisationId)) {
     redirect(selectOrganisationPath(currentPath));
   }
-  return { session, organisations, activeOrganisationId };
+  return { unavailable: false, session, organisations, activeOrganisationId };
 }

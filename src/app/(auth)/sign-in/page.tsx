@@ -8,7 +8,7 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { signIn } from '@/lib/auth/client';
+import { authClient, signIn } from '@/lib/auth/client';
 import { parseSignInReason, safeReturnTo, type SignInReason } from '@/lib/auth/return-to';
 
 /**
@@ -40,17 +40,28 @@ const REASON_NOTICE: Record<SignInReason, { title: string; body: string }> = {
   },
 };
 
-function subscribeToNothing(): () => void {
-  return () => undefined;
-}
-
 function readReason(): SignInReason | null {
   return parseSignInReason(new URLSearchParams(window.location.search).get('reason'));
 }
 
+/** One message for every SSO failure: nothing about bindings or accounts leaks. */
+const SSO_ERROR =
+  'Single sign-on isn’t available for this account right now. Sign in with your password instead.';
+
 /** Return to the requested in-app page without accepting arbitrary redirect URLs. */
 function safeReturnPath(): string {
   return safeReturnTo(new URLSearchParams(window.location.search).get('returnTo'));
+}
+
+const noSubscription = () => () => {};
+
+/** The SSO callback returns to `/sign-in?error=sso` on any failure. */
+function useSsoFailed(): boolean {
+  return useSyncExternalStore(
+    noSubscription,
+    () => new URLSearchParams(window.location.search).get('error') === 'sso',
+    () => false,
+  );
 }
 
 export default function SignInPage() {
@@ -60,6 +71,7 @@ export default function SignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [passkeyPending, setPasskeyPending] = useState(false);
+  const [ssoPending, setSsoPending] = useState(false);
 
   const emailRef = useRef<HTMLInputElement>(null);
 
@@ -69,9 +81,11 @@ export default function SignInPage() {
 
   // The query string is not available during prerender: the server snapshot
   // is "no notice" and the browser fills it in after hydration.
-  const reason = useSyncExternalStore(subscribeToNothing, readReason, () => null);
-
+  const reason = useSyncExternalStore(noSubscription, readReason, () => null);
   const notice = reason ? REASON_NOTICE[reason] : null;
+
+  const ssoFailed = useSsoFailed();
+  const shownError = error ?? (ssoFailed ? SSO_ERROR : null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -114,17 +128,36 @@ export default function SignInPage() {
     window.location.href = safeReturnPath();
   }
 
+  async function handleSso() {
+    setError(null);
+    if (!email.includes('@')) {
+      setError('Enter your work email to continue with single sign-on.');
+      return;
+    }
+    setSsoPending(true);
+    const { data, error: ssoError } = await authClient.$fetch<{ url: string }>(
+      '/sso/sign-in',
+      { method: 'POST', body: { email } },
+    );
+    if (ssoError || !data?.url) {
+      setError(SSO_ERROR);
+      setSsoPending(false);
+      return;
+    }
+    window.location.href = data.url;
+  }
+
   return (
     <AuthCard title="Sign in" subtitle="Sign in to your organisation to continue.">
-      {notice && !error ? (
+      {notice && !shownError ? (
         <Alert tone="info" title={notice.title}>
           {notice.body}
         </Alert>
       ) : null}
 
-      {error ? (
+      {shownError ? (
         <Alert tone="destructive" role="alert" title="We couldn’t sign you in">
-          {error}
+          {shownError}
         </Alert>
       ) : null}
 
@@ -195,6 +228,10 @@ export default function SignInPage() {
         disabled={passkeyPending}
       >
         {passkeyPending ? 'Waiting for passkey…' : 'Sign in with a passkey'}
+      </Button>
+
+      <Button type="button" variant="outline" onClick={handleSso} disabled={ssoPending}>
+        {ssoPending ? 'Redirecting…' : 'Sign in with organisation SSO'}
       </Button>
 
       <p className="text-muted-foreground text-center text-sm">

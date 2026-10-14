@@ -46,6 +46,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    a password. That person enrols a passkey or authenticator before the
    organisation tools open.
 10. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+    Liveness and startup use `/api/live`. A public request to `/api/health` is
+    refused; read that report from inside the VPC.
 
 ## Edge and origin
 
@@ -316,8 +318,24 @@ refuses in production.
 4. Record date, operator, source, target, elapsed RTO, verification result
    outside restored environment.
 
+## ClamAV
+
+`infra/k8s/clamav.yaml` runs two non-root scanner pods. Each has a signature
+volume and a readiness PING, so the Service stays empty until clamd answers and
+a node drain keeps one pod Ready. `infra/k8s/clamav-mirror.yaml` is the only
+pod allowed to download signatures from the public mirrors.
+
+The `blakpath-clamav` ServiceAccount must not get an IRSA annotation or a Pod
+Identity association. The scanner network policy does not allow link-local
+metadata. Set the node IMDS hop limit to 1 as well, and enable network policy
+enforcement (#60) or the metadata block is not active.
+
+The signature volume is ReadWriteOnce. Schedule the two scanner pods in the
+same availability zone as their volumes, on two different nodes.
+
 ## Alarms
 
 Audit divergence, scan backlog past handling target, dead-letter email/export/
-retention/webhook jobs, backup failures, sustained 5xx / readiness failures.
+retention/webhook jobs, backup failures, sustained 5xx / readiness failures,
+ClamAV signature age above 48 hours.
 See `infra/aws/operational-alerts.example.yaml` for signal mapping.

@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { SessionWatch } from '@/components/auth/session-watch';
 import { TenantKeyUnavailable } from '@/components/encryption/tenant-key-unavailable';
 import { StaffShell } from '@/components/staff/staff-shell';
+import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import {
   membershipRequiresStaffMfa,
   requireStaffMfa,
@@ -25,7 +26,11 @@ import { loadStaffShell } from '@/lib/tenancy/staff-shell';
  * still see the key's status and check it while records are locked.
  */
 export default async function StaffLayout({ children }: { children: ReactNode }) {
-  const { session, organisations, activeOrganisationId } = await loadStaffShell();
+  const shell = await loadStaffShell();
+  // A suspended or closed organisation is refused before the MFA and key
+  // checks. The message does not name the status.
+  if (shell.unavailable) return <OrganisationUnavailable canSwitch={shell.canSwitch} />;
+  const { session, organisations, activeOrganisationId } = shell;
 
   if (await membershipRequiresStaffMfa(session.user.id, activeOrganisationId)) {
     const h = await headers();
