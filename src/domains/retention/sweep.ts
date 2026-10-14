@@ -22,6 +22,7 @@ import {
   applications,
   certificates,
   clients,
+  conflictDeclarations,
   correspondenceItems,
   correspondenceMessages,
   decisionVotes,
@@ -764,6 +765,17 @@ async function anonymiseApplication(
         ),
       );
   }
+  // A member's stated reason for a conflict on this case can describe the
+  // applicant's relationships. The declaration itself stays on the record.
+  await tx
+    .update(conflictDeclarations)
+    .set({ reason: null })
+    .where(
+      and(
+        eq(conflictDeclarations.organisationId, organisationId),
+        eq(conflictDeclarations.applicationId, applicationId),
+      ),
+    );
   await tx
     .update(applicationStatusHistory)
     .set({ note: null })

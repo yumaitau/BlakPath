@@ -23,6 +23,7 @@ import {
   subjectFromContext,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { listMeetingsForApplication } from '@/domains/meetings/service';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
 import { openDecisionRows, sealRationale } from '@/lib/encryption/tenant-fields';
 import {
@@ -43,6 +44,7 @@ import {
   type VoteChoice,
   type VoteTally,
 } from './tally';
+import { resolveMeetingLink } from './meeting-link';
 
 /**
  * Decisions service — tenant-scoped, permission-checked, audited.
@@ -111,6 +113,41 @@ async function conflictedUserIds(applicationId: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.userId));
 }
 
+/** True when the current actor has an active conflict on this case. */
+export async function actorConflictedOnApplication(
+  applicationId: string,
+): Promise<boolean> {
+  const ctx = requireTenantContext();
+  const ids = await conflictedUserIds(applicationId);
+  return ids.has(ctx.userId);
+}
+
+/**
+ * Bind a decision to a meeting on the case's agenda. Refuses a silent
+ * finalisation when the case is already listed and nobody named the sitting.
+ */
+async function linkedMeetingId(
+  applicationId: string,
+  requested: string | null | undefined,
+  existing: string | null,
+): Promise<string | null> {
+  const agenda = await listMeetingsForApplication(applicationId);
+  const resolved = resolveMeetingLink({
+    requestedMeetingId: requested,
+    existingMeetingId: existing,
+    agendaMeetingIds: agenda.map((meeting) => meeting.id),
+  });
+  if (!resolved.ok) {
+    throw new AuthorizationError(
+      'POLICY_DENIED',
+      resolved.reason === 'meeting_required'
+        ? 'Record the meeting where the committee made this decision.'
+        : 'That meeting is not an agenda for this case.',
+    );
+  }
+  return resolved.meetingId;
+}
+
 /** Propose a decision for the committee to consider. */
 export async function proposeDecision(
   applicationId: string,
@@ -125,6 +162,7 @@ export async function proposeDecision(
     throw new DecisionWorkflowError(application.status);
   }
   assertNotConflicted(ctx.userId, await conflictedUserIds(applicationId));
+  const meetingId = await linkedMeetingId(applicationId, input.meetingId, null);
 
   const scope = currentScope();
   const id = uuidv7();
@@ -140,6 +178,7 @@ export async function proposeDecision(
         scope.insertValues({
           id,
           applicationId,
+          meetingId,
           proposedByUserId: ctx.userId,
           proposedOutcome: input.outcome,
           rationale,
@@ -300,6 +339,11 @@ export async function finaliseDecision(
     throw new AuthorizationError('POLICY_DENIED', 'This decision cannot be finalised.');
   }
   assertNotConflicted(ctx.userId, await conflictedUserIds(decision.applicationId));
+  const meetingId = await linkedMeetingId(
+    decision.applicationId,
+    input.meetingId,
+    decision.meetingId,
+  );
 
   const scope = currentScope();
   // Decision write and case transition share one transaction. If the case is
@@ -315,6 +359,7 @@ export async function finaliseDecision(
         finalOutcome: input.outcome,
         finalisedByUserId: ctx.userId,
         finalisedAt: new Date(),
+        meetingId,
         version: nextRowVersion(),
       })
       .where(
@@ -346,7 +391,10 @@ export async function finaliseDecision(
         resourceId: decisionId,
         result: 'success',
         reason: input.note ? 'decision.finalise_note' : null,
-        after: { data: { outcome: input.outcome }, allow: ['outcome'] },
+        after: {
+          data: { outcome: input.outcome, meetingId: row.meetingId },
+          allow: ['outcome', 'meetingId'],
+        },
       },
       tx,
     );

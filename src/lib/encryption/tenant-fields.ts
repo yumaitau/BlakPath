@@ -350,6 +350,74 @@ export async function openDecisionRows<
   }));
 }
 
+/** Committee minutes and the quorum note, written by a person. */
+export async function sealMeetingText(
+  organisationId: string,
+  rowId: string,
+  column: 'minutes' | 'quorum_note',
+  value: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('meetings', column, rowId), value);
+}
+
+export async function openMeetingRows<
+  T extends { id: string; minutes: string | null; quorumNote: string | null },
+>(organisationId: string, rows: readonly T[]): Promise<T[]> {
+  return mapRows(organisationId, rows, async (scope, row) => ({
+    ...row,
+    minutes: await openText(scope, bind('meetings', 'minutes', row.id), row.minutes),
+    quorumNote: await openText(
+      scope,
+      bind('meetings', 'quorum_note', row.id),
+      row.quorumNote,
+    ),
+  }));
+}
+
+export async function sealAttendanceNote(
+  organisationId: string,
+  rowId: string,
+  note: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('meeting_attendance', 'note', rowId), note);
+}
+
+export async function openAttendanceRows<T extends { id: string; note: string | null }>(
+  organisationId: string,
+  rows: readonly T[],
+): Promise<T[]> {
+  return mapRows(organisationId, rows, async (scope, row) => ({
+    ...row,
+    note: await openText(scope, bind('meeting_attendance', 'note', row.id), row.note),
+  }));
+}
+
+/** A member's stated reason for a conflict of interest. */
+export async function sealConflictReason(
+  organisationId: string,
+  rowId: string,
+  reason: string | null,
+): Promise<string | null> {
+  const scope = await scopeFor(organisationId);
+  return sealText(scope, bind('conflict_declarations', 'reason', rowId), reason);
+}
+
+export async function openConflictRows<T extends { id: string; reason: string | null }>(
+  organisationId: string,
+  rows: readonly T[],
+): Promise<T[]> {
+  return mapRows(organisationId, rows, async (scope, row) => ({
+    ...row,
+    reason: await openText(
+      scope,
+      bind('conflict_declarations', 'reason', row.id),
+      row.reason,
+    ),
+  }));
+}
+
 export async function sealWebhookSecret(
   organisationId: string,
   rowId: string,

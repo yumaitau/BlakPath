@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 interface GovernanceComment {
   id: string;
@@ -30,8 +31,14 @@ interface GovernanceDecision {
   proposedOutcome: string;
   finalOutcome: string | null;
   rationale: string | null;
+  meetingId: string | null;
   currentUserVote: string | null;
   tally: { for: number; against: number; abstain: number; total: number };
+}
+
+interface AgendaMeetingOption {
+  id: string;
+  title: string;
 }
 
 interface GovernancePermissions {
@@ -48,6 +55,58 @@ export interface CaseGovernanceWorkspaceProps {
   reviews: GovernanceReview[];
   decisions: GovernanceDecision[];
   permissions: GovernancePermissions;
+  /** The signed-in member has an active conflict on this case. */
+  actorConflicted?: boolean;
+  /** Sittings whose agenda includes this case. */
+  agendaMeetings?: AgendaMeetingOption[];
+  /** When set, proposals and outcomes are recorded against this meeting. */
+  lockedMeetingId?: string | undefined;
+  hideReviews?: boolean;
+}
+
+function MeetingChoice({
+  idPrefix,
+  lockedMeetingId,
+  agendaMeetings,
+  meetingId,
+  onChange,
+  disabled = false,
+}: {
+  idPrefix: string;
+  lockedMeetingId?: string | undefined;
+  agendaMeetings: AgendaMeetingOption[];
+  meetingId: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  if (lockedMeetingId) {
+    return (
+      <p className="text-muted-foreground text-sm">
+        This outcome is recorded against the open meeting.
+      </p>
+    );
+  }
+  if (agendaMeetings.length === 0) return null;
+  return (
+    <div>
+      <Label htmlFor={`${idPrefix}-meeting`}>Meeting where this was decided</Label>
+      <select
+        id={`${idPrefix}-meeting`}
+        value={meetingId}
+        onChange={(event) => onChange(event.target.value)}
+        className="border-input bg-surface mt-2 h-10 w-full rounded-md border px-3 text-sm"
+        disabled={disabled}
+        required
+      >
+        <option value="">Choose the meeting</option>
+        {agendaMeetings.map((meeting) => (
+          <option key={meeting.id} value={meeting.id}>
+            {meeting.title}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function label(value: string): string {
@@ -73,8 +132,13 @@ export function CaseGovernanceWorkspace({
   reviews,
   decisions,
   permissions,
+  actorConflicted = false,
+  agendaMeetings = [],
+  lockedMeetingId,
+  hideReviews = false,
 }: CaseGovernanceWorkspaceProps) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -86,6 +150,9 @@ export function CaseGovernanceWorkspace({
   const [voteNote, setVoteNote] = useState('');
   const [finalOutcome, setFinalOutcome] = useState('deferred');
   const [finalNote, setFinalNote] = useState('');
+  const [meetingId, setMeetingId] = useState(
+    lockedMeetingId ?? agendaMeetings[0]?.id ?? '',
+  );
 
   async function send(
     key: string,
@@ -129,8 +196,11 @@ export function CaseGovernanceWorkspace({
     ['in_review', 'ready_for_committee'].includes(applicationStatus);
   const canProposeDecision =
     permissions.proposeDecision &&
+    !actorConflicted &&
     ['ready_for_committee', 'in_committee'].includes(applicationStatus) &&
     !decisions.some((decision) => decision.status === 'proposed');
+  const meetingRequired = Boolean(lockedMeetingId) || agendaMeetings.length > 0;
+  const meetingPayload = lockedMeetingId || meetingId || undefined;
 
   return (
     <section
@@ -160,163 +230,172 @@ export function CaseGovernanceWorkspace({
       ) : null}
 
       <div className="mt-8 grid gap-10 lg:grid-cols-2">
-        <section aria-labelledby="reviews-heading">
-          <h3 id="reviews-heading" className="text-lg font-semibold">
-            Staff reviews
-          </h3>
-          {permissions.createReview ? (
-            <p className="text-muted-foreground mt-2 text-sm">
-              Comments can be added to a draft review. They stay part of the human record.
-            </p>
-          ) : null}
-          {reviews.length === 0 ? (
-            <p className="text-muted-foreground mt-2 text-sm">
-              No review has been recorded. Once the case reaches review, an authorised
-              worker can add their observations for the committee.
-            </p>
-          ) : (
-            <ul className="divide-border mt-3 divide-y">
-              {reviews.map((review) => (
-                <li key={review.id} className="py-4 first:pt-0">
-                  <div className="flex items-center justify-between gap-3">
-                    <Badge
-                      tone={review.status === 'finalised' ? 'success' : 'warning'}
-                      icon={review.status === 'finalised' ? LockKeyhole : CircleDot}
-                    >
-                      {label(review.status)}
-                    </Badge>
-                    {permissions.finaliseReview ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={busy !== null}
-                        onClick={() =>
-                          void send(
-                            `review:${review.id}`,
-                            `/api/reviews/${review.id}`,
-                            'PATCH',
-                            {
-                              operation:
-                                review.status === 'finalised' ? 'reopen' : 'finalise',
-                            },
-                            review.status === 'finalised'
-                              ? 'Review reopened for further work.'
-                              : 'Review finalised for the committee record.',
-                          )
-                        }
+        {hideReviews ? null : (
+          <section aria-labelledby="reviews-heading">
+            <h3 id="reviews-heading" className="text-lg font-semibold">
+              Staff reviews
+            </h3>
+            {permissions.createReview ? (
+              <p className="text-muted-foreground mt-2 text-sm">
+                Comments can be added to a draft review. They stay part of the human
+                record.
+              </p>
+            ) : null}
+            {reviews.length === 0 ? (
+              <p className="text-muted-foreground mt-2 text-sm">
+                No review has been recorded. Once the case reaches review, an authorised
+                worker can add their observations for the committee.
+              </p>
+            ) : (
+              <ul className="divide-border mt-3 divide-y">
+                {reviews.map((review) => (
+                  <li key={review.id} className="py-4 first:pt-0">
+                    <div className="flex items-center justify-between gap-3">
+                      <Badge
+                        tone={review.status === 'finalised' ? 'success' : 'warning'}
+                        icon={review.status === 'finalised' ? LockKeyhole : CircleDot}
                       >
-                        {busy === `review:${review.id}`
-                          ? 'Saving…'
-                          : review.status === 'finalised'
-                            ? 'Reopen review'
-                            : 'Finalise review'}
-                      </Button>
+                        {label(review.status)}
+                      </Badge>
+                      {permissions.finaliseReview ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void send(
+                              `review:${review.id}`,
+                              `/api/reviews/${review.id}`,
+                              'PATCH',
+                              {
+                                operation:
+                                  review.status === 'finalised' ? 'reopen' : 'finalise',
+                              },
+                              review.status === 'finalised'
+                                ? 'Review reopened for further work.'
+                                : 'Review finalised for the committee record.',
+                            )
+                          }
+                        >
+                          {busy === `review:${review.id}`
+                            ? 'Saving…'
+                            : review.status === 'finalised'
+                              ? 'Reopen review'
+                              : 'Finalise review'}
+                        </Button>
+                      ) : null}
+                    </div>
+                    <p className="mt-3 text-sm whitespace-pre-wrap">{review.content}</p>
+                    {review.comments.length === 0 ? (
+                      <p className="text-muted-foreground mt-3 text-sm">
+                        No comments on this review.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2" aria-label="Review comments">
+                        {review.comments.map((comment) => (
+                          <li key={comment.id} className="text-sm">
+                            <p className="whitespace-pre-wrap">{comment.body}</p>
+                            <p className="text-muted-foreground mt-1 text-xs">
+                              {displayDate(comment.createdAt)}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {permissions.createReview && review.status === 'draft' ? (
+                      <form
+                        className="mt-4"
+                        onSubmit={async (event) => {
+                          event.preventDefault();
+                          const saved = await send(
+                            `comment:${review.id}`,
+                            `/api/reviews/${review.id}/comments`,
+                            'POST',
+                            { body: commentDrafts[review.id] ?? '' },
+                            'Comment added to the draft review.',
+                          );
+                          if (saved) {
+                            setCommentDrafts((current) => ({
+                              ...current,
+                              [review.id]: '',
+                            }));
+                          }
+                        }}
+                      >
+                        <Label htmlFor={`review-comment-${review.id}`}>
+                          Comment on this review
+                        </Label>
+                        <Textarea
+                          id={`review-comment-${review.id}`}
+                          className="mt-2"
+                          value={commentDrafts[review.id] ?? ''}
+                          maxLength={5000}
+                          required
+                          onChange={(event) =>
+                            setCommentDrafts((current) => ({
+                              ...current,
+                              [review.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <Button
+                          className="mt-3"
+                          type="submit"
+                          size="sm"
+                          disabled={busy !== null}
+                        >
+                          {busy === `comment:${review.id}` ? 'Adding…' : 'Add comment'}
+                        </Button>
+                      </form>
                     ) : null}
-                  </div>
-                  <p className="mt-3 text-sm whitespace-pre-wrap">{review.content}</p>
-                  {review.comments.length === 0 ? (
-                    <p className="text-muted-foreground mt-3 text-sm">
-                      No comments on this review.
-                    </p>
-                  ) : (
-                    <ul className="mt-3 space-y-2" aria-label="Review comments">
-                      {review.comments.map((comment) => (
-                        <li key={comment.id} className="text-sm">
-                          <p className="whitespace-pre-wrap">{comment.body}</p>
-                          <p className="text-muted-foreground mt-1 text-xs">
-                            {displayDate(comment.createdAt)}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {permissions.createReview && review.status === 'draft' ? (
-                    <form
-                      className="mt-4"
-                      onSubmit={async (event) => {
-                        event.preventDefault();
-                        const saved = await send(
-                          `comment:${review.id}`,
-                          `/api/reviews/${review.id}/comments`,
-                          'POST',
-                          { body: commentDrafts[review.id] ?? '' },
-                          'Comment added to the draft review.',
-                        );
-                        if (saved) {
-                          setCommentDrafts((current) => ({
-                            ...current,
-                            [review.id]: '',
-                          }));
-                        }
-                      }}
-                    >
-                      <Label htmlFor={`review-comment-${review.id}`}>
-                        Comment on this review
-                      </Label>
-                      <Textarea
-                        id={`review-comment-${review.id}`}
-                        className="mt-2"
-                        value={commentDrafts[review.id] ?? ''}
-                        maxLength={5000}
-                        required
-                        onChange={(event) =>
-                          setCommentDrafts((current) => ({
-                            ...current,
-                            [review.id]: event.target.value,
-                          }))
-                        }
-                      />
-                      <Button
-                        className="mt-3"
-                        type="submit"
-                        size="sm"
-                        disabled={busy !== null}
-                      >
-                        {busy === `comment:${review.id}` ? 'Adding…' : 'Add comment'}
-                      </Button>
-                    </form>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
+                  </li>
+                ))}
+              </ul>
+            )}
 
-          {canCreateReview ? (
-            <form
-              className="border-border mt-6 border-t pt-5"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                const saved = await send(
-                  'create-review',
-                  `/api/applications/${applicationId}/reviews`,
-                  'POST',
-                  { content: reviewContent },
-                  'Draft review recorded.',
-                );
-                if (saved) setReviewContent('');
-              }}
-            >
-              <Label htmlFor="review-observations">Reviewer observations</Label>
-              <Textarea
-                id="review-observations"
-                className="mt-2"
-                value={reviewContent}
-                onChange={(event) => setReviewContent(event.target.value)}
-                maxLength={20000}
-                required
-              />
-              <Button className="mt-3" type="submit" disabled={busy !== null}>
-                {busy === 'create-review' ? 'Recording…' : 'Record draft review'}
-              </Button>
-            </form>
-          ) : null}
-        </section>
+            {canCreateReview ? (
+              <form
+                className="border-border mt-6 border-t pt-5"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  const saved = await send(
+                    'create-review',
+                    `/api/applications/${applicationId}/reviews`,
+                    'POST',
+                    { content: reviewContent },
+                    'Draft review recorded.',
+                  );
+                  if (saved) setReviewContent('');
+                }}
+              >
+                <Label htmlFor="review-observations">Reviewer observations</Label>
+                <Textarea
+                  id="review-observations"
+                  className="mt-2"
+                  value={reviewContent}
+                  onChange={(event) => setReviewContent(event.target.value)}
+                  maxLength={20000}
+                  required
+                />
+                <Button className="mt-3" type="submit" disabled={busy !== null}>
+                  {busy === 'create-review' ? 'Recording…' : 'Record draft review'}
+                </Button>
+              </form>
+            ) : null}
+          </section>
+        )}
 
         <section aria-labelledby="committee-heading">
           <h3 id="committee-heading" className="text-lg font-semibold">
             Committee decisions
           </h3>
+          {actorConflicted ? (
+            <Alert tone="warning" title="Conflict of interest" className="mt-3">
+              You have declared a conflict on this case. You cannot propose, vote, or
+              record the outcome.
+            </Alert>
+          ) : null}
           {decisions.length === 0 ? (
             <p className="text-muted-foreground mt-2 text-sm">
               No decision has been proposed. Decision controls become available when the
@@ -346,9 +425,12 @@ export function CaseGovernanceWorkspace({
                     Recorded votes: {decision.tally.for} for, {decision.tally.against}{' '}
                     against, {decision.tally.abstain} abstained. This tally does not
                     decide the outcome.
+                    {decision.meetingId ? ' Recorded against a committee meeting.' : ''}
                   </p>
 
-                  {decision.status === 'proposed' && permissions.vote ? (
+                  {decision.status === 'proposed' &&
+                  permissions.vote &&
+                  !actorConflicted ? (
                     <form
                       className="mt-4 grid gap-3"
                       onSubmit={async (event) => {
@@ -406,7 +488,9 @@ export function CaseGovernanceWorkspace({
                     </form>
                   ) : null}
 
-                  {decision.status === 'proposed' && permissions.finaliseDecision ? (
+                  {decision.status === 'proposed' &&
+                  permissions.finaliseDecision &&
+                  !actorConflicted ? (
                     <form
                       className="border-border mt-5 border-t pt-4"
                       onSubmit={async (event) => {
@@ -419,6 +503,7 @@ export function CaseGovernanceWorkspace({
                             operation: 'finalise',
                             outcome: finalOutcome,
                             note: finalNote || undefined,
+                            meetingId: meetingPayload,
                           },
                           'The committee outcome was recorded by an authorised person.',
                         );
@@ -458,7 +543,22 @@ export function CaseGovernanceWorkspace({
                             maxLength={5000}
                           />
                         </div>
-                        <Button type="submit" disabled={busy !== null}>
+                        <MeetingChoice
+                          idPrefix={`final-${decision.id}`}
+                          lockedMeetingId={lockedMeetingId}
+                          agendaMeetings={agendaMeetings}
+                          meetingId={meetingId}
+                          onChange={setMeetingId}
+                          disabled={!hydrated}
+                        />
+                        <Button
+                          type="submit"
+                          disabled={
+                            !hydrated ||
+                            busy !== null ||
+                            (meetingRequired && !meetingPayload)
+                          }
+                        >
                           {busy === `finalise:${decision.id}`
                             ? 'Recording…'
                             : 'Record final outcome'}
@@ -480,7 +580,11 @@ export function CaseGovernanceWorkspace({
                   'propose-decision',
                   `/api/applications/${applicationId}/decisions`,
                   'POST',
-                  { outcome: proposedOutcome, rationale: rationale || undefined },
+                  {
+                    outcome: proposedOutcome,
+                    rationale: rationale || undefined,
+                    meetingId: meetingPayload,
+                  },
                   'Decision proposal recorded for the committee.',
                 );
                 if (saved) setRationale('');
@@ -514,7 +618,20 @@ export function CaseGovernanceWorkspace({
                     maxLength={5000}
                   />
                 </div>
-                <Button type="submit" disabled={busy !== null}>
+                <MeetingChoice
+                  idPrefix="propose"
+                  lockedMeetingId={lockedMeetingId}
+                  agendaMeetings={agendaMeetings}
+                  meetingId={meetingId}
+                  onChange={setMeetingId}
+                  disabled={!hydrated}
+                />
+                <Button
+                  type="submit"
+                  disabled={
+                    !hydrated || busy !== null || (meetingRequired && !meetingPayload)
+                  }
+                >
                   {busy === 'propose-decision'
                     ? 'Recording…'
                     : 'Record decision proposal'}

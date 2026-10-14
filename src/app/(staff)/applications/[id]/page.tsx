@@ -42,7 +42,12 @@ import {
   listTemplates,
   maySendKind,
 } from '@/domains/correspondence';
-import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
+import {
+  actorConflictedOnApplication,
+  getDecisionWithVotes,
+  listDecisions,
+} from '@/domains/decisions';
+import { listMeetingsForApplication } from '@/domains/meetings';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
 import {
   canReadFamilyLinks,
@@ -146,9 +151,14 @@ export default async function ApplicationDetailPage({
           : Promise.resolve([]),
       ]);
       const application = record.application;
-      const decisionDetails = await Promise.all(
-        decisions.map((decision) => getDecisionWithVotes(decision.id)),
-      );
+      const [decisionDetails, actorConflicted, agendaMeetings] = await Promise.all([
+        Promise.all(decisions.map((decision) => getDecisionWithVotes(decision.id))),
+        actorConflictedOnApplication(id),
+        listMeetingsForApplication(id).catch((error: unknown) => {
+          if (error instanceof AuthorizationError) return [];
+          throw error;
+        }),
+      ]);
       const actions = availableActions(application.status as ApplicationStatus)
         .filter((action) => hasAny(subject, permissionsForAction(action)))
         .map((action) => ({ value: action, label: actionLabels[action] ?? action }));
@@ -259,6 +269,7 @@ export default async function ApplicationDetailPage({
             proposedOutcome: decision.proposedOutcome,
             finalOutcome: decision.finalOutcome,
             rationale: decision.rationale,
+            meetingId: decision.meetingId,
             currentUserVote:
               votes.find((vote) => vote.voterUserId === ctx.userId)?.choice ?? null,
             tally,
@@ -270,6 +281,11 @@ export default async function ApplicationDetailPage({
             vote: hasPermission(subject, 'decision:vote'),
             finaliseDecision: hasPermission(subject, 'decision:finalise'),
           },
+          actorConflicted,
+          agendaMeetings: agendaMeetings.map((meeting) => ({
+            id: meeting.id,
+            title: meeting.title,
+          })),
         },
         decisions: decisions.map((decision) => ({
           id: decision.id,
