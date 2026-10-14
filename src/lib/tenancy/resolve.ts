@@ -1,10 +1,20 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/client';
-import { memberships, membershipRoles, roles, rolePermissions } from '@/db/schema';
+import {
+  memberships,
+  membershipRoles,
+  organisations,
+  roles,
+  rolePermissions,
+} from '@/db/schema';
 import type { Permission } from '@/lib/permissions/catalog';
 import { isPermission } from '@/lib/permissions/catalog';
 import type { TenantContext } from './context';
 import { TenantContextError } from './context';
+import {
+  isOrganisationOperational,
+  OrganisationUnavailableError,
+} from './organisation-status';
 
 /**
  * The trusted tenancy boundary.
@@ -15,7 +25,8 @@ import { TenantContextError } from './context';
  * exact organisation, and only then loads the user's roles and effective
  * permissions. If there is no active membership, it throws and no context is
  * produced, so nothing downstream can act within a tenant the user does not
- * belong to.
+ * belong to. A suspended or closed organisation is refused even when the
+ * membership itself is active.
  *
  * This function is the single entry point that route handlers, server actions
  * and job runners call before doing any tenant-scoped work (usually via
@@ -44,6 +55,8 @@ export interface ResolveTenantInput {
  * Verify the user's active membership of the given organisation and build the
  * TenantContext. Throws {@link TenantContextError} when no active membership
  * exists — callers must treat a throw as "access denied for this tenant".
+ * Throws {@link OrganisationUnavailableError} when the membership is active
+ * but the organisation is suspended or closed.
  */
 export async function resolveTenantContext(
   input: ResolveTenantInput,
@@ -63,8 +76,12 @@ export async function resolveTenantContext(
   //    part of the WHERE clause, never applied after the fact — an inactive or
   //    absent membership yields no row and therefore no context.
   const membershipRow = await db
-    .select({ id: memberships.id })
+    .select({
+      id: memberships.id,
+      organisationStatus: organisations.status,
+    })
     .from(memberships)
+    .innerJoin(organisations, eq(memberships.organisationId, organisations.id))
     .where(
       and(
         eq(memberships.userId, userId),
@@ -78,6 +95,11 @@ export async function resolveTenantContext(
   if (!membership) {
     // Generic, non-leaking failure: do not reveal whether the org exists.
     throw new TenantContextError('You do not have active access to this organisation.');
+  }
+  if (!isOrganisationOperational(membership.organisationStatus)) {
+    // The caller is a member, so the refusal may say the organisation cannot
+    // be used. It still must not name suspended versus closed.
+    throw new OrganisationUnavailableError();
   }
 
   // 2. Load the roles attached to this membership.

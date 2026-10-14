@@ -238,6 +238,8 @@ export type AuditAction =
   | 'integration.credentials_rotated'
   | 'integration.call_succeeded'
   | 'integration.call_failed'
+  // Organisation lifecycle. Recorded on the platform chain by an operator.
+  | 'organisation.status_changed'
   // Admin / configuration.
   | 'admin.organisation_updated'
   | 'admin.settings_updated'

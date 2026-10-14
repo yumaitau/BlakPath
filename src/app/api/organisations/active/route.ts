@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { SESSION_DATA_COOKIE_NAMES } from '@/lib/auth';
 import { requireSession, UnauthenticatedError } from '@/lib/auth/session';
 import { TenantContextError } from '@/lib/tenancy/context';
+import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 import { setActiveOrganisation } from '@/domains/tenancy-selection/service';
 
 /**
@@ -59,7 +60,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     // A missing/inactive membership surfaces as TenantContextError. Collapse it
     // to a generic 403 so a caller cannot distinguish "forbidden" from
     // "does not exist".
-    if (error instanceof TenantContextError) {
+    if (
+      error instanceof TenantContextError ||
+      error instanceof OrganisationUnavailableError
+    ) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });

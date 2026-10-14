@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { TenantKeyUnavailable } from '@/components/encryption/tenant-key-unavailable';
 import { StaffShell } from '@/components/staff/staff-shell';
+import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import {
   membershipRequiresStaffMfa,
   requireStaffMfa,
@@ -27,7 +28,11 @@ export default async function StaffLayout({ children }: { children: ReactNode })
   const session = await getServerSession();
   if (!session) redirect('/sign-in');
 
-  const { organisations, activeOrganisationId } = await loadStaffShell();
+  const shell = await loadStaffShell();
+  // A suspended or closed organisation is refused before the MFA and key
+  // checks. The message does not name the status.
+  if (shell.unavailable) return <OrganisationUnavailable canSwitch={shell.canSwitch} />;
+  const { organisations, activeOrganisationId } = shell;
 
   if (await membershipRequiresStaffMfa(session.user.id, activeOrganisationId)) {
     const h = await headers();

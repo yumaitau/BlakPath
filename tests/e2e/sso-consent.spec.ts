@@ -2,9 +2,10 @@ import { expect, test } from './helpers/page';
 import { signInAndSelectOrganisation } from './helpers/auth';
 
 /**
- * SSO bindings + consent gate (#26). Federated session issuance stays open
- * work; this locks the shippable surface: bindings list gated, consent CRUD
- * works, representative access without live consent is denied and audited.
+ * SSO bindings + consent gate (#26). Federated sign-in itself is covered by
+ * `sso-sign-in.spec.ts`; this locks the shippable surface: bindings list
+ * gated, consent CRUD works, representative access without live consent is
+ * denied and audited.
  */
 test('sso: bindings list is admin-gated, anonymous denied', async ({ page, request }) => {
   const anon = await request.get('/api/sso/providers');
