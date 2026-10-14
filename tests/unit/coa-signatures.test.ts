@@ -1,5 +1,9 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  createHolderBinding,
+  holderDetailsMatch,
+} from '@/domains/certificates/holder-binding';
 
 // Dynamic imports inside tests (after vi.stubEnv): the env proxy caches on
 // first read, and static imports would freeze it before stubs apply.
@@ -88,6 +92,73 @@ describe('coa signatures (local key)', () => {
       keyId: tampered.keyId,
     });
     expect(badSig.signatureValid).toBe(false);
+  });
+
+  it('binds version 2 to the holder hash and still verifies version 1', async () => {
+    vi.stubEnv('COA_SIGNING_LOCAL_KEY_PEM', pem);
+    const { signCoaPayload, verifyCoaSignature, canonicalCoaPayload } =
+      await freshSigning();
+    const { canonicalCoaPayloadV2 } = await import('@/domains/certificates');
+    const v1 = payload(canonicalCoaPayload);
+    const v1Seal = await signCoaPayload(v1);
+    expect(
+      (
+        await verifyCoaSignature({
+          canonical: v1,
+          signatureB64: v1Seal.signatureB64,
+          algorithm: v1Seal.algorithm,
+          keyId: v1Seal.keyId,
+        })
+      ).signatureValid,
+    ).toBe(true);
+
+    const binding = createHolderBinding({ name: 'Jane Smith', dateOfBirth: null });
+    const shared = {
+      certificateId: 'cert-1',
+      organisationId: 'org-1',
+      reference: 'CERT-2026-000001',
+      applicationId: 'app-1',
+      decisionId: 'dec-1',
+      outcome: 'confirmed',
+      verificationCode: 'ABCD1234',
+      signedAt: '2026-09-11T00:00:00.000Z',
+      holderDobHash: null,
+      pdfSha256: 'ab'.repeat(32),
+    };
+    const v2 = canonicalCoaPayloadV2({
+      v: 2,
+      ...shared,
+      holderNameHash: binding.nameHash,
+    });
+    const v2Seal = await signCoaPayload(v2);
+    expect(
+      (
+        await verifyCoaSignature({
+          canonical: v2,
+          signatureB64: v2Seal.signatureB64,
+          algorithm: v2Seal.algorithm,
+          keyId: v2Seal.keyId,
+        })
+      ).signatureValid,
+    ).toBe(true);
+    const forged = canonicalCoaPayloadV2({
+      v: 2,
+      ...shared,
+      holderNameHash: createHolderBinding({ name: 'Other Person', dateOfBirth: null })
+        .nameHash,
+    });
+    expect(
+      (
+        await verifyCoaSignature({
+          canonical: forged,
+          signatureB64: v2Seal.signatureB64,
+          algorithm: v2Seal.algorithm,
+          keyId: v2Seal.keyId,
+        })
+      ).signatureValid,
+    ).toBe(false);
+    expect(holderDetailsMatch({ ...binding, name: 'Other Person' })).toBe(false);
+    expect(holderDetailsMatch({ ...binding, name: 'Jane Smith' })).toBe(true);
   });
 
   it('refuses local keys in production', async () => {

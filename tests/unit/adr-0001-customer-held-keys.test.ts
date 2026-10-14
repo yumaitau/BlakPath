@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Locks ADR 0001 and the two docs it updates so a later edit cannot describe
- * the unimplemented custody design as code that already runs, or drop a mode
- * the decision requires.
+ * Locks ADR 0001 and the two docs it updates to the custody code on main:
+ * the stored custody modes, the pending_validation handshake and the escrow
+ * opt-in. Tier 2 must stay marked as not implemented, and no doc may describe
+ * the env master key as a KMS-managed control.
  */
 
 const root = process.cwd();
@@ -37,6 +38,19 @@ describe('ADR 0001 customer-held keys', () => {
     expect(adr).toContain('purpose');
     expect(adr).toContain('5 minutes');
     expect(adr).toContain('plaintext in');
+  });
+
+  it('matches the custody code on main', () => {
+    for (const mode of ['blakpath_managed', 'client_owned', 'client_owned_escrow']) {
+      expect(adr).toContain(`\`${mode}\``);
+    }
+    expect(adr).toContain('pending_validation');
+    expect(adr).toContain('validateOrganisationKey');
+    expect(adr).toContain('recordEscrowOptIn');
+    expect(adr).toContain('withdrawEscrow');
+    expect(adr).toContain('key-escrow-runbook.md');
+    expect(adr).toContain('customer-held-keys.md');
+    expect(adr).not.toContain('Decision only');
   });
 
   it('covers escrow threats, release, and the regulatory notes', () => {
