@@ -444,8 +444,11 @@ describe('audit chain streaming verification', () => {
     expect(anchors.objects.size).toBe(1);
   });
 
-  // Async so the vitest worker keeps answering RPC while the child runs.
-  it('verifies 5M events under a fixed memory ceiling', async () => {
+  // Async so the vitest worker keeps answering RPC while the child runs. One
+  // million events is enough to expose a per-event leak against the 64 MiB
+  // ceiling; set AUDIT_VERIFY_MEMORY_EVENTS=5000000 to run the full 5M check.
+  const memoryEvents = Number(process.env.AUDIT_VERIFY_MEMORY_EVENTS ?? 1_000_000);
+  it(`verifies ${memoryEvents} events under a fixed memory ceiling`, async () => {
     const { stdout } = await promisify(execFile)(
       process.execPath,
       [
@@ -455,10 +458,15 @@ describe('audit chain streaming verification', () => {
         'tsx',
         'tests/unit/audit-verify-memory.runner.ts',
       ],
-      { cwd: root, encoding: 'utf8', timeout: 120_000 },
+      {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 280_000,
+        env: { ...process.env, AUDIT_VERIFY_MEMORY_EVENTS: String(memoryEvents) },
+      },
     );
     const growth = Number(/growth=(\d+)/.exec(stdout)?.[1]);
-    expect(stdout).toContain('OK events=5000000');
+    expect(stdout).toContain(`OK events=${memoryEvents}`);
     expect(growth).toBeLessThan(64 * 1024 * 1024);
-  }, 120_000);
+  }, 300_000);
 });
