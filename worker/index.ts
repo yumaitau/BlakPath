@@ -6,9 +6,11 @@ import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
 import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
 import { closeMalwareScanDlq, deadLetterExhaustedScan } from '@/lib/queues/dlq';
 import { malwareScanBackoffStrategy } from '@/lib/queues/scan-policy';
+import { isOrganisationAcceptingWork } from '@/lib/tenancy/organisation-status';
 import { startKeyHealthLoop } from './key-health-loop';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { queueFailureSignal } from './operational-signals';
+import { startSignatureAgeMonitor } from './signature-age-monitor';
 import { startAuthEmailWorker } from './auth-email';
 import { startTenantScheduleSync } from './scheduler';
 import { rememberPausedJob } from './tenant-pause-ledger';
@@ -57,6 +59,15 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const worker = new Worker<TenantJob>(
     queueName,
     async (job, token) => {
+      // Drop work for a suspended or closed organisation instead of retrying
+      // it. A lookup failure still throws, so an outage is retried.
+      if (!(await isOrganisationAcceptingWork(job.data.organisationId))) {
+        childLogger.info(
+          { jobId: job.id, organisationId: job.data.organisationId },
+          'skipping job for unavailable organisation',
+        );
+        return;
+      }
       const moveToDelayed = async (timestamp: number): Promise<void> => {
         if (!token) throw new Error('tenant key pause requires the BullMQ lock token');
         await job.moveToDelayed(timestamp, token);
@@ -125,6 +136,7 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
 let shuttingDown = false;
 let stopTenantScheduleSync: (() => void) | null = null;
+let stopSignatureAgeMonitor: (() => void) | null = null;
 const authEmailWorker = startAuthEmailWorker(connection, workerLogger);
 let stopKeyHealth: (() => void) | null = null;
 
@@ -149,6 +161,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   deadline.unref();
 
   try {
+    stopSignatureAgeMonitor?.();
     stopTenantScheduleSync?.();
     stopKeyHealth?.();
     await Promise.all([authEmailWorker.close(), ...workers.map((w) => w.close())]);
@@ -173,6 +186,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function main(): Promise<void> {
+  stopSignatureAgeMonitor = startSignatureAgeMonitor(workerLogger);
   // Create (or update) the durable per-tenant maintenance schedules before
   // accepting jobs. A startup failure is intentional: a worker without its
   // integrity/retention schedules is not healthy enough to serve.

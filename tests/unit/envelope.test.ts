@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DekCache } from '@/lib/encryption/dek-cache';
 import { TenantKeyUnavailableError } from '@/lib/encryption/errors';
-import { encryptFieldV1 } from '@/lib/encryption/envelope';
+import { encryptFieldV1 } from '../helpers/legacy-envelope';
 import type { KeyProvider } from '@/lib/encryption/key-provider';
 import { LocalKeyProvider } from '@/lib/encryption/local-provider';
 import { platformScope, scopeFor } from '@/lib/encryption/scope';

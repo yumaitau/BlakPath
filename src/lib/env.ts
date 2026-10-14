@@ -50,6 +50,8 @@ const serverSchema = z
     // The platform CMK wraps non-tenant data. The local root and the KMS
     // endpoint are development/CI only and are refused in production.
     // ENCRYPTION_MASTER_KEY remains only so version-1 ciphertext can be read.
+    // Nothing writes version 1. Once the encryption backfill has completed for
+    // every organisation, no stored value needs it and it can be unset.
     // See docs/adr/0001-customer-held-keys.md.
     PLATFORM_KMS_KEY_ARN: z.string().min(20).optional(),
     KMS_ENDPOINT: z.string().url().optional(),
@@ -119,9 +121,15 @@ const serverSchema = z
     COA_SIGNING_ALGORITHM: z.string().max(50).optional(),
     COA_SIGNING_LOCAL_KEY_PEM: z.string().min(1).optional(),
     // Entra ID OIDC client for federated sign-in. Unset = SSO unavailable.
-    SSO_ENTRA_ISSUER: z.string().url().optional(),
+    // The issuer is per tenant (organisation_sso_providers.issuer), not env.
     SSO_ENTRA_CLIENT_ID: z.string().min(1).optional(),
     SSO_ENTRA_CLIENT_SECRET: z.string().min(1).optional(),
+    // Dedicated key sealing SSO flow transactions (state, nonce, PKCE
+    // verifier). Never reuse BETTER_AUTH_SECRET. Unset = SSO unavailable.
+    SSO_STATE_SECRET: z
+      .string()
+      .min(32, 'SSO_STATE_SECRET must be >= 32 chars')
+      .optional(),
 
     // Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),

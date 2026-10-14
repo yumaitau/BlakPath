@@ -14,5 +14,8 @@ src/db/migrations/
 coverage/
 dist/
 
+# Verbatim GNU licence text. Reformatting breaks GitHub licence detection.
+LICENSE
+
 # Vendored SIL OFL font binaries.
 src/domains/certificates/fonts/

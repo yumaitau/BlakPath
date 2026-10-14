@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   sets: [] as unknown[],
   sent: [] as Array<{ to: string; subject: string; text: string }>,
   token: 'sealed-join-token-value',
+  opened: [] as unknown[][],
 }));
 
 vi.mock('@/db/tenant-db', () => {
@@ -39,8 +40,11 @@ vi.mock('@/db/tenant-db', () => {
   };
 });
 
-vi.mock('@/lib/encryption/envelope', () => ({
-  decryptField: vi.fn(() => state.token),
+vi.mock('@/lib/encryption/tenant-fields', () => ({
+  openInvitationToken: vi.fn(async (...args: unknown[]) => {
+    state.opened.push(args);
+    return state.token;
+  }),
 }));
 
 vi.mock('@/lib/email/mailer', () => ({
@@ -61,6 +65,7 @@ beforeEach(() => {
   state.results.length = 0;
   state.sets.length = 0;
   state.sent.length = 0;
+  state.opened.length = 0;
 });
 
 describe('deliverInvitationEmail', () => {
@@ -72,7 +77,15 @@ describe('deliverInvitationEmail', () => {
         status: 'pending',
         expiresAt: new Date(Date.now() + 86_400_000),
         tokenHash: 'hash-1',
-        tokenSeal: { v: 1, iv: 'a', tag: 'b', wrappedDek: 'c', ciphertext: 'd' },
+        tokenSeal: {
+          v: 2,
+          kid: 'arn#1',
+          ctx: { org_id: 'org-1', purpose: 'field' },
+          iv: 'a',
+          tag: 'b',
+          wrappedDek: 'c',
+          ciphertext: 'd',
+        },
         roleName: 'Member',
         organisationName: 'Example Council',
       },
@@ -90,6 +103,12 @@ describe('deliverInvitationEmail', () => {
 
     await deliverInvitationEmail(job);
 
+    // The seal is opened under the tenant key, bound to this invitation row.
+    expect(state.opened[0]?.slice(0, 3)).toEqual([
+      'org-1',
+      'membership_invitations',
+      'inv-1',
+    ]);
     expect(state.sent).toHaveLength(1);
     expect(state.sent[0]?.to).toBe(recipient);
     expect(state.sent[0]?.text).toContain(`/join/${state.token}`);

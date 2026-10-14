@@ -7,14 +7,18 @@ import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
+import { assertOrganisationOperational } from '@/lib/tenancy/organisation-status';
 import { env } from '@/lib/env';
 import { queueInvitationEmail } from '@/lib/email/queue';
-import { encryptField } from '@/lib/encryption/envelope';
 import { logger } from '@/lib/observability/logger';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { parseFieldsJson, validateResponse, type FormField } from '@/lib/forms/fields';
-import { openFormResponses, sealFormResponse } from '@/lib/encryption/tenant-fields';
+import {
+  openFormResponses,
+  sealFormResponse,
+  sealInvitationToken,
+} from '@/lib/encryption/tenant-fields';
 import {
   createFormSchema,
   createInvitationSchema,
@@ -216,13 +220,19 @@ export async function createInvitation(
   const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
 
   const scope = currentScope();
+  // The id is fixed before sealing so the token seal is bound to this row.
+  const id = uuidv7();
+  const tokenSeal = input.recipientEmail
+    ? await sealInvitationToken(scope.organisationId, 'form_invitations', id, token)
+    : null;
   const inserted = await scope.db
     .insert(formInvitations)
     .values(
       scope.insertValues({
+        id,
         formId,
         tokenHash: hashToken(token),
-        tokenSeal: input.recipientEmail ? encryptField(token) : null,
+        tokenSeal,
         recipientName: input.recipientName ?? null,
         recipientEmail: input.recipientEmail ?? null,
         sentByUserId: ctx.userId,
@@ -371,6 +381,10 @@ async function resolveUsableInvitation(
   const form = formRows[0];
   // Only a published form can be completed via a link.
   if (!form || form.status !== 'published') throw new FormTokenError();
+
+  // Suspended and closed organisations refuse the link before any write
+  // (opened timestamp, response row). The error does not name the status.
+  await assertOrganisationOperational(invitation.organisationId);
 
   return { invitation, form };
 }

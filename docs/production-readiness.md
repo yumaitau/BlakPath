@@ -48,6 +48,8 @@ region.
       penetration-test scope.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
       (or reviewed equivalents) and complete an on-call test notification.
+- [ ] After ClamAV is applied, record 72 hours that include at least three
+      signature updates and zero `blakpath-clamav` container restarts.
 - [ ] Deploy the SES sender (`infra/aws/ses-sending.example.yaml`, ADR 0090).
       An invitation and a password reset must reach an external mailbox with
       `dkim=pass spf=pass dmarc=pass`, and simulator bounce/complaint events
@@ -59,10 +61,21 @@ region.
 
 ## Signals and response
 
-`/api/health` reports process and dependency health. `/api/ready` is for load
-balancers and returns 503 when PostgreSQL, Redis or evidence storage is down.
-ClamAV is visible in both reports but does not remove the whole web service from
-rotation: uploads remain quarantined until scanning succeeds.
+`/api/live` is process liveness (Kubernetes liveness and startup probes, and
+the container `HEALTHCHECK`). It does not touch PostgreSQL, Redis, storage or
+ClamAV, so a dependency blip marks pods NotReady instead of restarting them.
+`/api/ready` is the readiness probe and the ALB target health check. It returns
+503 when PostgreSQL, Redis or evidence storage is down, with `timeoutSeconds: 3`
+and `failureThreshold: 3`. ClamAV is visible but a missing scanner does not
+remove the web service from rotation, and that probe is capped below one second.
+Dependency results are cached for five seconds on each pod. Uploads remain
+quarantined until scanning succeeds.
+
+`/api/health` is the detailed operator report (service, region, coarse checks).
+The public edge returns 403 for that path, and the app refuses any request that
+arrived through the load balancer or Cloudflare. Operators read it from inside
+the VPC (port-forward the web Service, or curl the pod). The ALB health check
+stays on `/api/ready` and does not use the detailed report.
 
 Alert on:
 
@@ -72,11 +85,12 @@ Alert on:
   (`evidence_quarantine_backlog`);
 - failed or dead-lettered email, export, retention and webhook jobs;
 - failed backup jobs or restore-drill failures;
-- sustained 5xx/readiness failures.
+- sustained 5xx/readiness failures;
+- ClamAV signature age above 48 hours.
 
 The stable log signals are `queue_job_exhausted`, `audit_integrity_failure`,
-`clamav_unavailable`, `evidence_quarantine_backlog` and
-`readiness_dependency_down`. Response steps are in
+`clamav_unavailable`, `clamav_signature_age`, `evidence_quarantine_backlog`
+and `readiness_dependency_down`. Response steps are in
 [`operations-runbook.md`](operations-runbook.md). Signal records contain only
 opaque ids and coarse dependency states; job payloads and applicant data are not
 included.
