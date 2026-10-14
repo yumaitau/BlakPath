@@ -43,4 +43,5 @@ ALTER TABLE "disposal_authority_signoffs" ADD CONSTRAINT "disposal_authority_sig
 ALTER TABLE "disposal_authority_signoffs" ADD CONSTRAINT "disposal_authority_signoffs_signed_off_by_user_id_users_id_fk" FOREIGN KEY ("signed_off_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "destruction_register_org_destroyed_idx" ON "destruction_register" USING btree ("organisation_id","destroyed_at");--> statement-breakpoint
 CREATE INDEX "disposal_authority_signoffs_org_class_idx" ON "disposal_authority_signoffs" USING btree ("organisation_id","jurisdiction","disposal_class");--> statement-breakpoint
-ALTER TABLE "retention_policies" ADD CONSTRAINT "retention_policies_approved_by_user_id_users_id_fk" FOREIGN KEY ("approved_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;
+ALTER TABLE "retention_policies" ADD CONSTRAINT "retention_policies_approved_by_user_id_users_id_fk" FOREIGN KEY ("approved_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action NOT VALID;--> statement-breakpoint
+ALTER TABLE "retention_policies" VALIDATE CONSTRAINT "retention_policies_approved_by_user_id_users_id_fk";
