@@ -596,6 +596,13 @@ export async function assignApplication(
   });
 }
 
+/** An applicant-only actor tried to move a matter they are not named on. */
+class ApplicantNotOwnerError extends AuthorizationError {
+  constructor() {
+    super('POLICY_DENIED');
+  }
+}
+
 /**
  * Write a workflow transition on `executor` without auditing.
  *
@@ -620,16 +627,10 @@ export async function applyApplicationTransition(
   const existing = loaded.row;
 
   // Applicant-only actors cannot move someone else's matter, even if a
-  // permission key such as application:create would otherwise match.
+  // permission key such as application:create would otherwise match. The
+  // caller audits the refusal after the transaction rolls back.
   if (!applicantMayActOnCase(ctx.roles, ctx.userId, existing.applicantUserId)) {
-    await recordAudit({
-      action: TRANSITIONS[action].audit,
-      resourceType: 'application',
-      resourceId: id,
-      result: 'denied',
-      reason: 'application.applicant_not_owner',
-    });
-    throw new AuthorizationError('POLICY_DENIED');
+    throw new ApplicantNotOwnerError();
   }
 
   const from = existing.status as ApplicationStatus;
@@ -734,11 +735,24 @@ export async function transitionApplication(
   action: ApplicationAction,
   rawInput: TransitionApplicationInput = {},
 ): Promise<ApplicationRow> {
-  const applied = await currentScope().db.transaction(async (tx) => {
-    const result = await applyApplicationTransition(tx, id, action, rawInput);
-    await recordApplicationTransitionAudit(action, result, tx);
-    return result;
-  });
+  let applied: AppliedApplicationTransition;
+  try {
+    applied = await currentScope().db.transaction(async (tx) => {
+      const result = await applyApplicationTransition(tx, id, action, rawInput);
+      await recordApplicationTransitionAudit(action, result, tx);
+      return result;
+    });
+  } catch (error) {
+    if (!(error instanceof ApplicantNotOwnerError)) throw error;
+    await recordAudit({
+      action: TRANSITIONS[action].audit,
+      resourceType: 'application',
+      resourceId: id,
+      result: 'denied',
+      reason: 'application.applicant_not_owner',
+    });
+    throw error;
+  }
   const [opened] = await openApplicationRows(applied.row.organisationId, [applied.row]);
   return must(opened, 'application');
 }
