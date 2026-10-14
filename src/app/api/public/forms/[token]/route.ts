@@ -5,6 +5,7 @@ import { FormTokenError, submitPublicResponse } from '@/domains/forms';
 import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
 import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
+import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 
 /**
  * POST /api/public/forms/[token] — submit a form response, unauthenticated.
@@ -47,6 +48,9 @@ export async function POST(
     await submitPublicResponse(token, answers, ipAddress);
     return NextResponse.json({ ok: true });
   } catch (error) {
+    if (error instanceof OrganisationUnavailableError) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
     if (error instanceof FormTokenError) {
       return NextResponse.json(
         { error: 'This form link is invalid or has expired.' },

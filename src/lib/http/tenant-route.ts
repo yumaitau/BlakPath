@@ -11,6 +11,7 @@ import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy'
 import { env } from '@/lib/env';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
+import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 import { clientIp } from '@/lib/http/client-ip';
 import { logger } from '@/lib/observability/logger';
 import { ApplicationWorkflowError } from '@/domains/applications/workflow';
@@ -128,7 +129,11 @@ export function toErrorResponse(error: unknown): NextResponse {
       { status: 409 },
     );
   }
-  if (error instanceof AuthorizationError || error instanceof TenantContextError) {
+  if (
+    error instanceof AuthorizationError ||
+    error instanceof TenantContextError ||
+    error instanceof OrganisationUnavailableError
+  ) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   // Unknown error: log server-side for diagnosis, return nothing sensitive.

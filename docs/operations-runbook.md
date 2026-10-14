@@ -43,12 +43,15 @@ incident ticket.
 ## `readiness_dependency_down`
 
 1. The load balancer should already have removed the affected web task because
-   `/api/ready` returns 503.
+   `/api/ready` returns 503. Liveness is `/api/live`, so the pod goes NotReady
+   and is not restarted.
 2. Check the coarse `database`, `redis` and `storage` statuses in the same event,
    then use the managed service’s own telemetry. Connection strings never belong
-   in logs or tickets.
+   in logs or tickets. Read `/api/health` from inside the VPC; the public edge
+   refuses that report.
 3. Restore the dependency, confirm `/api/live` remained healthy and `/api/ready`
-   returns 200, then confirm the alarm returns to OK.
+   returns 200, then confirm the alarm returns to OK. Cached readiness can lag
+   the recovery by about five seconds.
 
 ## Backup or restore failure
 

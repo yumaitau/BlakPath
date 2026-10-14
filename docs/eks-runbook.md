@@ -46,6 +46,8 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    a password. That person enrols a passkey or authenticator before the
    organisation tools open.
 10. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+    Liveness and startup use `/api/live`. A public request to `/api/health` is
+    refused; read that report from inside the VPC.
 
 ## Edge and origin
 

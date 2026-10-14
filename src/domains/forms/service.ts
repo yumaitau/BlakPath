@@ -7,6 +7,7 @@ import { forms, formInvitations, formResponses } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
+import { assertOrganisationOperational } from '@/lib/tenancy/organisation-status';
 import { env } from '@/lib/env';
 import { queueInvitationEmail } from '@/lib/email/queue';
 import { logger } from '@/lib/observability/logger';
@@ -380,6 +381,10 @@ async function resolveUsableInvitation(
   const form = formRows[0];
   // Only a published form can be completed via a link.
   if (!form || form.status !== 'published') throw new FormTokenError();
+
+  // Suspended and closed organisations refuse the link before any write
+  // (opened timestamp, response row). The error does not name the status.
+  await assertOrganisationOperational(invitation.organisationId);
 
   return { invitation, form };
 }
