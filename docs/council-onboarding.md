@@ -50,7 +50,8 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 3. `POST /api/organisation/activation` (step-up). It refuses unless the key
    is validated. Then open `publicApplicationsOpen` when ready.
 4. Confirm audit chain clean, alarms firing to on-call, SES suppression flow
-   wired (`POST /api/email/events` checks the pinned SNS topic).
+   wired (`POST /api/email/events` checks the pinned SNS topic) and the email
+   checks in `docs/eks-runbook.md` passed (`dkim=pass spf=pass dmarc=pass`).
 
 ## 4. Legacy import
 

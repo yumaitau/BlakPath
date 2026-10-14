@@ -38,6 +38,61 @@ function addRequiredUrl(
   return parsed;
 }
 
+/** Extract the domain of `Name <user@domain>` or a bare `user@domain`. */
+function senderDomain(value: string | undefined): string | null {
+  if (!value) return null;
+  const address = /<([^<>\s]+)>\s*$/.exec(value)?.[1] ?? value.trim();
+  const match = /^[^@\s]+@([a-z0-9-]+(\.[a-z0-9-]+)+)$/i.exec(address);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * Exactly one production sender: the SES v2 API under the workload role,
+ * tagged with a configuration set whose events reach /api/email/events.
+ * See docs/adr/0090-production-email-sender.md.
+ */
+function validateEmailSender(environment: ProductionEnvironment): ReadinessIssue[] {
+  const issues: ReadinessIssue[] = [];
+  if (environment.EMAIL_TRANSPORT !== 'ses') {
+    issues.push({
+      key: 'EMAIL_TRANSPORT',
+      message: 'must be ses (SES API under the workload role)',
+    });
+  }
+  for (const key of ['SMTP_USER', 'SMTP_PASSWORD'] as const) {
+    if (environment[key]) {
+      issues.push({
+        key,
+        message: 'static SMTP credentials must be unset; use the SES API workload role',
+      });
+    }
+  }
+  for (const key of ['PAPERBOY_URL', 'PAPERBOY_API_KEY'] as const) {
+    if (environment[key]) {
+      issues.push({ key, message: 'must be unset; SES is the only production sender' });
+    }
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(environment.SES_CONFIGURATION_SET ?? '')) {
+    issues.push({
+      key: 'SES_CONFIGURATION_SET',
+      message:
+        'must name the SES configuration set that publishes bounce/complaint events',
+    });
+  }
+  const domain = senderDomain(environment.SMTP_FROM);
+  if (
+    !domain ||
+    /(^|\.)(local|localhost|example|invalid|test)$/.test(domain) ||
+    /(^|\.)example\.(com|org|net)$/.test(domain)
+  ) {
+    issues.push({
+      key: 'SMTP_FROM',
+      message: 'must be an address on the verified production sending domain',
+    });
+  }
+  return issues;
+}
+
 /** Return key-only, non-secret reasons a production deployment must be blocked. */
 export function validateProductionReadiness(
   environment: ProductionEnvironment,
@@ -113,13 +168,6 @@ export function validateProductionReadiness(
       message: 'static S3 credentials must be unset; use a workload role',
     });
   }
-  if (environment.SMTP_USER || environment.SMTP_PASSWORD) {
-    issues.push({
-      key: 'SMTP_USER',
-      message:
-        'standing SMTP credentials must be unset; send mail with the workload role',
-    });
-  }
   const kmsKeyArn = /^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i;
   if (!kmsKeyArn.test(environment.S3_KMS_KEY_ID ?? '')) {
     issues.push({
@@ -151,12 +199,15 @@ export function validateProductionReadiness(
   }
 
   addRequiredUrl(issues, environment, 'OTEL_EXPORTER_OTLP_ENDPOINT', 'https:');
-  for (const key of ['CLAMAV_HOST', 'SMTP_HOST'] as const) {
-    const value = environment[key];
-    if (!value || LOCAL_HOST.test(value)) {
-      issues.push({ key, message: 'must use a non-local production service' });
-    }
+  const clamavHost = environment.CLAMAV_HOST;
+  if (!clamavHost || LOCAL_HOST.test(clamavHost)) {
+    issues.push({
+      key: 'CLAMAV_HOST',
+      message: 'must use a non-local production service',
+    });
   }
+
+  issues.push(...validateEmailSender(environment));
 
   const originSecret = environment.ORIGIN_VERIFY_SECRET;
   if (!originSecret || originSecret.length < 32 || PLACEHOLDER.test(originSecret)) {
