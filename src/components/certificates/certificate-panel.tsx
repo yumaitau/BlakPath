@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { withStepUp } from '@/lib/auth/step-up-flow';
 import { cn } from '@/lib/utils';
 
@@ -77,7 +78,10 @@ export function CertificatePanel({
         return;
       }
       if (!res.ok) {
-        setError('That action could not be completed. Check your permissions.');
+        const conflict = await readConflictMessage(res);
+        setError(
+          conflict ?? 'That action could not be completed. Check your permissions.',
+        );
         return;
       }
       router.refresh();

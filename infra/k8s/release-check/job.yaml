@@ -17,7 +17,9 @@ spec:
       labels:
         app.kubernetes.io/name: blakpath-release-check
     spec:
-      serviceAccountName: blakpath
+      # Reads env only: no AWS role and no API token.
+      serviceAccountName: blakpath-migrate
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
@@ -52,8 +54,9 @@ spec:
               memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
-              drop: ['ALL']
+              drop: [ALL]
         - name: worker
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:7350f7c
           imagePullPolicy: IfNotPresent
@@ -81,5 +84,6 @@ spec:
               memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
-              drop: ['ALL']
+              drop: [ALL]
