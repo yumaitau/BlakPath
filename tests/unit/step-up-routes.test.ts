@@ -22,6 +22,7 @@ import { POST as createSso } from '@/app/api/sso/providers/route';
 import { POST as createWebhook } from '@/app/api/webhooks/route';
 import { POST as sendLetter } from '@/app/api/applications/[id]/correspondence/[correspondenceId]/send/route';
 import { POST as notifyEvidenceRequest } from '@/app/api/applications/[id]/evidence-requests/[requestId]/notify/route';
+import { POST as redeliverWebhook } from '@/app/api/webhooks/[id]/deliveries/[deliveryId]/redeliver/route';
 
 const params = {
   params: Promise.resolve({ id: '00000000-0000-7000-8000-000000000001' }),
@@ -89,6 +90,16 @@ describe('listed routes require a fresh session', () => {
     await expectStale(
       createWebhook(post() as never),
       STEP_UP_ROUTES['POST /api/webhooks'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      redeliverWebhook(post() as never, {
+        params: Promise.resolve({
+          id: '00000000-0000-7000-8000-000000000001',
+          deliveryId: '00000000-0000-7000-8000-000000000002',
+        }),
+      }),
+      STEP_UP_ROUTES['POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver'],
     );
     requireRecentAuth.mockClear();
     await expectStale(

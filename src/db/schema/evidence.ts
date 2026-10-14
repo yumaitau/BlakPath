@@ -12,6 +12,7 @@ import { evidenceReceiptChannel, evidenceRequestStatus, evidenceStatus } from '.
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { formInvitations } from './forms';
 
 /**
  * Evidence tables (Phase 3).
@@ -63,9 +64,13 @@ export const evidenceRequests = pgTable(
 );
 
 /**
- * A single uploaded file attached to an application. `status` drives the
- * fail-secure lifecycle: pending → quarantined → (clean | infected | rejected).
- * Only `clean` items expose an `evidenceKey` and may ever be downloaded.
+ * A single uploaded file. `status` drives the fail-secure lifecycle:
+ * pending → quarantined → (clean | infected | rejected). Only `clean` items
+ * expose an `evidenceKey` and may ever be downloaded.
+ *
+ * `applicationId` is set for case uploads. A public form file may be
+ * quarantined and scanned before staff link the response to a case, so the
+ * application is null until then and `formInvitationId` is the binding.
  */
 export const evidence = pgTable(
   'evidence',
@@ -74,9 +79,13 @@ export const evidence = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').references(() => applications.id, {
+      onDelete: 'cascade',
+    }),
+    /** Set when the bytes came from a public form file field. */
+    formInvitationId: refId('form_invitation_id').references(() => formInvitations.id, {
+      onDelete: 'set null',
+    }),
     uploadedByUserId: refId('uploaded_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -123,6 +132,10 @@ export const evidence = pgTable(
   },
   (table) => [
     index('evidence_org_application_idx').on(table.organisationId, table.applicationId),
+    index('evidence_org_form_invitation_idx').on(
+      table.organisationId,
+      table.formInvitationId,
+    ),
     index('evidence_org_status_idx').on(table.organisationId, table.status),
   ],
 );
@@ -151,6 +164,10 @@ export const evidenceRelations = relations(evidence, ({ one }) => ({
   application: one(applications, {
     fields: [evidence.applicationId],
     references: [applications.id],
+  }),
+  formInvitation: one(formInvitations, {
+    fields: [evidence.formInvitationId],
+    references: [formInvitations.id],
   }),
   uploadedBy: one(users, {
     fields: [evidence.uploadedByUserId],

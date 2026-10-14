@@ -611,7 +611,7 @@ export async function revokeCertificate(
 
   const scope = currentScope();
   await beforeConditionalWrite();
-  return scope.db.transaction(async (tx) => {
+  const row = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(certificates)
       .set({
@@ -649,6 +649,22 @@ export async function revokeCertificate(
     );
     return row;
   });
+
+  // Tell integrators the credential is no longer valid. Fires only after the
+  // conditional revoke and its audit committed. The free-text reason stays on the
+  // certificate row; the payload carries ids and the timestamp.
+  await emitWebhookEventSafe({
+    organisationId: ctx.organisationId,
+    event: 'certificate.revoked',
+    payload: {
+      certificateId: id,
+      reference: row.reference,
+      applicationId: row.applicationId,
+      revokedAt: row.revokedAt?.toISOString() ?? null,
+    },
+    correlationId: ctx.correlationId,
+  });
+  return row;
 }
 
 /** Mint a short-lived download URL for a signed, non-revoked certificate. */

@@ -4,7 +4,7 @@ import type { Logger } from 'pino';
 import { QueueName, type TenantJob } from '@/lib/queues';
 import { processEvidenceScan } from '@/domains/evidence';
 import { sweepEvidenceScans } from '@/domains/evidence/sweep';
-import { processWebhookDelivery } from '@/domains/webhooks';
+import { processWebhookDelivery, sweepStaleWebhookDeliveries } from '@/domains/webhooks';
 import { processExport } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
@@ -209,6 +209,13 @@ const auditVerifyProcessor: ProcessorFn = async (job, logger) => {
  */
 const webhookProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
+  if (job.name === 'sweep') {
+    // Scheduled stale-delivery sweep (see worker/scheduler.ts). It shares the
+    // webhook queue so it adds no worker or DB-pool slots of its own.
+    const result = await sweepStaleWebhookDeliveries({ organisationId, correlationId });
+    logger.info({ jobId: job.id, organisationId, ...result }, 'webhook sweep finished');
+    return;
+  }
   const deliveryId = (job.data as { deliveryId?: unknown }).deliveryId;
   if (typeof deliveryId !== 'string' || deliveryId.length === 0) {
     logger.error({ jobId: job.id }, 'webhook job missing deliveryId — dropping');

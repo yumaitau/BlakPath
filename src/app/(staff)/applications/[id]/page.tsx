@@ -22,6 +22,10 @@ import {
   type CorrespondenceTemplateOption,
 } from '@/components/correspondence/correspondence-panel';
 import {
+  CaseFormResponses,
+  type CaseFormResponseView,
+} from '@/components/forms/case-form-responses';
+import {
   availableActions,
   getApplicationCaseRecord,
   permissionsForAction,
@@ -36,6 +40,7 @@ import {
 } from '@/domains/correspondence';
 import { getDecisionWithVotes, listDecisions } from '@/domains/decisions';
 import { listForApplication, listRequestsForApplication } from '@/domains/evidence';
+import { listResponsesForApplication } from '@/domains/forms';
 import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
 import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
@@ -57,6 +62,7 @@ interface LoadedData {
     evidenceRequests: CorrespondenceEvidenceOption[];
     certificates: CorrespondenceCertificateOption[];
   };
+  formResponses: CaseFormResponseView[];
 }
 
 const actionLabels: Record<string, string> = {
@@ -85,15 +91,23 @@ export default async function ApplicationDetailPage({
     // A malformed id cannot exist: refuse it like any unreadable record.
     if (!isRecordId(id)) throw new AuthorizationError('POLICY_DENIED');
     data = await withRequestTenant(async (ctx) => {
-      const [record, evidence, evidenceRequests, reviews, decisions, certificates] =
-        await Promise.all([
-          getApplicationCaseRecord(id),
-          listForApplication(id),
-          listRequestsForApplication(id),
-          listReviewsForApplication(id),
-          listDecisions(id),
-          listCertificates(id),
-        ]);
+      const [
+        record,
+        evidence,
+        evidenceRequests,
+        reviews,
+        decisions,
+        certificates,
+        formResponses,
+      ] = await Promise.all([
+        getApplicationCaseRecord(id),
+        listForApplication(id),
+        listRequestsForApplication(id),
+        listReviewsForApplication(id),
+        listDecisions(id),
+        listCertificates(id),
+        listResponsesForApplication(id),
+      ]);
       const subject = subjectFromContext(ctx);
       const allowedKinds = CORRESPONDENCE_KINDS.filter((kind) =>
         maySendKind(kind, subject.permissions),
@@ -271,6 +285,16 @@ export default async function ApplicationDetailPage({
             status: certificate.status,
           })),
         },
+        formResponses: formResponses.map((response) => ({
+          id: response.id,
+          formId: response.formId,
+          formTitle: response.formTitle,
+          fields: response.fields,
+          respondentName: response.respondentName,
+          respondentEmail: response.respondentEmail,
+          submittedAt: response.submittedAt.toISOString(),
+          answers: response.answers,
+        })),
       };
     });
   } catch (error) {
@@ -307,6 +331,8 @@ export default async function ApplicationDetailPage({
         <p className="text-muted-foreground mt-4 text-sm font-medium">Case workspace</p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">{data.reference}</h1>
       </header>
+
+      <CaseFormResponses responses={data.formResponses} />
 
       <ApplicationCaseWorkspace
         key={`case:${data.workspace.status}`}

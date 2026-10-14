@@ -233,6 +233,32 @@ export async function openFormResponses<
   }));
 }
 
+/** JSONB `draft_answers`: a recipient's partial answers, bound to the invitation row. */
+export async function sealFormDraft(
+  organisationId: string,
+  invitationId: string,
+  answers: unknown,
+): Promise<EncryptedFieldV2> {
+  const scope = await scopeFor(organisationId);
+  const sealed = await sealJson(
+    scope,
+    bind('form_invitations', 'draft_answers', invitationId),
+    answers,
+  );
+  if (!sealed) throw new Error('Form draft cannot be empty');
+  return sealed;
+}
+
+export async function openFormDraft(
+  organisationId: string,
+  invitationId: string,
+  stored: unknown,
+): Promise<unknown> {
+  if (stored === null || stored === undefined) return null;
+  const scope = await scopeFor(organisationId);
+  return openJson(scope, bind('form_invitations', 'draft_answers', invitationId), stored);
+}
+
 export async function sealClientContacts(
   organisationId: string,
   rowId: string,

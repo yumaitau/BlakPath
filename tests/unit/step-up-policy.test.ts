@@ -29,6 +29,7 @@ const LISTED_ROUTES = [
   'POST /api/applications/[id]/evidence-requests/[requestId]/notify',
   'POST /api/keys',
   'POST /api/webhooks',
+  'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
   'POST /api/sso/providers',
   'DELETE /api/retention/holds/[id]',
   'DELETE /api/retention/policies/[id]',
@@ -66,6 +67,9 @@ describe('step-up route map', () => {
     ).toBe(STEP_UP_WINDOWS.sensitiveAction);
     expect(STEP_UP_ROUTES['POST /api/keys']).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['POST /api/webhooks']).toBe(STEP_UP_WINDOWS.privileged);
+    expect(
+      STEP_UP_ROUTES['POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver'],
+    ).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['POST /api/sso/providers']).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['DELETE /api/retention/holds/[id]']).toBe(
       STEP_UP_WINDOWS.destructive,

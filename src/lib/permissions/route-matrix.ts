@@ -428,6 +428,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('PATCH', '/api/forms/[id]', anyOf(FORM_MANAGE)),
   route('GET', '/api/forms/[id]/invitations', anyOf(FORM_MANAGE)),
   route('POST', '/api/forms/[id]/invitations', anyOf(FORM_MANAGE)),
+  // Create-a-case also needs `application:create`; attach also needs read of
+  // the target case. Both are checked in the service after this gate.
+  route('POST', '/api/forms/[id]/responses/[responseId]/case', anyOf(FORM_MANAGE), {
+    body: {},
+  }),
   route('POST', '/api/forms/[id]/status', anyOf(FORM_MANAGE), {
     body: { status: 'published' },
   }),
@@ -580,6 +585,35 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   ),
   route(
     'POST',
+    '/api/public/forms/[token]/draft',
+    { kind: 'bearer-token' },
+    {
+      body: { answers: {} },
+      denyStatuses: [404],
+    },
+  ),
+  route(
+    'POST',
+    '/api/public/forms/[token]/files',
+    { kind: 'bearer-token' },
+    {
+      body: {
+        fieldKey: 'matrix_file',
+        fileName: 'matrix.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 10,
+      },
+      denyStatuses: [404],
+    },
+  ),
+  route(
+    'POST',
+    '/api/public/forms/[token]/files/[evidenceId]/complete',
+    { kind: 'bearer-token' },
+    { denyStatuses: [404] },
+  ),
+  route(
+    'POST',
     '/api/public/verify/[code]',
     { kind: 'verification-code' },
     { denyStatuses: [400, 404] },
@@ -716,6 +750,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/webhooks', anyOf(['tenant:configure'])),
   route('DELETE', '/api/webhooks/[id]', anyOf(['tenant:configure'])),
   route('GET', '/api/webhooks/[id]/deliveries', anyOf(['tenant:configure'])),
+  route(
+    'POST',
+    '/api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
+    anyOf(['tenant:configure']),
+  ),
   route('POST', '/api/webhooks/[id]/rotate', anyOf(['tenant:configure'])),
 ];
 

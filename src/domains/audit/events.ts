@@ -109,6 +109,9 @@ export type AuditAction =
   | 'form.invitation_opened'
   | 'form.invitation_revoked'
   | 'form.response_submitted'
+  | 'form.draft_saved'
+  | 'form.response_case_created'
+  | 'form.response_attached'
   // Search.
   | 'search.performed'
   | 'search.result_opened'
@@ -252,6 +255,7 @@ export type AuditAction =
   | 'integration.credentials_rotated'
   | 'integration.call_succeeded'
   | 'integration.call_failed'
+  | 'integration.redelivery_requested'
   // Organisation lifecycle. Recorded on the platform chain by an operator.
   | 'organisation.status_changed'
   // Admin / configuration.

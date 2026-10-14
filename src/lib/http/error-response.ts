@@ -111,6 +111,11 @@ const BY_NAME: Record<string, { status: number; code: string; error: string }> =
     code: 'FORM_TOKEN_INVALID',
     error: 'This form link is invalid or has expired.',
   },
+  FormResponseLinkError: {
+    status: 409,
+    code: 'FORM_RESPONSE_ALREADY_LINKED',
+    error: 'This response is already linked to a case.',
+  },
   // Platform-operator lifecycle routes only; tenant routes never throw it.
   OrganisationNotFoundError: { status: 404, code: 'NOT_FOUND', error: 'Not found' },
   BreakGlassError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },

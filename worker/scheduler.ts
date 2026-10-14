@@ -37,6 +37,14 @@ const SCAN_SWEEP_JOB_OPTS: ScheduledJobOpts = {
   removeOnFail: { age: 7 * 24 * 3600 },
 };
 
+/** The webhook sweep is periodic; the next run retries, so keep it short. */
+const WEBHOOK_SWEEP_JOB_OPTS: ScheduledJobOpts = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 2_000 },
+  removeOnComplete: { age: 24 * 3600, count: 100 },
+  removeOnFail: { age: 7 * 24 * 3600 },
+};
+
 type ScheduledQueue = {
   upsertJobScheduler(
     id: string,
@@ -55,6 +63,7 @@ export interface SchedulerIntervals {
   auditVerifyMs: number;
   retentionSweepMs: number;
   reminderSweepMs?: number;
+  webhookSweepMs?: number;
   keyHealthMs?: number;
   /** How often to redrive stuck evidence scans. Default 5 minutes. */
   evidenceScanSweepMs?: number;
@@ -65,6 +74,8 @@ export interface ReconcileSchedulesInput {
   auditQueue: ScheduledQueue;
   retentionQueue: ScheduledQueue;
   reminderQueue?: ScheduledQueue;
+  /** Webhook queue. Its repeatable job is the stale-delivery sweep. */
+  webhookQueue?: ScheduledQueue;
   keyHealthQueue?: ScheduledQueue;
   /** Malware-scan queue. Its repeatable job is the evidence recovery sweep. */
   malwareScanQueue?: ScheduledQueue;
@@ -77,6 +88,7 @@ export interface ReconcileSchedulesResult {
   auditSchedulers: number;
   retentionSchedulers: number;
   reminderSchedulers: number;
+  webhookSweepSchedulers: number;
   keyHealthSchedulers: number;
   scanSchedulers: number;
   removedSchedulers: number;
@@ -175,61 +187,83 @@ export async function reconcileTenantSchedules(
       },
     );
   }
-  const [auditRemoved, retentionRemoved, reminderRemoved, keyHealthRemoved, scanRemoved] =
-    await Promise.all([
-      reconcileQueue(
-        input.auditQueue,
-        QueueName.AuditVerify,
-        organisationIds,
-        input.intervals.auditVerifyMs,
-        input.includePlatformChain ? [platformId] : [],
-      ),
-      reconcileQueue(
-        input.retentionQueue,
-        QueueName.Retention,
-        organisationIds,
-        input.intervals.retentionSweepMs,
-      ),
-      input.reminderQueue
-        ? reconcileQueue(
-            input.reminderQueue,
-            QueueName.Reminder,
-            organisationIds,
-            input.intervals.reminderSweepMs ?? 900_000,
-          )
-        : Promise.resolve(0),
-      input.keyHealthQueue
-        ? reconcileQueue(
-            input.keyHealthQueue,
-            QueueName.KeyHealth,
-            organisationIds,
-            input.intervals.keyHealthMs ?? 300_000,
-          )
-        : Promise.resolve(0),
-      input.malwareScanQueue
-        ? reconcileQueue(
-            input.malwareScanQueue,
-            QueueName.MalwareScan,
-            organisationIds,
-            input.intervals.evidenceScanSweepMs ?? 300_000,
-            [],
-            SCAN_SWEEP_JOB_OPTS,
-          )
-        : Promise.resolve(0),
-    ]);
+  const [
+    auditRemoved,
+    retentionRemoved,
+    reminderRemoved,
+    webhookSweepRemoved,
+    keyHealthRemoved,
+    scanRemoved,
+  ] = await Promise.all([
+    reconcileQueue(
+      input.auditQueue,
+      QueueName.AuditVerify,
+      organisationIds,
+      input.intervals.auditVerifyMs,
+      input.includePlatformChain ? [platformId] : [],
+    ),
+    reconcileQueue(
+      input.retentionQueue,
+      QueueName.Retention,
+      organisationIds,
+      input.intervals.retentionSweepMs,
+    ),
+    input.reminderQueue
+      ? reconcileQueue(
+          input.reminderQueue,
+          QueueName.Reminder,
+          organisationIds,
+          input.intervals.reminderSweepMs ?? 900_000,
+        )
+      : Promise.resolve(0),
+    input.webhookQueue
+      ? reconcileQueue(
+          input.webhookQueue,
+          QueueName.Webhook,
+          organisationIds,
+          input.intervals.webhookSweepMs ?? 900_000,
+          [],
+          WEBHOOK_SWEEP_JOB_OPTS,
+        )
+      : Promise.resolve(0),
+    input.keyHealthQueue
+      ? reconcileQueue(
+          input.keyHealthQueue,
+          QueueName.KeyHealth,
+          organisationIds,
+          input.intervals.keyHealthMs ?? 300_000,
+        )
+      : Promise.resolve(0),
+    input.malwareScanQueue
+      ? reconcileQueue(
+          input.malwareScanQueue,
+          QueueName.MalwareScan,
+          organisationIds,
+          input.intervals.evidenceScanSweepMs ?? 300_000,
+          [],
+          SCAN_SWEEP_JOB_OPTS,
+        )
+      : Promise.resolve(0),
+  ]);
 
   return {
     auditSchedulers: organisationIds.length,
     retentionSchedulers: organisationIds.length,
     reminderSchedulers: input.reminderQueue ? organisationIds.length : 0,
+    webhookSweepSchedulers: input.webhookQueue ? organisationIds.length : 0,
     keyHealthSchedulers: input.keyHealthQueue ? organisationIds.length : 0,
     scanSchedulers: input.malwareScanQueue ? organisationIds.length : 0,
     removedSchedulers:
-      auditRemoved + retentionRemoved + reminderRemoved + keyHealthRemoved + scanRemoved,
+      auditRemoved +
+      retentionRemoved +
+      reminderRemoved +
+      webhookSweepRemoved +
+      keyHealthRemoved +
+      scanRemoved,
   };
 }
 
-/** Query active tenants and reconcile their audit-verification/retention jobs. */
+/** Query active tenants and reconcile their periodic maintenance jobs. */
 export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
   const active = await db
     .select({ id: organisations.id })
@@ -241,12 +275,14 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
     auditQueue: getQueue(QueueName.AuditVerify),
     retentionQueue: getQueue(QueueName.Retention),
     reminderQueue: getQueue(QueueName.Reminder),
+    webhookQueue: getQueue(QueueName.Webhook),
     keyHealthQueue: getQueue(QueueName.KeyHealth),
     malwareScanQueue: getQueue(QueueName.MalwareScan),
     intervals: {
       auditVerifyMs: env.AUDIT_VERIFY_INTERVAL_MS,
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
       reminderSweepMs: env.REMINDER_SWEEP_INTERVAL_MS,
+      webhookSweepMs: env.WEBHOOK_SWEEP_INTERVAL_MS,
       keyHealthMs: env.KEY_HEALTH_INTERVAL_MS,
       evidenceScanSweepMs: env.EVIDENCE_SCAN_SWEEP_INTERVAL_MS,
     },

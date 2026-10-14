@@ -471,9 +471,11 @@ async function applicationObjectTargets(
 async function disposalBlocked(
   tx: Tx,
   organisationId: string,
-  applicationId: string,
+  applicationId: string | null,
   authorityVerified: boolean,
 ): Promise<boolean> {
+  // A public form file not yet linked to a case has no official record above it.
+  if (applicationId === null) return false;
   const rows = await tx
     .select({ status: applications.status })
     .from(applications)

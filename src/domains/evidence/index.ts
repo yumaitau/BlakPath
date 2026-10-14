@@ -40,12 +40,15 @@ export {
 } from './schemas';
 
 export {
+  attachFormEvidenceToApplication,
   classifyEvidence,
+  completeFormFileUpload,
   completeUpload,
   getDownloadUrl,
   listForApplication,
   listRequestsForApplication,
   processEvidenceScan,
+  requestFormFileUpload,
   requestFurtherEvidence,
   requestUpload,
   type EvidenceRequestRow,

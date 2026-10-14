@@ -41,6 +41,7 @@ export const ENCRYPTED_COLUMNS: readonly InventoryColumn[] = [
   { table: 'consent_records', column: 'wording_snapshot', kind: 'text' },
   { table: 'membership_invitations', column: 'token_seal', kind: 'jsonb' },
   { table: 'form_invitations', column: 'token_seal', kind: 'jsonb' },
+  { table: 'form_invitations', column: 'draft_answers', kind: 'jsonb' },
 ];
 
 /** Object keys that must never appear in operational logs. */
@@ -50,6 +51,7 @@ export const INVENTORY_LOG_FIELDS = [
   'relativeName',
   'community',
   'answers',
+  'draftAnswers',
   'respondentEmail',
   'contactEmail',
   'contactPhone',
