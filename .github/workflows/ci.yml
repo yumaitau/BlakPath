@@ -198,7 +198,12 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
+      # Runtime profile stays development: the production release gate needs
+      # real KMS, SES and managed S3. The server is still a production build
+      # (see the build step), served by `next start`, not `next dev`.
       NODE_ENV: development
+      PLAYWRIGHT_SERVER: production
+      NEXT_TELEMETRY_DISABLED: '1'
       ALLOW_DEV_SEED: '1'
       DATABASE_URL: postgres://blakpath:blakpath@localhost:5432/blakpath_e2e
       REDIS_URL: redis://localhost:6379
@@ -229,6 +234,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - name: Build production server
+        # `next build` must run as production. Playwright then serves this
+        # output with `next start`, which uses far less memory than `next dev`
+        # and has no on-demand compilation.
+        env:
+          NODE_ENV: production
+        run: pnpm build
       - name: Start evidence object storage
         run: |
           # Same digest as docker-compose.yml. Docker Hub no longer serves MinIO.
@@ -276,5 +288,6 @@ jobs:
       - name: Build kustomization
         run: |
           kubectl kustomize infra/k8s > /dev/null
+          kubectl kustomize infra/k8s/cluster > /dev/null
           kubectl kustomize infra/k8s/release-check > /dev/null
           echo "kustomize build OK"

@@ -58,20 +58,25 @@ export async function recordSuppression(raw: {
     )
     .limit(1);
   if (existing.length > 0) return { suppressed: true };
-  const inserted = await db
-    .insert(emailSuppressions)
-    .values({
-      addressHash,
-      kind: input.kind ?? 'bounce',
-      sourceMessageId: input.sourceMessageId ?? null,
-    })
-    .returning({ id: emailSuppressions.id });
-  await recordAudit({
-    action: 'email.suppressed',
-    resourceType: 'email_suppression',
-    resourceId: inserted[0]?.id ?? null,
-    result: 'success',
-    organisationId: null,
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(emailSuppressions)
+      .values({
+        addressHash,
+        kind: input.kind ?? 'bounce',
+        sourceMessageId: input.sourceMessageId ?? null,
+      })
+      .returning({ id: emailSuppressions.id });
+    await recordAudit(
+      {
+        action: 'email.suppressed',
+        resourceType: 'email_suppression',
+        resourceId: inserted[0]?.id ?? null,
+        result: 'success',
+        organisationId: null,
+      },
+      tx,
+    );
   });
   return { suppressed: true };
 }
@@ -92,27 +97,32 @@ export async function clearSuppression(raw: {
   reason?: string;
 }): Promise<{ cleared: boolean }> {
   const input = clearSchema.parse(raw);
-  const updated = await db
-    .update(emailSuppressions)
-    .set({ clearedAt: new Date(), clearedReason: input.reason ?? null })
-    .where(
-      and(
-        eq(emailSuppressions.addressHash, hashAddress(input.address)),
-        isNull(emailSuppressions.clearedAt),
-      ),
-    )
-    .returning({ id: emailSuppressions.id });
-  if (updated.length === 0) return { cleared: false };
-  for (const row of updated) {
-    await recordPlatformAudit({
-      action: 'email.suppression_cleared',
-      resourceType: 'email_suppression',
-      resourceId: row.id,
-      result: 'success',
-      actorUserId: input.actorUserId,
-      // Free text stays on the suppression row; the trail records the code.
-      reason: input.reason ? 'email.suppression_note' : null,
-    });
-  }
-  return { cleared: true };
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(emailSuppressions)
+      .set({ clearedAt: new Date(), clearedReason: input.reason ?? null })
+      .where(
+        and(
+          eq(emailSuppressions.addressHash, hashAddress(input.address)),
+          isNull(emailSuppressions.clearedAt),
+        ),
+      )
+      .returning({ id: emailSuppressions.id });
+    if (updated.length === 0) return { cleared: false };
+    for (const row of updated) {
+      await recordPlatformAudit(
+        {
+          action: 'email.suppression_cleared',
+          resourceType: 'email_suppression',
+          resourceId: row.id,
+          result: 'success',
+          actorUserId: input.actorUserId,
+          // Free text stays on the suppression row; the trail records the code.
+          reason: input.reason ? 'email.suppression_note' : null,
+        },
+        tx,
+      );
+    }
+    return { cleared: true };
+  });
 }

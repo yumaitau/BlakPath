@@ -11,8 +11,8 @@ const state = vi.hoisted(() => ({
   sets: [] as { clearedAt?: unknown; clearedReason?: unknown }[],
 }));
 
-vi.mock('@/db/client', () => ({
-  db: {
+vi.mock('@/db/client', () => {
+  const db = {
     update: () => ({
       set: (values: { clearedAt?: unknown; clearedReason?: unknown }) => {
         state.sets.push(values);
@@ -23,8 +23,10 @@ vi.mock('@/db/client', () => ({
         };
       },
     }),
-  },
-}));
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
+  };
+  return { db };
+});
 
 vi.mock('@/domains/audit/service', () => ({
   recordAudit: vi.fn(),

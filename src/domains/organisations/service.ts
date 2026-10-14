@@ -7,7 +7,6 @@ import {
   OrganisationActivationError,
 } from '@/domains/organisation-keys/activation';
 import { getOrganisationKey } from '@/domains/organisation-keys/service';
-import { logger } from '@/lib/observability/logger';
 import type { OrganisationStatus } from '@/lib/tenancy/organisation-status';
 
 /**
@@ -44,9 +43,9 @@ export interface SetOrganisationStatusInput {
  * Set an organisation's status and audit the change on the platform chain.
  *
  * A no-op (already at the requested status) writes nothing. A move to
- * `active` is refused unless the tenant key is active and validated. If the audit
- * append fails, the status is restored so a lifecycle change is never left
- * without a platform-chain record.
+ * `active` is refused unless the tenant key is active and validated. The update
+ * and its platform-chain event share one transaction, so a lifecycle change is
+ * never left without its record.
  */
 export async function setOrganisationStatus(
   input: SetOrganisationStatusInput,
@@ -73,43 +72,32 @@ export async function setOrganisationStatus(
     throw new OrganisationActivationError();
   }
 
-  await db
-    .update(organisations)
-    .set({ status: input.status, statusReason: input.reason ?? null })
-    .where(eq(organisations.id, current.id));
-
-  try {
-    await recordPlatformAudit({
-      action: 'organisation.status_changed',
-      resourceType: 'organisation',
-      resourceId: current.id,
-      result: 'success',
-      // Free text stays on organisations.status_reason; the trail records the code.
-      reason: input.reason ? 'organisation.status_note' : null,
-      actorUserId: input.actorUserId,
-      actingRole: 'platform-operator',
-      sessionId: input.sessionId,
-      correlationId: input.correlationId,
-      requestId: input.requestId,
-      ipAddress: input.ipAddress ?? null,
-      userAgent: input.userAgent ?? null,
-      before: { data: { status: current.status }, allow: ['status'] },
-      after: { data: { status: input.status }, allow: ['status'] },
-    });
-  } catch (error) {
-    try {
-      await db
-        .update(organisations)
-        .set({ status: current.status, statusReason: current.statusReason ?? null })
-        .where(eq(organisations.id, current.id));
-    } catch (rollbackError) {
-      logger.error(
-        { err: rollbackError, organisationId: current.id },
-        'organisation status rollback failed after audit error',
-      );
-    }
-    throw error;
-  }
+  await db.transaction(async (tx) => {
+    await tx
+      .update(organisations)
+      .set({ status: input.status, statusReason: input.reason ?? null })
+      .where(eq(organisations.id, current.id));
+    await recordPlatformAudit(
+      {
+        action: 'organisation.status_changed',
+        resourceType: 'organisation',
+        resourceId: current.id,
+        result: 'success',
+        // Free text stays on organisations.status_reason; the trail records the code.
+        reason: input.reason ? 'organisation.status_note' : null,
+        actorUserId: input.actorUserId,
+        actingRole: 'platform-operator',
+        sessionId: input.sessionId,
+        correlationId: input.correlationId,
+        requestId: input.requestId,
+        ipAddress: input.ipAddress ?? null,
+        userAgent: input.userAgent ?? null,
+        before: { data: { status: current.status }, allow: ['status'] },
+        after: { data: { status: input.status }, allow: ['status'] },
+      },
+      tx,
+    );
+  });
 
   return { id: current.id, status: input.status };
 }

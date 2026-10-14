@@ -1,6 +1,7 @@
 /**
- * Child process for the 5M-event memory ceiling. Invoked with --expose-gc and a
- * fixed V8 heap. Not a vitest file.
+ * Child process for the audit-verify memory ceiling. Invoked with --expose-gc
+ * and a fixed V8 heap. Not a vitest file. `AUDIT_VERIFY_MEMORY_EVENTS` sets the
+ * chain length (a multiple of the page size); the default is 5M.
  */
 import { computeEventHash, type HashableAuditEvent } from '../../src/domains/audit/hash';
 import {
@@ -10,8 +11,12 @@ import {
   type StoredAuditEvent,
 } from '../../src/domains/audit/verify';
 
-const TOTAL = 5_000_000;
 const PAGE = AUDIT_VERIFY_PAGE_SIZE;
+const TOTAL = Number(process.env.AUDIT_VERIFY_MEMORY_EVENTS ?? 5_000_000);
+if (!Number.isInteger(TOTAL) || TOTAL <= 0 || TOTAL % PAGE !== 0) {
+  console.error(`AUDIT_VERIFY_MEMORY_EVENTS must be a positive multiple of ${PAGE}`);
+  process.exit(1);
+}
 const CEILING_BYTES = 64 * 1024 * 1024;
 
 const gc: () => void = (() => {
