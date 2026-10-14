@@ -2,10 +2,10 @@ import { and, eq } from 'drizzle-orm';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import { openWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { isDestinationRejection } from './destination';
 import { deliverWebhookRequest, deliveryDisposition } from './dispatch';
-import { openWebhookSecret } from './secret';
 import {
   signPayload,
   WEBHOOK_DELIVERY_HEADER,
@@ -107,7 +107,11 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
   try {
     let signingSecret: string;
     try {
-      signingSecret = openWebhookSecret(endpoint.secretCiphertext);
+      signingSecret = await openWebhookSecret(
+        organisationId,
+        endpoint.id,
+        endpoint.secretCiphertext,
+      );
     } catch {
       await settle({
         status: 'failed',
