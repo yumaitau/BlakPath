@@ -31,6 +31,7 @@ export const PERMISSION_CATEGORIES = [
   'audit',
   'retention',
   'administration',
+  'mcp',
   'break-glass',
 ] as const;
 
@@ -88,6 +89,12 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'evidence:upload-own',
     category: 'evidence',
     description: 'Upload supporting evidence to one’s own application.',
+  },
+  'evidence:upload-on-behalf': {
+    key: 'evidence:upload-on-behalf',
+    category: 'evidence',
+    description:
+      'Record evidence received on behalf of an applicant (post, email, in person or other), on an application the actor can read.',
   },
   'evidence:read-assigned': {
     key: 'evidence:read-assigned',
@@ -288,6 +295,18 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'calendar:delete-any',
     category: 'calendar',
     description: 'Delete a calendar event.',
+  },
+  'mcp:read': {
+    key: 'mcp:read',
+    category: 'mcp',
+    description:
+      'Call read-only external tool access for this organisation. Responses omit applicant names and other direct identifiers.',
+  },
+  'mcp:read-pii': {
+    key: 'mcp:read-pii',
+    category: 'mcp',
+    description:
+      'Include applicant names and recorded decision outcomes in external tool responses. Grant only for an approved, declared destination.',
   },
 } as const satisfies Record<string, PermissionDefinition>);
 

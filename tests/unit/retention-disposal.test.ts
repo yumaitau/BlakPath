@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toCsv } from '@/domains/reporting/csv';
 import {
   activationBlockReason,
+  disposalAuthorityVerified,
   sweepBlockReason,
   type AuthoritySignoffGate,
   type SweepPolicyGate,
@@ -24,7 +25,7 @@ const approvedPurge: SweepPolicyGate = {
   retentionDays: 3650,
   createdByUserId: 'user-a',
   approvedByUserId: 'user-b',
-  authorityReference: 'GA39 16.1.1',
+  disposalAuthorityRef: 'GA39 16.1.1',
   disposalClass: 'application_matter',
   jurisdiction: 'nsw',
 };
@@ -104,14 +105,14 @@ describe('purge gate', () => {
   it('refuses a purge with no authority reference', () => {
     expect(
       sweepBlockReason(
-        { ...approvedPurge, authorityReference: null },
+        { ...approvedPurge, disposalAuthorityRef: null },
         matchingSignoff,
         false,
       ),
     ).toBe('missing_authority');
     expect(
       sweepBlockReason(
-        { ...approvedPurge, authorityReference: '   ' },
+        { ...approvedPurge, disposalAuthorityRef: '   ' },
         matchingSignoff,
         false,
       ),
@@ -162,12 +163,63 @@ describe('purge gate', () => {
           ...approvedPurge,
           action: 'retain',
           retentionDays: null,
-          authorityReference: null,
+          disposalAuthorityRef: null,
         },
         null,
         false,
       ),
     ).toBe('permanent');
+  });
+});
+
+describe('official-record authority', () => {
+  it('needs two-person approval and a matching sign-off, not a bare reference', () => {
+    expect(disposalAuthorityVerified(approvedPurge, matchingSignoff, false)).toBe(true);
+    // Any non-empty reference used to unlock official records. It must not.
+    expect(disposalAuthorityVerified(approvedPurge, null, false)).toBe(false);
+    expect(
+      disposalAuthorityVerified(
+        approvedPurge,
+        { ...matchingSignoff, authorityReference: 'other instrument' },
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      disposalAuthorityVerified(
+        { ...approvedPurge, approvedByUserId: 'user-a' },
+        matchingSignoff,
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      disposalAuthorityVerified(
+        { ...approvedPurge, approvedByUserId: null },
+        matchingSignoff,
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      disposalAuthorityVerified(
+        approvedPurge,
+        { ...matchingSignoff, permanent: true },
+        false,
+      ),
+    ).toBe(false);
+    // An anonymise policy only unlocks official records with the same proof.
+    expect(
+      disposalAuthorityVerified(
+        { ...approvedPurge, action: 'anonymise' },
+        matchingSignoff,
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      disposalAuthorityVerified(
+        { ...approvedPurge, action: 'anonymise', disposalAuthorityRef: null },
+        matchingSignoff,
+        false,
+      ),
+    ).toBe(false);
   });
 });
 

@@ -52,6 +52,7 @@ export const RETENTION_RESOURCE_TYPES = [
   'assignment',
   'task',
   'api_key',
+  'scim_credential',
   'form',
   'form_invitation',
   'form_response',
@@ -74,6 +75,7 @@ export const RETENTION_RESOURCE_TYPES = [
   'import',
   'break_glass_request',
   'integration',
+  'job',
   'search',
 ] as const satisfies readonly EligibleResource[];
 
@@ -95,6 +97,24 @@ export type SweepResourceType = (typeof SWEEP_RESOURCE_TYPES)[number];
 
 export const RETENTION_ACTIONS = ['purge', 'anonymise', 'retain'] as const;
 export type RetentionAction = (typeof RETENTION_ACTIONS)[number];
+
+/**
+ * Shortest period a policy may set. One day is not a disposal floor: a recorded
+ * matter must survive long enough for a human to correct a mistake. Jurisdiction
+ * schedules that require longer (or permanent) retention are a records-manager
+ * decision on top of this floor.
+ */
+export const MIN_RETENTION_DAYS = 30;
+
+/**
+ * After a purge tombstone (`deletedAt`), the row stays recoverable for this
+ * long. The hard-delete pass then removes it. Object bytes are removed at
+ * purge time; this grace covers the database row only.
+ */
+export const HARD_DELETE_GRACE_DAYS = 30;
+
+/** Stable replacement for personal text. The sweep key is `anonymisedAt`, not this string. */
+export const ANONYMISED_PLACEHOLDER = '[retained-anonymised]';
 
 export function isRetentionResourceType(value: string): value is RetentionResourceType {
   return (RETENTION_RESOURCE_TYPES as readonly string[]).includes(value);
@@ -135,4 +155,37 @@ export function dueForRetention(input: {
   if (input.isHeld) return false;
   if (input.retentionDays == null) return false;
   return isExpired(input.recordDate, input.retentionDays, input.now);
+}
+
+/**
+ * `decided` records that authorised humans have recorded an outcome. It is a
+ * process state, not a machine determination of Aboriginality.
+ */
+export function isOfficialApplicationStatus(status: string): boolean {
+  return status === 'decided';
+}
+
+/**
+ * Refuse disposal when the matter is an official record and the policy's
+ * disposal authority is not verified. Verified means the reference matches a
+ * current records-manager sign-off and a second person activated the policy
+ * (see `disposalAuthorityVerified`). A bare reference string is not enough.
+ * A finalised decision or an issued certificate (anything other than a draft)
+ * is an official record even when the application status has not yet moved
+ * to `decided`.
+ */
+export function officialRecordBlocksDisposal(input: {
+  applicationStatus: string | null;
+  hasFinalisedDecision: boolean;
+  hasIssuedCertificate: boolean;
+  authorityVerified: boolean;
+}): boolean {
+  if (input.authorityVerified) return false;
+  if (
+    input.applicationStatus !== null &&
+    isOfficialApplicationStatus(input.applicationStatus)
+  ) {
+    return true;
+  }
+  return input.hasFinalisedDecision || input.hasIssuedCertificate;
 }

@@ -42,8 +42,13 @@ export const retentionPolicies = pgTable(
      */
     retentionDays: integer('retention_days'),
     action: retentionAction('action').notNull(),
-    /** Instrument the records manager cited. Required before a purge can run. */
-    authorityReference: text('authority_reference'),
+    /**
+     * Disposal authority instrument the records manager cited. A purge, and
+     * any disposal of an official record (decided application, finalised
+     * decision, issued certificate), runs only when this matches a current
+     * records-manager sign-off and a second person has activated the policy.
+     */
+    disposalAuthorityRef: text('disposal_authority_ref'),
     /** False until a different person from the drafter activates the policy. */
     active: boolean('active').notNull().default(false),
     createdByUserId: refId('created_by_user_id').references(() => users.id, {
@@ -123,7 +128,7 @@ export const destructionRegister = pgTable(
     authorityReference: text('authority_reference').notNull(),
     policyId: refId('policy_id')
       .notNull()
-      .references(() => retentionPolicies.id, { onDelete: 'restrict' }),
+      .references(() => retentionPolicies.id, { onDelete: 'no action' }),
     destroyedAt: timestamp('destroyed_at', { withTimezone: true }).notNull(),
     correlationId: text('correlation_id').notNull(),
     ...timestamps,

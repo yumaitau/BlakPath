@@ -62,6 +62,7 @@ export const DISPOSAL_CLASSES = [
   'export_artifact',
   'access_control',
   'retention_control',
+  'key_custody',
   'search_index',
   'immutable_audit',
 ] as const;
@@ -117,6 +118,11 @@ export const DISPOSAL_CLASS_INFO = {
     description: 'Break-glass access grants.',
     destructionForbidden: false,
   },
+  key_custody: {
+    description:
+      'Tenant key custody, key rewraps and crypto-shred certificates. Key destruction is a custody ceremony, never a retention action.',
+    destructionForbidden: true,
+  },
   retention_control: {
     description: 'Retention policies, authority sign-offs and the destruction register.',
     destructionForbidden: true,
@@ -143,6 +149,9 @@ export const DISPOSAL_CLASS_BY_RESOURCE = {
   passkey: 'security_credential',
   organisation: 'organisation_admin',
   organisation_settings: 'organisation_admin',
+  organisation_key: 'key_custody',
+  organisation_key_rewrap: 'key_custody',
+  destruction_certificate: 'key_custody',
   organisation_domain: 'organisation_admin',
   feature_flag: 'organisation_admin',
   role: 'organisation_admin',
@@ -158,6 +167,7 @@ export const DISPOSAL_CLASS_BY_RESOURCE = {
   assignment: 'application_matter',
   task: 'application_matter',
   api_key: 'security_credential',
+  scim_credential: 'security_credential',
   form: 'application_matter',
   form_invitation: 'application_matter',
   form_response: 'application_matter',
@@ -183,6 +193,7 @@ export const DISPOSAL_CLASS_BY_RESOURCE = {
   destruction_register: 'retention_control',
   break_glass_request: 'access_control',
   integration: 'organisation_admin',
+  job: 'operational_record',
   search: 'search_index',
   audit_chain: 'immutable_audit',
 } as const satisfies Record<ResourceType, DisposalClass>;

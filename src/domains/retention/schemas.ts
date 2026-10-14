@@ -1,13 +1,19 @@
 import { z } from 'zod';
 import { DISPOSAL_CLASSES, DISPOSAL_CLASS_INFO, RECORDS_JURISDICTIONS } from './disposal';
-import { RETENTION_ACTIONS, RETENTION_RESOURCE_TYPES } from './rules';
+import {
+  MIN_RETENTION_DAYS,
+  RETENTION_ACTIONS,
+  RETENTION_RESOURCE_TYPES,
+  SWEEP_RESOURCE_TYPES,
+} from './rules';
 
 /**
  * Input validation for retention management (zod v4).
  *
  * `RETENTION_DAYS_SANITY_MAX` is an input bound so a bad number cannot overflow
- * date maths. It is not a legal maximum. Permanent retention is `action:
- * 'retain'` with no end date. A purge must cite an authority reference; the
+ * date maths. It is not a legal maximum. A policy period also has a floor of
+ * `MIN_RETENTION_DAYS` so a recorded matter survives long enough to correct.
+ * Permanent retention is `action: 'retain'` with no end date. A purge must cite an authority reference; the
  * service checks that reference against a records-manager sign-off.
  */
 
@@ -16,10 +22,17 @@ export const RETENTION_DAYS_SANITY_MAX = 365_000;
 
 const finiteDays = z.coerce.number().int().min(1).max(RETENTION_DAYS_SANITY_MAX);
 
+/** A policy period: floor of {@link MIN_RETENTION_DAYS}, sanity cap only. */
+const policyDays = z.coerce
+  .number()
+  .int()
+  .min(MIN_RETENTION_DAYS)
+  .max(RETENTION_DAYS_SANITY_MAX);
+
 export const createPolicySchema = z
   .object({
     resourceType: z.enum(RETENTION_RESOURCE_TYPES),
-    retentionDays: z.union([z.null(), finiteDays]).optional(),
+    retentionDays: z.union([z.null(), policyDays]).optional(),
     action: z.enum(RETENTION_ACTIONS),
     jurisdiction: z.enum(RECORDS_JURISDICTIONS),
     authorityReference: z.string().trim().min(1).max(500).optional(),
@@ -52,8 +65,9 @@ export const createPolicySchema = z
   });
 export type CreatePolicyInput = z.input<typeof createPolicySchema>;
 
+/** Holds name a record the sweep can act on, and the service checks it exists. */
 export const placeHoldSchema = z.object({
-  resourceType: z.enum(RETENTION_RESOURCE_TYPES),
+  resourceType: z.enum(SWEEP_RESOURCE_TYPES),
   resourceId: z.uuid(),
   reason: z.string().trim().min(1).max(2000),
 });

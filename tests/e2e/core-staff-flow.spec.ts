@@ -1,5 +1,6 @@
 import axe from 'axe-core';
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import {
   ADMIN_EMAIL,
   APPLICANT_EMAIL,
@@ -12,7 +13,19 @@ async function expectNoSeriousAccessibilityViolations(page: Page): Promise<void>
   // App Router metadata can stream after the page's visible content on a slow
   // CI runner. Wait for the title before asking axe to inspect the final DOM.
   await expect(page).toHaveTitle(/\S/);
-  await page.addScriptTag({ content: axe.source });
+  await page.evaluate((source) => {
+    let nonce = '';
+    for (const existing of document.scripts) {
+      if (existing.nonce) {
+        nonce = existing.nonce;
+        break;
+      }
+    }
+    const script = document.createElement('script');
+    if (nonce) script.nonce = nonce;
+    script.text = source;
+    document.head.appendChild(script);
+  }, axe.source);
   const violations = await page.evaluate(async () => {
     interface AxeResult {
       impact: string | null;
@@ -57,7 +70,7 @@ test('protected routes reject anonymous access and sign-in errors stay generic',
   await expect(apiResponse.json()).resolves.toEqual({ error: 'Unauthorized' });
 
   await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
 
   await page.getByLabel('Email').fill('unknown@example.test');
   await page.getByLabel('Password').fill('incorrect-password');
@@ -75,6 +88,7 @@ test('public support and certificate-verification journeys are usable', async ({
   const destinations = [
     ['Accessibility', '/accessibility', 'Accessibility'],
     ['Privacy', '/privacy', 'Privacy'],
+    ['Key custody', '/key-custody', 'Key custody'],
     ['Support', '/support', 'Support'],
     ['Find an organisation', '/organisations', 'Find an organisation'],
   ] as const;
@@ -112,9 +126,12 @@ test('staff can select a tenant, validate input, and start and find an applicati
     page.getByRole('heading', { name: 'Applications', exact: true }),
   ).toBeVisible();
 
+  // Search is a server-side blind-index lookup submitted with the form.
   await page.getByLabel('Search applications').fill('definitely-no-match');
+  await page.getByLabel('Search applications').press('Enter');
+  await expect(page).toHaveURL(/\/applications\?q=definitely-no-match$/);
   await expect(page.getByText('No applications match this search.')).toBeVisible();
-  await page.getByLabel('Search applications').clear();
+  await page.goto('/applications');
 
   const applicantName = `E2E case record ${Date.now()}`;
   await page.getByLabel('Name as provided').fill(applicantName);
@@ -127,6 +144,7 @@ test('staff can select a tenant, validate input, and start and find an applicati
 
   await page.getByRole('link', { name: 'Applications' }).first().click();
   await page.getByLabel('Search applications').fill(applicantName);
+  await page.getByLabel('Search applications').press('Enter');
   const applicationLink = page.getByRole('link', { name: new RegExp(applicantName) });
   await expect(applicationLink).toContainText('High priority');
   await expectNoSeriousAccessibilityViolations(page);

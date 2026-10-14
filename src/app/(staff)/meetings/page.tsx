@@ -2,6 +2,8 @@ import {
   MeetingCalendar,
   type CalendarEvent,
 } from '@/components/calendar/meeting-calendar';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { listMeetings } from '@/domains/meetings';
 import { listCalendarEvents } from '@/domains/calendar';
@@ -10,14 +12,13 @@ import { listCalendarEvents } from '@/domains/calendar';
  * Committee meetings + general calendar (RSC).
  *
  * Loads meetings and calendar events inside DB-verified tenant context and
- * renders month/week/agenda views with `.ics` import/export. Friendly prompt
- * when not signed in or no active organisation.
+ * renders month/week/agenda views with `.ics` import/export. An expired session
+ * or missing organisation redirects; a role without access sees a 403 state;
+ * anything else surfaces as the 500 error page.
  */
 export default async function MeetingsPage() {
-  let events: CalendarEvent[] = [];
-  let calendarEvents: CalendarEvent[] = [];
-  let error: string | null = null;
-
+  let events: CalendarEvent[];
+  let calendarEvents: CalendarEvent[];
   try {
     const data = await withRequestTenant(async () => {
       const meetings = await listMeetings().catch(() => []);
@@ -42,18 +43,15 @@ export default async function MeetingsPage() {
     });
     events = data.meetings;
     calendarEvents = data.cal;
-  } catch {
-    error = 'Sign in and select your organisation to view and manage committee meetings.';
+  } catch (error) {
+    await handlePageError(error);
+    return <ForbiddenNotice title="You do not have access to committee meetings" />;
   }
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">Committee meetings</h1>
-      {error ? (
-        <p className="text-muted-foreground">{error}</p>
-      ) : (
-        <MeetingCalendar events={events} calendarEvents={calendarEvents} />
-      )}
+      <MeetingCalendar events={events} calendarEvents={calendarEvents} />
     </div>
   );
 }

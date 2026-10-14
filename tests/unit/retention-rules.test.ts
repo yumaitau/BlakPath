@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MIN_RETENTION_DAYS,
   RETENTION_RESOURCE_TYPES,
   dueForRetention,
   isExpired,
   isRetentionResourceType,
+  officialRecordBlocksDisposal,
   retentionCutoff,
 } from '@/domains/retention/rules';
 import { createPolicySchema, placeHoldSchema } from '@/domains/retention/schemas';
@@ -108,11 +110,88 @@ describe('retention resource types + schemas', () => {
       }).success,
     ).toBe(false);
     expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: MIN_RETENTION_DAYS - 1,
+        action: 'anonymise',
+        jurisdiction: 'nsw',
+      }).success,
+    ).toBe(false);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: MIN_RETENTION_DAYS,
+        action: 'anonymise',
+        jurisdiction: 'nsw',
+      }).success,
+    ).toBe(true);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: MIN_RETENTION_DAYS,
+        action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: '  ',
+      }).success,
+    ).toBe(false);
+    expect(
+      placeHoldSchema.safeParse({
+        resourceType: 'decision',
+        resourceId: '018f5b3a-0000-7000-8000-000000000000',
+        reason: 'litigation',
+      }).success,
+    ).toBe(false);
+    expect(
       placeHoldSchema.safeParse({
         resourceType: 'evidence',
         resourceId: '018f5b3a-0000-7000-8000-000000000000',
         reason: 'litigation',
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('official record disposal', () => {
+  it('refuses a decided or certified matter without a verified signed authority', () => {
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'decided',
+        hasFinalisedDecision: false,
+        hasIssuedCertificate: false,
+        authorityVerified: false,
+      }),
+    ).toBe(true);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'submitted',
+        hasFinalisedDecision: true,
+        hasIssuedCertificate: false,
+        authorityVerified: false,
+      }),
+    ).toBe(true);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'draft',
+        hasFinalisedDecision: false,
+        hasIssuedCertificate: true,
+        authorityVerified: false,
+      }),
+    ).toBe(true);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'decided',
+        hasFinalisedDecision: true,
+        hasIssuedCertificate: true,
+        authorityVerified: true,
+      }),
+    ).toBe(false);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'withdrawn',
+        hasFinalisedDecision: false,
+        hasIssuedCertificate: false,
+        authorityVerified: false,
+      }),
+    ).toBe(false);
   });
 });

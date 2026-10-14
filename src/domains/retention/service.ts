@@ -1,7 +1,10 @@
 import { desc, eq, isNull } from 'drizzle-orm';
 import {
+  applications,
   destructionRegister,
   disposalAuthoritySignoffs,
+  evidence,
+  formResponses,
   legalHolds,
   retentionPolicies,
 } from '@/db/schema';
@@ -34,6 +37,8 @@ import {
   type PlaceHoldInput,
   type SignDisposalAuthorityInput,
 } from './schemas';
+import { previewRetentionSweep, type RetentionPreviewItem } from './sweep';
+import type { SweepResourceType } from './rules';
 
 /**
  * Retention management — tenant-scoped, permission-checked, audited.
@@ -52,6 +57,16 @@ export type RetentionPolicyRow = typeof retentionPolicies.$inferSelect;
 export type LegalHoldRow = typeof legalHolds.$inferSelect;
 export type DisposalAuthoritySignoffRow = typeof disposalAuthoritySignoffs.$inferSelect;
 export type DestructionRegisterRow = typeof destructionRegister.$inferSelect;
+
+/** The hold target is not a row in this tenant. */
+export class RetentionTargetError extends Error {
+  readonly code = 'RETENTION_TARGET_MISSING';
+  readonly status = 404;
+  constructor() {
+    super('Legal hold target does not exist.');
+    this.name = 'RetentionTargetError';
+  }
+}
 
 function must<T>(row: T | undefined, what: string): T {
   if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
@@ -150,7 +165,7 @@ export async function createPolicy(
         jurisdiction: input.jurisdiction,
         retentionDays,
         action: input.action,
-        authorityReference,
+        disposalAuthorityRef: authorityReference,
         active: false,
         createdByUserId: ctx.userId,
       }),
@@ -170,7 +185,7 @@ export async function createPolicy(
         jurisdiction: input.jurisdiction,
         retentionDays,
         action: input.action,
-        authorityReference,
+        hasDisposalAuthority: authorityReference !== null,
       },
       allow: [
         'resourceType',
@@ -178,7 +193,7 @@ export async function createPolicy(
         'jurisdiction',
         'retentionDays',
         'action',
-        'authorityReference',
+        'hasDisposalAuthority',
       ],
     },
   });
@@ -217,7 +232,7 @@ export async function activatePolicy(id: string): Promise<RetentionPolicyRow> {
   }
 
   if (policy.action === 'purge') {
-    const authorityReference = policy.authorityReference?.trim() ?? '';
+    const authorityReference = policy.disposalAuthorityRef?.trim() ?? '';
     if (!policy.disposalClass || !policy.jurisdiction || policy.retentionDays == null) {
       throw new RetentionError(
         'AUTHORITY_REQUIRED',
@@ -276,10 +291,10 @@ export async function activatePolicy(id: string): Promise<RetentionPolicyRow> {
     after: {
       data: {
         action: row.action,
-        authorityReference: row.authorityReference,
+        hasDisposalAuthority: (row.disposalAuthorityRef?.trim() ?? '') !== '',
         approvedByUserId: ctx.userId,
       },
-      allow: ['action', 'authorityReference', 'approvedByUserId'],
+      allow: ['action', 'hasDisposalAuthority', 'approvedByUserId'],
     },
   });
   return row;
@@ -342,17 +357,10 @@ export async function signDisposalAuthority(
       data: {
         jurisdiction: input.jurisdiction,
         disposalClass: input.disposalClass,
-        authorityReference: input.authorityReference,
         permanent: input.permanent,
         catalogueVersion: CATALOGUE_VERSION,
       },
-      allow: [
-        'jurisdiction',
-        'disposalClass',
-        'authorityReference',
-        'permanent',
-        'catalogueVersion',
-      ],
+      allow: ['jurisdiction', 'disposalClass', 'permanent', 'catalogueVersion'],
     },
   });
   return row;
@@ -391,10 +399,33 @@ export async function deletePolicy(id: string): Promise<void> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'retention:manage');
   const scope = currentScope();
-  await scope.db
+  const updated = await scope.db
     .update(retentionPolicies)
     .set({ active: false, deletedAt: new Date() })
-    .where(scope.where(retentionPolicies.organisationId, eq(retentionPolicies.id, id)));
+    .where(
+      scope.where(
+        retentionPolicies.organisationId,
+        eq(retentionPolicies.id, id),
+        isNull(retentionPolicies.deletedAt),
+      ),
+    )
+    .returning({
+      id: retentionPolicies.id,
+      resourceType: retentionPolicies.resourceType,
+    });
+  const row = updated[0];
+  if (!row) return;
+
+  await recordAudit({
+    action: 'retention.policy_deleted',
+    resourceType: 'retention_policy',
+    resourceId: row.id,
+    result: 'success',
+    after: {
+      data: { resourceType: row.resourceType },
+      allow: ['resourceType'],
+    },
+  });
 }
 
 export async function placeHold(rawInput: PlaceHoldInput): Promise<LegalHoldRow> {
@@ -403,6 +434,9 @@ export async function placeHold(rawInput: PlaceHoldInput): Promise<LegalHoldRow>
 
   const input = placeHoldSchema.parse(rawInput);
   const scope = currentScope();
+  if (!(await retentionTargetExists(scope, input.resourceType, input.resourceId))) {
+    throw new RetentionTargetError();
+  }
   const inserted = await scope.db
     .insert(legalHolds)
     .values(
@@ -491,6 +525,45 @@ export async function exportDestructionRegister(): Promise<string> {
     after: { data: { rows: rows.length }, allow: ['rows'] },
   });
   return csv;
+}
+
+/** What the next sweep would do. No rows are written and nothing is audited. */
+export async function previewRetention(): Promise<RetentionPreviewItem[]> {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'retention:manage');
+  return previewRetentionSweep(ctx.organisationId);
+}
+
+async function retentionTargetExists(
+  scope: TenantScope,
+  resourceType: SweepResourceType,
+  resourceId: string,
+): Promise<boolean> {
+  if (resourceType === 'application') {
+    const rows = await scope.db
+      .select({ id: applications.id })
+      .from(applications)
+      .where(scope.where(applications.organisationId, eq(applications.id, resourceId)))
+      .limit(1);
+    return rows.length > 0;
+  }
+  if (resourceType === 'evidence') {
+    const rows = await scope.db
+      .select({ id: evidence.id })
+      .from(evidence)
+      .where(scope.where(evidence.organisationId, eq(evidence.id, resourceId)))
+      .limit(1);
+    return rows.length > 0;
+  }
+  if (resourceType === 'form_response') {
+    const rows = await scope.db
+      .select({ id: formResponses.id })
+      .from(formResponses)
+      .where(scope.where(formResponses.organisationId, eq(formResponses.id, resourceId)))
+      .limit(1);
+    return rows.length > 0;
+  }
+  return false;
 }
 
 /** Enqueue a retention sweep for a tenant (called by a scheduler — issue #14). */

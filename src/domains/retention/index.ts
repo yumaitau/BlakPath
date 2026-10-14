@@ -27,6 +27,7 @@ export {
 
 export {
   activationBlockReason,
+  disposalAuthorityVerified,
   sweepBlockReason,
   type AuthoritySignoffGate,
   type SweepBlockReason,
@@ -34,13 +35,18 @@ export {
 } from './approval';
 
 export {
+  ANONYMISED_PLACEHOLDER,
+  HARD_DELETE_GRACE_DAYS,
+  MIN_RETENTION_DAYS,
   RETENTION_ACTIONS,
   RETENTION_RESOURCE_TYPES,
   SWEEP_RESOURCE_TYPES,
   dueForRetention,
   isExpired,
+  isOfficialApplicationStatus,
   isRetentionResourceType,
   isSweepResourceType,
+  officialRecordBlocksDisposal,
   retentionCutoff,
   type RetentionAction,
   type RetentionResourceType,
@@ -76,8 +82,10 @@ export {
   listHolds,
   listPolicies,
   placeHold,
+  previewRetention,
   queueRetentionSweep,
   releaseHold,
+  RetentionTargetError,
   signDisposalAuthority,
   type DestructionRegisterRow,
   type DisposalAuthoritySignoffRow,
@@ -85,4 +93,9 @@ export {
   type RetentionPolicyRow,
 } from './service';
 
-export { processRetentionSweep, type SweepInput } from './sweep';
+export {
+  previewRetentionSweep,
+  processRetentionSweep,
+  type RetentionPreviewItem,
+  type SweepInput,
+} from './sweep';

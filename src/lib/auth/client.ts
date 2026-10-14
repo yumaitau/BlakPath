@@ -26,7 +26,12 @@ export const authClient = createAuthClient({
     twoFactorClient({
       onTwoFactorRedirect() {
         if (typeof window !== 'undefined') {
-          window.location.href = '/sign-in/two-factor';
+          // Carry `returnTo` through so the second factor lands on the same
+          // page; the verification screen re-validates it before use.
+          const returnTo = new URLSearchParams(window.location.search).get('returnTo');
+          window.location.href = returnTo
+            ? `/sign-in/two-factor?${new URLSearchParams({ returnTo })}`
+            : '/sign-in/two-factor';
         }
       },
     }),

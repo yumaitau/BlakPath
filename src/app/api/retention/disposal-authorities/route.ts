@@ -5,6 +5,8 @@ import {
   signDisposalAuthority,
   type SignDisposalAuthorityInput,
 } from '@/domains/retention';
+import { requireRecentAuth } from '@/lib/auth/session';
+import { STEP_UP_ROUTES } from '@/lib/auth/step-up-policy';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
 
 /**
@@ -23,6 +25,7 @@ export async function GET(): Promise<Response> {
 
 export async function POST(request: NextRequest): Promise<Response> {
   try {
+    await requireRecentAuth(STEP_UP_ROUTES['POST /api/retention/disposal-authorities']);
     const body: unknown = await request.json();
     const row = await withRequestTenant(() =>
       signDisposalAuthority(body as SignDisposalAuthorityInput),
