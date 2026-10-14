@@ -3,6 +3,7 @@ import {
   buildContentSecurityPolicy,
   createNonce,
   CSP_REPORT_PATH,
+  uploadOrigin,
 } from '@/lib/http/content-security-policy';
 
 function directive(policy: string, name: string): string {
@@ -55,5 +56,38 @@ describe('createNonce', () => {
     expect(first).toMatch(/^[A-Za-z0-9+/]+=*$/);
     expect(second).toMatch(/^[A-Za-z0-9+/]+=*$/);
     expect(first).not.toBe(second);
+  });
+});
+
+describe('upload connect-src', () => {
+  it('allows only the configured upload origin besides self', () => {
+    const policy = buildContentSecurityPolicy({
+      nonce: 'n',
+      development: false,
+      upgradeInsecureRequests: true,
+      connectSources: ['https://blakpath-quarantine.s3.ap-southeast-2.amazonaws.com'],
+    });
+    expect(directive(policy, 'connect-src')).toBe(
+      "connect-src 'self' https://blakpath-quarantine.s3.ap-southeast-2.amazonaws.com",
+    );
+  });
+
+  it('derives the quarantine bucket origin for S3 and a local endpoint', () => {
+    expect(
+      uploadOrigin({
+        endpoint: undefined,
+        region: 'ap-southeast-2',
+        bucket: 'blakpath-quarantine',
+        forcePathStyle: false,
+      }),
+    ).toBe('https://blakpath-quarantine.s3.ap-southeast-2.amazonaws.com');
+    expect(
+      uploadOrigin({
+        endpoint: 'http://localhost:9000',
+        region: 'ap-southeast-2',
+        bucket: 'blakpath-quarantine',
+        forcePathStyle: true,
+      }),
+    ).toBe('http://localhost:9000');
   });
 });
