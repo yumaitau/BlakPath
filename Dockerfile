@@ -109,6 +109,9 @@ RUN addgroup -S -g 1001 nodejs \
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
+# Certificate renderer reads Noto Sans from the working directory. The
+# standalone server does not otherwise keep that path.
+COPY --from=build --chown=nextjs:nodejs /app/src/domains/certificates/fonts ./src/domains/certificates/fonts
 
 USER nextjs
 EXPOSE 3000
