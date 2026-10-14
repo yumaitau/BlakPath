@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 /**
@@ -23,9 +24,16 @@ const serverSchema = z
     APP_URL: z.string().url().default('http://localhost:3000'),
     APP_REGION: z.string().default('ap-southeast-2'),
 
-    // Database
+    // Database. Runtime uses DATABASE_URL (application role). Migrations in
+    // production use DATABASE_MIGRATION_URL (owning role) and refuse to share
+    // the application role. Local development may omit the migration URL.
     DATABASE_URL: z.string().url(),
+    DATABASE_MIGRATION_URL: z.string().url().optional(),
     DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
+    AUDIT_DB_APP_ROLE: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/)
+      .default('blakpath_app'),
 
     // Redis (queues, rate limiting, ephemeral state)
     REDIS_URL: z.string().url(),
@@ -33,13 +41,28 @@ const serverSchema = z
     // Better Auth
     BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be >= 32 chars'),
     BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
+    // Shared with the Cloudflare zone. Present on origin requests as
+    // `x-blakpath-origin-verify`. Unset locally. Required before production
+    // traffic is accepted (see the release check).
+    ORIGIN_VERIFY_SECRET: z.string().min(32).optional(),
 
-    // Application-level envelope encryption. Master key is a base64-encoded
-    // 32-byte key. In production this is sourced from KMS, never the DB.
+    // Envelope encryption. Tenant keys live in `organisation_keys` and KMS.
+    // The platform CMK wraps non-tenant data. The local root and the KMS
+    // endpoint are development/CI only and are refused in production.
+    // ENCRYPTION_MASTER_KEY remains only so version-1 ciphertext can be read.
+    // Nothing writes version 1. Once the encryption backfill has completed for
+    // every organisation, no stored value needs it and it can be unset.
+    // See docs/adr/0001-customer-held-keys.md.
+    PLATFORM_KMS_KEY_ARN: z.string().min(20).optional(),
+    KMS_ENDPOINT: z.string().url().optional(),
+    ENCRYPTION_LOCAL_KEY: z
+      .string()
+      .min(44, 'ENCRYPTION_LOCAL_KEY must be a base64-encoded 32-byte key')
+      .optional(),
     ENCRYPTION_MASTER_KEY: z
       .string()
-      .min(44, 'ENCRYPTION_MASTER_KEY must be a base64-encoded 32-byte key'),
-    ENCRYPTION_KEY_VERSION: z.coerce.number().int().positive().default(1),
+      .min(44, 'ENCRYPTION_MASTER_KEY must be a base64-encoded 32-byte key')
+      .optional(),
 
     // S3-compatible object storage
     S3_ENDPOINT: z.string().url().optional(),
@@ -51,32 +74,46 @@ const serverSchema = z
     S3_KMS_KEY_ID: z.string().min(1).optional(),
     S3_BUCKET_EVIDENCE: z.string().default('blakpath-evidence'),
     S3_BUCKET_QUARANTINE: z.string().default('blakpath-quarantine'),
+    // Daily audit chain-head anchors. Production bucket has Object Lock
+    // compliance enabled; local MinIO may store them without a lock.
+    S3_BUCKET_AUDIT_ANCHORS: z.string().default('blakpath-audit-anchors'),
+    AUDIT_ANCHOR_OBJECT_LOCK: booleanish('false'),
+    AUDIT_ANCHOR_RETENTION_DAYS: z.coerce.number().int().min(1).default(2555),
+    // KMS asymmetric key (SIGN_VERIFY) for anchor signatures. Required in
+    // production by the release gate. Local HMAC falls back to
+    // AUDIT_ANCHOR_HMAC_KEY or the envelope master key.
+    AUDIT_ANCHOR_SIGNING_KEY_ID: z.string().min(1).optional(),
+    AUDIT_ANCHOR_HMAC_KEY: z.string().min(32).optional(),
     S3_FORCE_PATH_STYLE: booleanish('true'),
 
     // ClamAV
     CLAMAV_HOST: z.string().default('localhost'),
     CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
 
-    // Email (SMTP; Mailpit locally)
+    // Email. Exactly one production sender: the SES v2 API under the workload
+    // role (`EMAIL_TRANSPORT=ses`), tagged with a configuration set whose
+    // bounce/complaint events reach POST /api/email/events via SNS. `smtp`
+    // is the local/CI catch-all (Mailpit) and is unauthenticated by design:
+    // there is no static mail credential path. See docs/adr/0090.
+    EMAIL_TRANSPORT: z.enum(['smtp', 'ses']).default('smtp'),
+    SES_CONFIGURATION_SET: z.string().min(1).max(64).optional(),
     SMTP_HOST: z.string().default('localhost'),
     SMTP_PORT: z.coerce.number().int().positive().default(1025),
-    SMTP_USER: z.string().optional(),
-    SMTP_PASSWORD: z.string().optional(),
     SMTP_FROM: z.string().default('BlakPath <no-reply@blakpath.local>'),
-    // PaperBoy transactional email (https://paperboy.yumait.au).
-    // Placeholder wiring: the sender posts JSON to
-    // `{PAPERBOY_URL}/api/v1/emails` with `Authorization: Bearer
-    // <PAPERBOY_API_KEY>`. Unset locally; required in production where
-    // PaperBoy replaces direct SES SMTP.
-    PAPERBOY_URL: z.string().url().optional(),
-    PAPERBOY_API_KEY: z.string().min(1).optional(),
-    // Shared secret gating the SES SNS event webhook (bounce/complaint).
-    // Unset locally; required in production where SES events are wired.
+    // Shared secret for POST /api/email/events. Header
+    // `x-email-webhook-secret` only. Unset locally; required in production.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),
-    // Bearer credential for SCIM directory provisioning. Unset = SCIM off.
-    SCIM_BEARER_TOKEN: z.string().min(32).optional(),
-    // One-time live-bootstrap token. Unset = bootstrap route disabled.
+    // SNS topic that SES bounce/complaint events must come from. The events
+    // route rejects any other TopicArn. Unset locally; required in production.
+    EMAIL_SNS_TOPIC_ARN: z
+      .string()
+      .regex(/^arn:aws:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]+$/)
+      .optional(),
+    // Retired. Must be unset. A value fails production boot and the release gate.
     PILOT_BOOTSTRAP_TOKEN: z.string().min(32).optional(),
+    // Local seed opt-in. Developer accounts also require a loopback database host.
+    // Ignored when NODE_ENV=production.
+    ALLOW_DEV_SEED: z.string().optional(),
     // CoA cryptographic signing. Production uses a KMS asymmetric key
     // (SIGN_VERIFY) under the workload role. Local development and CI may use
     // a PEM private key instead — refused in production.
@@ -84,9 +121,15 @@ const serverSchema = z
     COA_SIGNING_ALGORITHM: z.string().max(50).optional(),
     COA_SIGNING_LOCAL_KEY_PEM: z.string().min(1).optional(),
     // Entra ID OIDC client for federated sign-in. Unset = SSO unavailable.
-    SSO_ENTRA_ISSUER: z.string().url().optional(),
+    // The issuer is per tenant (organisation_sso_providers.issuer), not env.
     SSO_ENTRA_CLIENT_ID: z.string().min(1).optional(),
     SSO_ENTRA_CLIENT_SECRET: z.string().min(1).optional(),
+    // Dedicated key sealing SSO flow transactions (state, nonce, PKCE
+    // verifier). Never reuse BETTER_AUTH_SECRET. Unset = SSO unavailable.
+    SSO_STATE_SECRET: z
+      .string()
+      .min(32, 'SSO_STATE_SECRET must be >= 32 chars')
+      .optional(),
 
     // Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
@@ -102,9 +145,35 @@ const serverSchema = z
     RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     REMINDER_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    // How often each active tenant's CMK is described and canary-decrypted.
+    KEY_HEALTH_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    // Operator address for key-health state changes. Not a secret.
+    OPERATOR_ONCALL_EMAIL: z.email().optional(),
 
     // Feature toggles
     AI_FEATURES_ENABLED: booleanish('false'),
+    // Per-key ceiling for the external tool endpoint. Fixed window of one minute.
+    MCP_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
+
+    // Extra CIDRs refused for webhook delivery, comma-separated, in addition
+    // to private, loopback, link-local, CGNAT and unique-local ranges.
+    WEBHOOK_DENY_CIDRS: z
+      .string()
+      .optional()
+      .refine((value) => {
+        if (!value || !value.trim()) return true;
+        return value.split(',').every((part) => {
+          const item = part.trim();
+          if (!item) return true;
+          const slash = item.lastIndexOf('/');
+          if (slash <= 0) return false;
+          const address = item.slice(0, slash);
+          const prefix = Number(item.slice(slash + 1));
+          const family = isIP(address);
+          const max = family === 4 ? 32 : family === 6 ? 128 : -1;
+          return max > 0 && Number.isInteger(prefix) && prefix >= 0 && prefix <= max;
+        });
+      }, 'WEBHOOK_DENY_CIDRS must be comma-separated CIDRs'),
   })
   .superRefine((value, context) => {
     if (Boolean(value.S3_ACCESS_KEY_ID) !== Boolean(value.S3_SECRET_ACCESS_KEY)) {
@@ -112,6 +181,27 @@ const serverSchema = z
         code: 'custom',
         path: ['S3_ACCESS_KEY_ID'],
         message: 'S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.PILOT_BOOTSTRAP_TOKEN) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PILOT_BOOTSTRAP_TOKEN'],
+        message: 'must be unset in production',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.ENCRYPTION_LOCAL_KEY) {
+      context.addIssue({
+        code: 'custom',
+        path: ['ENCRYPTION_LOCAL_KEY'],
+        message: 'ENCRYPTION_LOCAL_KEY is refused in production — configure KMS.',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.KMS_ENDPOINT) {
+      context.addIssue({
+        code: 'custom',
+        path: ['KMS_ENDPOINT'],
+        message: 'KMS_ENDPOINT is refused in production — configure KMS.',
       });
     }
   });

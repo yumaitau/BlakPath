@@ -5,10 +5,11 @@ import { primaryId, timestamps } from './_helpers';
 /**
  * Email suppressions from SES bounce/complaint events.
  *
- * SNS delivers bounce/complaint notifications to POST /api/email/events.
- * Suppressed addresses are never emailed again until explicitly cleared.
- * Global scope (no organisation_id): a bounced address stays suppressed
- * platform-wide. Stores only the address hash + kind, never message content.
+ * SNS delivers permanent-bounce and complaint notifications to
+ * POST /api/email/events. Transient bounces are not stored. Suppressed
+ * addresses are not emailed again until a platform operator clears them.
+ * Global scope (no organisation_id). Stores only the address hash + kind,
+ * never message content.
  */
 export const emailSuppressions = pgTable(
   'email_suppressions',

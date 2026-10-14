@@ -8,7 +8,7 @@ import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
  * Certificates collection.
  * - GET  ?applicationId=<uuid> — list an application's certificates.
  * - POST { decisionId }        — generate a draft certificate from a finalised,
- *                                confirmed decision.
+ *                                confirmed decision on a decided case.
  */
 export const GET = tenantHandler(async function GET(
   request: NextRequest,
@@ -18,7 +18,15 @@ export const GET = tenantHandler(async function GET(
     throw new ClientSafeError(400, 'VALIDATION_ERROR', 'applicationId is required');
   }
   const items = await withRequestTenant(() => listCertificates(applicationId));
-  return NextResponse.json({ items });
+  return NextResponse.json({
+    items: items.map((item) => {
+      const { holderBindingSalt, holderNameHash, holderDobHash, ...publicItem } = item;
+      void holderBindingSalt;
+      void holderNameHash;
+      void holderDobHash;
+      return publicItem;
+    }),
+  });
 });
 
 export const POST = tenantHandler(async function POST(

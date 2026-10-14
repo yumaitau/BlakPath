@@ -16,6 +16,16 @@ import {
   tenantHandler,
 } from '@/lib/http/error-response';
 import { NoActiveOrganisationError } from '@/lib/http/tenant-route';
+import { RateLimitedError } from '@/lib/http/request-limits';
+import { TenantKeyUnavailableError } from '@/lib/encryption/errors';
+import { CertificateConflictError } from '@/domains/certificates/errors';
+import { DecisionWorkflowError } from '@/domains/decisions/errors';
+import {
+  OrganisationActivationError,
+  OrganisationKeyInputError,
+} from '@/domains/organisation-keys';
+import { WebhookDestinationError } from '@/domains/webhooks/destination';
+import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 import { logger } from '@/lib/observability/logger';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { TenantContextError, TenantIsolationError } from '@/lib/tenancy/context';
@@ -118,6 +128,49 @@ describe('errorResponse', () => {
     ).toMatchObject({ error: 'Some answers are invalid.', code: 'VALIDATION_ERROR' });
   });
 
+  it('keeps the status and text of every mapping the old route mappers had', async () => {
+    const locked = await bodyOf(new TenantKeyUnavailableError('org-1', 423));
+    expect(locked.status).toBe(423);
+    expect(locked.body.code).toBe('TENANT_KEY_UNAVAILABLE');
+    expect(JSON.stringify(locked.body)).not.toContain('org-1');
+    expect((await bodyOf(new TenantKeyUnavailableError('org-1', 503))).status).toBe(503);
+
+    const limited = errorResponse(new RateLimitedError(0), { requestId: 'req-test' });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('Retry-After')).toBe('1');
+    expect(limited.headers.get('X-Retry-After')).toBe('1');
+    expect(await limited.json()).toMatchObject({ error: 'Too many requests' });
+
+    const cases: [unknown, number, string][] = [
+      [new NoActiveOrganisationError(), 409, 'No active organisation'],
+      [new WebhookDestinationError(), 400, 'Invalid request'],
+      [new OrganisationKeyInputError(), 400, 'Invalid request'],
+      [new OrganisationActivationError(), 409, 'Organisation cannot become active'],
+      [
+        new DecisionWorkflowError('in_review'),
+        409,
+        'Case is not ready for a committee decision',
+      ],
+      [
+        new CertificateConflictError(),
+        409,
+        'A live certificate already exists for this decision',
+      ],
+      [new OrganisationUnavailableError(), 403, 'Forbidden'],
+    ];
+    for (const [error, status, text] of cases) {
+      const mapped = await bodyOf(error);
+      expect(mapped.status).toBe(status);
+      expect(mapped.body.error).toBe(text);
+    }
+
+    const mfa = await bodyOf(new StaffMfaRequiredError('user-1'));
+    expect(mfa.body).toMatchObject({
+      error: 'A verified second factor is required',
+      code: 'STAFF_MFA_REQUIRED',
+    });
+  });
+
   it('logs unknown errors with the request id and no message or PII', async () => {
     const spy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const secret = 'person@example.com';
@@ -175,7 +228,6 @@ describe('tenantHandler', () => {
       new Request('http://localhost/api/v1/applications?limit=abc', {
         headers: { 'x-request-id': 'trace-v1' },
       }) as NextRequest,
-      undefined,
     );
     expect(response.status).toBe(400);
     const body = await response.json();
@@ -188,7 +240,7 @@ describe('tenantHandler', () => {
   });
 
   it('returns 400 for an invalid v1-style query and echoes a safe request id', async () => {
-    const handler = tenantHandler(async () => {
+    const handler = tenantHandler(async (_request: Request) => {
       z.object({ limit: z.coerce.number().int().min(1) }).parse({ limit: 'abc' });
       return new Response('ok');
     });
@@ -196,7 +248,6 @@ describe('tenantHandler', () => {
       new Request('http://localhost/api/v1/applications?limit=abc', {
         headers: { 'x-request-id': 'trace-1' },
       }),
-      undefined,
     );
     expect(response.status).toBe(400);
     const body = await response.json();
@@ -224,14 +275,13 @@ describe('tenantHandler', () => {
 
     // Fetch rejects a raw newline in a header. A space is legal on the wire
     // and still fails the identifier pattern, so the handler mints a new id.
-    const handler = tenantHandler(async () => {
+    const handler = tenantHandler(async (_request: Request) => {
       throw new Error('boom person@example.com');
     });
     const response = await handler(
       new Request('http://localhost/api', {
         headers: { 'x-request-id': 'bad id' },
       }),
-      undefined,
     );
     expect(response.status).toBe(500);
     const body = await response.json();
@@ -245,12 +295,12 @@ describe('tenantHandler', () => {
 
   it('renders SCIM provisioning errors in the RFC envelope', async () => {
     const handler = tenantHandler(
-      async () => {
+      async (_request: Request) => {
         throw new AuthorizationError('POLICY_DENIED');
       },
       { presentation: 'scim' },
     );
-    const response = await handler(new Request('http://localhost/api/scim'), undefined);
+    const response = await handler(new Request('http://localhost/api/scim'));
     expect(response.status).toBe(403);
     const body = await response.json();
     expect(body.schemas).toEqual(['urn:ietf:params:scim:api:messages:2.0:Error']);

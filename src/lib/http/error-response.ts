@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { CalendarConflictError } from '@/domains/calendar/errors';
+import { stepUpRequiredBody } from '@/lib/auth/step-up-policy';
+import {
+  TENANT_KEY_UNAVAILABLE_MESSAGE,
+  TenantKeyUnavailableError,
+} from '@/lib/encryption/errors';
+import { RateLimitedError } from '@/lib/http/request-limits';
 import { logger } from '@/lib/observability/logger';
 import {
   correlationFromHeaders,
@@ -46,37 +52,59 @@ export interface ApiErrorBody {
 
 const SAFE_CODE = /^[A-Z0-9_]{1,64}$/;
 
+/**
+ * Fixed-shape mappings. Status and `error` text match the mappers this file
+ * replaced; clients and tests depend on both.
+ */
 const BY_NAME: Record<string, { status: number; code: string; error: string }> = {
   UnauthenticatedError: { status: 401, code: 'UNAUTHENTICATED', error: 'Unauthorized' },
   ApiKeyError: { status: 401, code: 'API_KEY_INVALID', error: 'Unauthorized' },
-  StepUpRequiredError: {
-    status: 401,
-    code: 'STEP_UP_REQUIRED',
-    error: 'Re-authentication required',
-  },
-  StaffMfaRequiredError: {
-    status: 403,
-    code: 'STAFF_MFA_REQUIRED',
-    error:
-      'Staff accounts must enrol a passkey or an authenticator app before continuing.',
-  },
   NoActiveOrganisationError: {
     status: 409,
     code: 'NO_ACTIVE_ORGANISATION',
     error: 'No active organisation',
+  },
+  WebhookDestinationError: {
+    status: 400,
+    code: 'VALIDATION_ERROR',
+    error: 'Invalid request',
+  },
+  OrganisationKeyInputError: {
+    status: 400,
+    code: 'VALIDATION_ERROR',
+    error: 'Invalid request',
+  },
+  OrganisationActivationError: {
+    status: 409,
+    code: 'KEY_NOT_VALIDATED',
+    error: 'Organisation cannot become active',
   },
   ApplicationWorkflowError: {
     status: 409,
     code: 'INVALID_TRANSITION',
     error: 'Invalid transition',
   },
+  DecisionWorkflowError: {
+    status: 409,
+    code: 'CASE_NOT_READY_FOR_DECISION',
+    error: 'Case is not ready for a committee decision',
+  },
+  CertificateConflictError: {
+    status: 409,
+    code: 'CERTIFICATE_ALREADY_LIVE',
+    error: 'A live certificate already exists for this decision',
+  },
   FormTokenError: {
     status: 404,
     code: 'FORM_TOKEN_INVALID',
     error: 'This form link is invalid or has expired.',
   },
+  // Platform-operator lifecycle routes only; tenant routes never throw it.
+  OrganisationNotFoundError: { status: 404, code: 'NOT_FOUND', error: 'Not found' },
   BreakGlassError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },
   TenantContextError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },
+  // A suspended or offboarded organisation looks like any other refusal.
+  OrganisationUnavailableError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },
 };
 
 interface MappedError {
@@ -84,11 +112,59 @@ interface MappedError {
   code: string;
   error: string;
   extra?: Record<string, unknown>;
+  headers?: Record<string, string>;
 }
 
 function classify(error: unknown): MappedError {
   if (error instanceof ClientSafeError) {
     return { status: error.status, code: error.code, error: error.message };
+  }
+  // Calm lock: 423 when the tenant key is disabled, 503 when KMS is down.
+  if (error instanceof TenantKeyUnavailableError) {
+    return {
+      status: error.httpStatus,
+      code: error.code,
+      error: TENANT_KEY_UNAVAILABLE_MESSAGE,
+    };
+  }
+  if (error instanceof RateLimitedError) {
+    const seconds = String(Math.max(1, error.retryAfter));
+    return {
+      status: 429,
+      code: 'RATE_LIMITED',
+      error: 'Too many requests',
+      headers: { 'Retry-After': seconds, 'X-Retry-After': seconds },
+    };
+  }
+  // Per-tenant MCP budget (src/domains/mcp/rate-limit.ts).
+  if (error instanceof Error && error.name === 'McpRateLimitError') {
+    const seconds = (error as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+    return {
+      status: 429,
+      code: 'RATE_LIMITED',
+      error: 'Too many requests',
+      headers: { 'Retry-After': String(seconds) },
+    };
+  }
+  // Matched by name so this module does not import the auth stack (session,
+  // database). Status and code come from the error itself.
+  if (error instanceof Error && error.name === 'StaffMfaRequiredError') {
+    const { status, code } = error as { status?: unknown; code?: unknown };
+    return {
+      status: typeof status === 'number' ? status : 403,
+      code: typeof code === 'string' ? code : 'STAFF_MFA_REQUIRED',
+      error: 'A verified second factor is required',
+    };
+  }
+  if (error instanceof Error && error.name === 'StepUpRequiredError') {
+    // The step-up dialog and the session fetch guard key off this body.
+    return { status: 401, ...stepUpRequiredBody() };
+  }
+  // Tenant AI opt-in: a missing step-up re-prompts; missing governance is 400.
+  if (error instanceof Error && error.name === 'AiFeatureChangeError') {
+    return (error as { code?: unknown }).code === 'STEP_UP_REQUIRED'
+      ? { status: 401, ...stepUpRequiredBody() }
+      : { status: 400, code: 'VALIDATION_ERROR', error: 'Invalid request' };
   }
   if (
     error instanceof ZodError ||
@@ -186,8 +262,13 @@ export function errorResponse(
 ): NextResponse {
   const requestId = resolveRequestId(options?.requestId);
   const mapped = classify(error);
-  // ClientSafeError is a status the route chose. Log only unexpected failures.
-  if (mapped.status >= 500 && !(error instanceof ClientSafeError)) {
+  // ClientSafeError is a status the route chose, and a tenant-key 503 is a
+  // calm lock. Log only unexpected failures.
+  if (
+    mapped.status >= 500 &&
+    !(error instanceof ClientSafeError) &&
+    !(error instanceof TenantKeyUnavailableError)
+  ) {
     logger.error(
       { err: sanitiseError(error), requestId, code: mapped.code },
       'unhandled route error',
@@ -202,7 +283,9 @@ export function errorResponse(
         detail: mapped.error,
         requestId,
       },
-      { status: mapped.status },
+      mapped.headers
+        ? { status: mapped.status, headers: mapped.headers }
+        : { status: mapped.status },
     );
   }
 
@@ -212,27 +295,31 @@ export function errorResponse(
     requestId,
     ...mapped.extra,
   };
-  return NextResponse.json(body, { status: mapped.status });
+  return NextResponse.json(
+    body,
+    mapped.headers
+      ? { status: mapped.status, headers: mapped.headers }
+      : { status: mapped.status },
+  );
 }
 
-type RouteFn<TRequest extends Request, C> = (
-  request: TRequest,
-  context: C,
-) => Promise<Response> | Response;
+/** Route handler arguments: `(request, { params })`, either of which may be unused. */
+type RouteArgs = [request?: Request, context?: unknown];
 
 /**
  * Own try/catch for a route handler. Reads or mints the request id, runs `fn`,
- * and turns every throw into {@link errorResponse}.
+ * and turns every throw into {@link errorResponse}. The wrapper keeps `fn`'s
+ * parameter list, so callers (Next.js and tests) invoke it exactly as before.
  */
-export function tenantHandler<TRequest extends Request = Request, C = unknown>(
-  fn: RouteFn<TRequest, C>,
+export function tenantHandler<A extends RouteArgs>(
+  fn: (...args: A) => Promise<Response> | Response,
   options?: Pick<ErrorResponseOptions, 'presentation'>,
-): (request: TRequest, context: C) => Promise<Response> {
-  return async (request, context) => {
-    const ids = correlationFromHeaders(request.headers);
+): (...args: A) => Promise<Response> {
+  return async (...args: A) => {
+    const ids = correlationFromHeaders(args[0]?.headers ?? new Headers());
     return runWithRequestIds(ids, async () => {
       try {
-        return await fn(request, context);
+        return await fn(...args);
       } catch (error) {
         return errorResponse(
           error,

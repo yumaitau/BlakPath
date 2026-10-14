@@ -11,8 +11,10 @@ export default function VerifyPage() {
       <p className="text-primary text-sm font-semibold">Certificate verification</p>
       <h1 className="mt-2 text-3xl font-semibold tracking-tight">Check a certificate</h1>
       <p className="text-muted-foreground mt-3 max-w-xl">
-        Enter the code printed on the certificate. We only confirm whether it is valid and
-        which organisation issued it. We do not show personal application information.
+        Enter the code printed on the certificate. We confirm whether that code is valid
+        and which organisation issued it. When the seal includes a holder name, you can
+        check the name printed on the document. We do not show personal application
+        information.
       </p>
       <Card className="mt-8">
         <CardHeader>

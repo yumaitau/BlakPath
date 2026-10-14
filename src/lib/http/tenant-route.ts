@@ -1,7 +1,10 @@
 import { headers } from 'next/headers';
 import { requireSession } from '@/lib/auth/session';
+import { requireStaffMfa } from '@/lib/auth/staff-policy';
+import { env } from '@/lib/env';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 import { type TenantContext } from '@/lib/tenancy/context';
+import { clientIp } from '@/lib/http/client-ip';
 import { currentRequestIds } from '@/lib/observability/correlation';
 
 /**
@@ -12,6 +15,7 @@ import { currentRequestIds } from '@/lib/observability/correlation';
  * (`withTenant`), which re-verifies the user's active membership of that
  * organisation against the database. The org id is therefore never trusted from
  * client input, and no tenant-scoped code runs without a verified context.
+ * `withTenant` also enforces the staff second-factor policy before `fn`.
  */
 
 /** Thrown when a signed-in user has no active organisation selected. */
@@ -34,6 +38,9 @@ export async function withRequestTenant<T>(
   if (!activeOrganisationId) {
     throw new NoActiveOrganisationError();
   }
+  if (env.NODE_ENV === 'production') {
+    await requireStaffMfa(session.user.id);
+  }
 
   const h = await headers();
   const bound = currentRequestIds();
@@ -44,7 +51,7 @@ export async function withRequestTenant<T>(
       organisationId: activeOrganisationId,
       correlationId: bound?.correlationId ?? globalThis.crypto.randomUUID(),
       requestId: bound?.requestId ?? globalThis.crypto.randomUUID(),
-      ipAddress: h.get('x-forwarded-for') ?? undefined,
+      ipAddress: clientIp({ headers: h }) ?? undefined,
       userAgent: h.get('user-agent') ?? undefined,
     },
     fn,
