@@ -22,6 +22,7 @@ import {
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { env } from '@/lib/env';
+import { openApplicantName } from '@/lib/encryption/tenant-fields';
 import {
   EVIDENCE_BUCKET,
   objectKey,
@@ -182,7 +183,11 @@ export async function generateCertificate(
 
   const pdf = await renderCertificatePdf({
     organisationName: org.tradingName ?? org.legalName,
-    applicantName: application.applicantName,
+    applicantName: await openApplicantName(
+      scope.organisationId,
+      decision.applicationId,
+      application.applicantName,
+    ),
     reference,
     verificationCode,
     issuedOn: now.toISOString().slice(0, 10),
@@ -194,6 +199,7 @@ export async function generateCertificate(
     key,
     body: pdf,
     contentType: 'application/pdf',
+    organisationId: scope.organisationId,
   });
   const sha256 = createHash('sha256').update(pdf).digest('hex');
 

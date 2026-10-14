@@ -28,6 +28,8 @@ export * from './exports';
 export * from './retention';
 export * from './notifications';
 export * from './email';
+export * from './correspondence';
+export * from './encryption-backfill';
 export * from './sso';
 export * from './scim';
 export * from './consent';

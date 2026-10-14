@@ -90,12 +90,15 @@ manifest is `infra/k8s/service-ingress.yaml`. The example stack is
   AccessDenied. Delete that check object. Do not print Secret data.
 - Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
   Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
-  `alias/blakpath-prod-evidence` covers both S3 buckets. RDS uses its
-  provisioned key. No AWS-managed default keys in the secret path. The key
-  policy keeps account-root IAM delegation so the dedicated role's IAM allow
-  works. Do not grant the shared External Secrets role on that key.
+  `alias/blakpath-prod-evidence` is the bucket default for both S3 buckets.
+  Objects written for a tenant use that tenant's CMK, with S3 Bucket Keys
+  off, so HeadObject shows the tenant key ARN. RDS uses its provisioned key.
+  No AWS-managed default keys in the secret path. The key policy keeps
+  account-root IAM delegation so the dedicated role's IAM allow works. Do not
+  grant the shared External Secrets role on that key.
 - ElastiCache runs with transit and at-rest encryption. Redis holds
-  ephemeral state only — never tenant records.
+  ephemeral state only. Queue payloads are identifiers, never tenant field
+  contents.
 
 ## Mail credentials
 
@@ -151,8 +154,11 @@ Record who rotated, when, and which keys. Do not record the values.
 
 - RDS Postgres with point-in-time recovery. Proxy in front for failover.
 - ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
-- S3 evidence + quarantine buckets: block public access, enforce TLS + CMK,
-  versioning on, AWS Backup coverage. MinIO exists for local dev only.
+- S3 evidence + quarantine buckets: block public access, enforce TLS,
+  versioning on, AWS Backup coverage. The bucket default CMK is
+  `alias/blakpath-prod-evidence`. Per-object SSE-KMS uses the tenant CMK.
+  Certificates and exports are objects in the evidence bucket. MinIO exists
+  for local dev only and does not send SSE headers.
 - S3 audit-anchor bucket: created with Object Lock compliance retention
   (see `infra/aws/audit-anchor-bucket.example.yaml`). The worker may put and
   read objects. It must not be granted delete or governance bypass. Web tasks

@@ -197,6 +197,13 @@
       "when": 1791944636171,
       "tag": "0027_fluffy_cammi",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791945560250,
+      "tag": "0028_skinny_old_lace",
+      "breakpoints": true
     }
   ]
 }

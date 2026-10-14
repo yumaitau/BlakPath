@@ -19,7 +19,8 @@ Parameters:
   # Informational. Tenant and platform envelope calls are authorised by the
   # encryption-context condition below, because BYOK / XKS ARNs are not known
   # when this role is deployed. The customer key policy must grant this role
-  # kms:Decrypt and kms:GenerateDataKey.
+  # kms:Decrypt, kms:Encrypt, and kms:GenerateDataKey. S3 object encryption
+  # uses the tenant CMK via kms:ViaService, not the purpose condition.
   PlatformKmsKeyArn:
     Type: String
 
@@ -67,6 +68,18 @@ Resources:
                     kms:EncryptionContext:purpose:
                       - field
                       - platform
+                      - blind-index
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: s3.ap-southeast-2.amazonaws.com
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
 
   WorkerTaskRole:
     Type: AWS::IAM::Role
@@ -132,6 +145,18 @@ Resources:
                     kms:EncryptionContext:purpose:
                       - field
                       - platform
+                      - blind-index
+              - Sid: TenantObjectSse
+                Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: s3.ap-southeast-2.amazonaws.com
+                  StringLike:
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !Sub '${EvidenceBucketArn}/*'
+                      - !Sub '${QuarantineBucketArn}/*'
 
   TaskExecutionRole:
     Type: AWS::IAM::Role

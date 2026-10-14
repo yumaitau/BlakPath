@@ -9,9 +9,11 @@ import { tenantJobSchema } from './tenant-job';
  * Every background job operates on behalf of exactly one organisation. Its
  * payload MUST carry `organisationId`. The shape is checked at enqueue and
  * parsed again when the worker consumes the job, which also checks that the
- * organisation is active before any tenant scope is opened. Job payloads must
- * never embed applicant PII or evidence content; pass opaque ids and let the
- * worker fetch tenant-scoped rows.
+ * organisation is active before any tenant scope is opened. Payloads carry
+ * ids only (`organisationId`, `correlationId`, an optional `cursor`, and
+ * fields ending in `Id`). Field contents stay in the database under the
+ * tenant key. Job payloads must never embed applicant PII or evidence
+ * content; pass opaque ids and let the worker fetch tenant-scoped rows.
  */
 
 /** Phase-1 queues. Values are the concrete Redis queue names. */
@@ -24,6 +26,7 @@ export enum QueueName {
   Export = 'export',
   Webhook = 'webhook',
   Reminder = 'reminder',
+  EncryptionBackfill = 'encryption-backfill',
 }
 
 /** Base shape every job payload must satisfy: it is bound to one tenant. */
@@ -68,12 +71,22 @@ export function getQueue<T extends TenantJob = TenantJob>(
  * @throws when `organisationId` (or `correlationId`) is missing so a
  * mis-constructed job can never run without a tenant context.
  */
+const JOB_FIELD = /^(organisationId|correlationId|cursor)$|^[A-Za-z]+Id$/;
+
 export function assertTenantJob<T extends TenantJob>(payload: T): T {
   const parsed = tenantJobSchema.safeParse(payload);
   if (!parsed.success) {
     throw new Error(
       'Job payload is missing a valid organisationId or correlationId — refusing to enqueue',
     );
+  }
+  for (const [key, value] of Object.entries(payload)) {
+    if (!JOB_FIELD.test(key)) {
+      throw new Error(`Job payload field ${key} is not an id — refusing to enqueue`);
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new Error(`Job payload field ${key} must be a non-empty string`);
+    }
   }
   return payload;
 }

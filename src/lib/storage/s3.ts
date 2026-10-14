@@ -3,11 +3,15 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
   type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { getOrganisationKey } from '@/domains/organisation-keys';
+import { TenantKeyUnavailableError } from '@/lib/encryption/errors';
+import { parseKeyArn } from '@/lib/encryption/key-provider';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
 
@@ -18,8 +22,10 @@ import { logger } from '@/lib/observability/logger';
  * scanned, and only clean objects are promoted to the EVIDENCE bucket. Every
  * object key is namespaced by organisation (`orgId/...`) so a presigned URL can
  * never address another tenant's data. Objects are ALWAYS private — we never
- * set a public ACL. In production, server-side encryption uses KMS
- * (`aws:kms`); locally against MinIO we fall back to `AES256`.
+ * set a public ACL. Tenant objects use SSE-KMS with that tenant's CMK and
+ * bucket keys disabled. A local S3 endpoint skips the SSE headers because
+ * MinIO cannot wrap the tenant CMK, but the tenant key must still be active.
+ * `S3_KMS_KEY_ID` remains the bucket default only.
  */
 
 const globalForS3 = globalThis as unknown as { __blakpathS3?: S3Client };
@@ -51,11 +57,59 @@ export const EVIDENCE_BUCKET = env.S3_BUCKET_EVIDENCE;
 /** Short lifetime for presigned URLs — minimise the window of misuse. */
 const PRESIGN_TTL_SECONDS = 300;
 
+/** Local S3 (MinIO) cannot apply a tenant CMK. Real AWS always does. */
+function tenantSseEnabled(): boolean {
+  return !env.S3_ENDPOINT;
+}
+
 /**
- * SSE expectation: KMS in production, AES256 for AWS-backed non-production
- * environments. Local S3-compatible endpoints may not have a KMS configured,
- * so development relies on the local volume controls instead.
+ * SSE-KMS with the tenant CMK. Bucket keys stay off so each object is wrapped
+ * by that key and HeadObject reports it.
  */
+export function tenantObjectSse(kmsKeyArn: string): {
+  ServerSideEncryption: 'aws:kms';
+  SSEKMSKeyId: string;
+  BucketKeyEnabled: false;
+} {
+  parseKeyArn(kmsKeyArn);
+  return {
+    ServerSideEncryption: 'aws:kms',
+    SSEKMSKeyId: kmsKeyArn,
+    BucketKeyEnabled: false,
+  };
+}
+
+export function presignSseHeaders(sse: {
+  ServerSideEncryption: string;
+  SSEKMSKeyId: string;
+}): Record<string, string> {
+  return {
+    'x-amz-server-side-encryption': sse.ServerSideEncryption,
+    'x-amz-server-side-encryption-aws-kms-key-id': sse.SSEKMSKeyId,
+    'x-amz-server-side-encryption-bucket-key-enabled': 'false',
+  };
+}
+
+/** Key id reported by HeadObject when the object used SSE-KMS. */
+export function tenantKeyArnFromHead(head: {
+  ServerSideEncryption?: string | undefined;
+  SSEKMSKeyId?: string | undefined;
+}): string | null {
+  if (head.ServerSideEncryption !== 'aws:kms') return null;
+  return head.SSEKMSKeyId ?? null;
+}
+
+async function requireActiveTenantKey(organisationId: string): Promise<string> {
+  const row = await getOrganisationKey(organisationId);
+  if (!row) throw new TenantKeyUnavailableError(organisationId, 503);
+  if (row.status === 'disabled' || row.status === 'pending_deletion') {
+    throw new TenantKeyUnavailableError(organisationId, 423);
+  }
+  if (row.status !== 'active') throw new TenantKeyUnavailableError(organisationId, 503);
+  return row.kmsKeyArn;
+}
+
+/** Platform CMK for objects that are not bound to one tenant, such as audit anchors. */
 export function s3ServerSideEncryption():
   | {
       ServerSideEncryption: ServerSideEncryption;
@@ -63,10 +117,11 @@ export function s3ServerSideEncryption():
     }
   | undefined {
   if (env.S3_ENDPOINT) return undefined;
-  return encryptionOptions();
+  return legacyEncryption();
 }
 
-function encryptionOptions(): {
+/** Shared-key fallback for non-tenant callers (restore verification). */
+function legacyEncryption(): {
   ServerSideEncryption: ServerSideEncryption;
   SSEKMSKeyId?: string;
 } {
@@ -124,7 +179,8 @@ export async function presignUpload(params: {
   contentLength: number;
 }): Promise<PresignedUpload> {
   assertOwnedKey(params.organisationId, params.key);
-  const encryption = env.S3_ENDPOINT ? undefined : encryptionOptions();
+  const kmsKeyArn = await requireActiveTenantKey(params.organisationId);
+  const encryption = tenantSseEnabled() ? tenantObjectSse(kmsKeyArn) : undefined;
   const command = new PutObjectCommand({
     Bucket: QUARANTINE_BUCKET,
     Key: params.key,
@@ -135,14 +191,7 @@ export async function presignUpload(params: {
   const url = await getSignedUrl(s3, command, { expiresIn: PRESIGN_TTL_SECONDS });
   return {
     url,
-    headers: encryption
-      ? {
-          'x-amz-server-side-encryption': encryption.ServerSideEncryption,
-          ...(encryption.SSEKMSKeyId
-            ? { 'x-amz-server-side-encryption-aws-kms-key-id': encryption.SSEKMSKeyId }
-            : {}),
-        }
-      : {},
+    headers: encryption ? presignSseHeaders(encryption) : {},
     bucket: QUARANTINE_BUCKET,
     key: params.key,
     expiresIn: PRESIGN_TTL_SECONDS,
@@ -160,6 +209,7 @@ export async function presignDownload(params: {
   fileName: string;
 }): Promise<{ url: string; expiresIn: number }> {
   assertOwnedKey(params.organisationId, params.key);
+  await requireActiveTenantKey(params.organisationId);
   const safeName =
     params.fileName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 200) || 'evidence';
   const command = new GetObjectCommand({
@@ -180,7 +230,8 @@ export async function moveQuarantineToEvidence(params: {
   key: string;
 }): Promise<{ bucket: string; key: string }> {
   assertOwnedKey(params.organisationId, params.key);
-  const encryption = env.S3_ENDPOINT ? undefined : encryptionOptions();
+  const kmsKeyArn = await requireActiveTenantKey(params.organisationId);
+  const encryption = tenantSseEnabled() ? tenantObjectSse(kmsKeyArn) : undefined;
   await s3.send(
     new CopyObjectCommand({
       Bucket: EVIDENCE_BUCKET,
@@ -199,14 +250,17 @@ export async function moveQuarantineToEvidence(params: {
 }
 
 /**
- * Read a whole object into memory. Used by the malware scanner to stream bytes
- * to ClamAV. Callers must bound object size upstream (see the evidence size
- * limit) so this never loads an unbounded payload.
+ * Read a whole object into memory. S3 decrypts under the tenant CMK into this
+ * process only. Callers must bound object size upstream and zero the buffer
+ * when they are finished. `organisationId` is optional for restore checks
+ * that are not serving a tenant.
  */
 export async function getObjectBytes(params: {
   bucket: string;
   key: string;
+  organisationId?: string;
 }): Promise<Buffer> {
+  if (params.organisationId) await requireActiveTenantKey(params.organisationId);
   const result = await s3.send(
     new GetObjectCommand({ Bucket: params.bucket, Key: params.key }),
   );
@@ -229,16 +283,51 @@ export async function putObjectBytes(params: {
   key: string;
   body: Buffer;
   contentType: string;
+  organisationId?: string;
 }): Promise<void> {
+  const encryption = params.organisationId
+    ? tenantSseEnabled()
+      ? tenantObjectSse(await requireActiveTenantKey(params.organisationId))
+      : undefined
+    : env.S3_ENDPOINT
+      ? undefined
+      : legacyEncryption();
   await s3.send(
     new PutObjectCommand({
       Bucket: params.bucket,
       Key: params.key,
       Body: params.body,
       ContentType: params.contentType,
-      ...(s3ServerSideEncryption() ?? {}),
+      ...encryption,
     }),
   );
+}
+
+/**
+ * Head an object and report the SSE-KMS key. The caller compares it with the
+ * tenant key ARN. A disabled key fails closed before the head.
+ */
+export async function headTenantObject(params: {
+  bucket: string;
+  key: string;
+  organisationId: string;
+}): Promise<{
+  sse: string | null;
+  kmsKeyId: string | null;
+  bucketKeyEnabled: boolean | null;
+}> {
+  await requireActiveTenantKey(params.organisationId);
+  const head = await s3.send(
+    new HeadObjectCommand({ Bucket: params.bucket, Key: params.key }),
+  );
+  return {
+    sse: head.ServerSideEncryption ?? null,
+    kmsKeyId: tenantKeyArnFromHead({
+      ServerSideEncryption: head.ServerSideEncryption,
+      SSEKMSKeyId: head.SSEKMSKeyId,
+    }),
+    bucketKeyEnabled: head.BucketKeyEnabled ?? null,
+  };
 }
 
 /** Delete a single object (e.g. removing an infected or rejected upload). */

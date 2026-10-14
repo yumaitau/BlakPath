@@ -111,6 +111,15 @@ export const auth = betterAuth({
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
 
+  /**
+   * OAuth access and refresh tokens are encrypted with the platform auth
+   * secret before storage. This is not the tenant CMK. Tokens that do not
+   * already look encrypted still read back as stored.
+   */
+  account: {
+    encryptOAuthTokens: true,
+  },
+
   database: drizzleAdapter(db, {
     provider: 'pg',
     // Map Better Auth's singular model names onto our pluralised Drizzle tables.
