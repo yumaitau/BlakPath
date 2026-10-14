@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 
 test('sensitive APIs consistently reject anonymous requests', async ({ request }) => {
   const protectedGets = [
@@ -86,6 +86,13 @@ test('public operational endpoints expose only their intended status', async ({
   expect(live.status()).toBe(200);
   await expect(live.json()).resolves.toMatchObject({ status: 'ok' });
 
+  const externalHealth = await request.get('/api/health', {
+    headers: { 'x-forwarded-for': '203.0.113.10', 'cf-connecting-ip': '203.0.113.10' },
+  });
+  expect(externalHealth.status()).toBe(403);
+  await expect(externalHealth.json()).resolves.toEqual({ error: 'Forbidden' });
+
+  // Direct call, same shape as a VPC client that did not traverse the edge.
   const health = await request.get('/api/health');
   expect([200, 503]).toContain(health.status());
   const healthPayload = (await health.json()) as { status: string; checks: object };

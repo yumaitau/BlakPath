@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as drizzle from 'drizzle-orm';
 import type { Database } from '@/db/client';
+import { AUDIT_APPEND_ONLY_TRIGGERS } from '@/db/audit-guard';
+import type * as TenantFields from '@/lib/encryption/tenant-fields';
 import * as schema from '@/db/schema';
 import type { RetentionPreviewItem, SweepInput } from '@/domains/retention/sweep';
 import { ANONYMISED_PLACEHOLDER, MIN_RETENTION_DAYS } from '@/domains/retention/rules';
@@ -31,6 +33,8 @@ integration('retention sweep', () => {
   let processRetentionSweep: (input: SweepInput) => Promise<void>;
   let previewRetentionSweep: (organisationId: string) => Promise<RetentionPreviewItem[]>;
   let pageSize: number;
+  let ensureOrganisationKey: (organisationId: string) => Promise<void>;
+  let fields: typeof TenantFields;
   const orgIds: string[] = [];
   const userIds: string[] = [];
 
@@ -42,6 +46,9 @@ integration('retention sweep', () => {
     processRetentionSweep = sweep.processRetentionSweep;
     previewRetentionSweep = sweep.previewRetentionSweep;
     pageSize = sweep.SWEEP_PAGE_SIZE;
+    ensureOrganisationKey = (await import('@/domains/organisation-keys'))
+      .ensureOrganisationKey;
+    fields = await import('@/lib/encryption/tenant-fields');
   });
 
   beforeEach(() => {
@@ -51,10 +58,35 @@ integration('retention sweep', () => {
 
   afterAll(async () => {
     if (db && schema && drizzle) {
-      for (const orgId of orgIds) {
+      // Teardown only: the audit trail is append-only, so lift the guard to
+      // remove this suite's throwaway tenants, then restore it.
+      for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
         await db
-          .delete(schema.auditEvents)
-          .where(drizzle.eq(schema.auditEvents.organisationId, orgId));
+          .execute(
+            drizzle.sql.raw(
+              `ALTER TABLE ${trigger.table} DISABLE TRIGGER ${trigger.name}`,
+            ),
+          )
+          .catch(() => undefined);
+      }
+      try {
+        for (const orgId of orgIds) {
+          await db
+            .delete(schema.auditEvents)
+            .where(drizzle.eq(schema.auditEvents.organisationId, orgId));
+        }
+      } finally {
+        for (const trigger of AUDIT_APPEND_ONLY_TRIGGERS) {
+          await db
+            .execute(
+              drizzle.sql.raw(
+                `ALTER TABLE ${trigger.table} ENABLE ALWAYS TRIGGER ${trigger.name}`,
+              ),
+            )
+            .catch(() => undefined);
+        }
+      }
+      for (const orgId of orgIds) {
         await db
           .delete(schema.organisations)
           .where(drizzle.eq(schema.organisations.id, orgId));
@@ -74,6 +106,7 @@ integration('retention sweep', () => {
       .returning({ id: schema.organisations.id });
     if (!org) throw new Error('organisation insert failed');
     orgIds.push(org.id);
+    await ensureOrganisationKey(org.id);
     return org.id;
   }
 
@@ -162,14 +195,17 @@ integration('retention sweep', () => {
 
     const dueRows = await db
       .select({
+        id: schema.applications.id,
         anonymisedAt: schema.applications.anonymisedAt,
         applicantName: schema.applications.applicantName,
+        intake: schema.applications.intake,
       })
       .from(schema.applications)
       .where(drizzle.inArray(schema.applications.id, dueIds));
     expect(dueRows).toHaveLength(10);
     expect(dueRows.every((row) => row.anonymisedAt instanceof Date)).toBe(true);
-    expect(dueRows.every((row) => row.applicantName === ANONYMISED_PLACEHOLDER)).toBe(
+    const opened = await fields.openApplicationRows(orgId, dueRows);
+    expect(opened.every((row) => row.applicantName === ANONYMISED_PLACEHOLDER)).toBe(
       true,
     );
 
@@ -239,7 +275,9 @@ integration('retention sweep', () => {
       .from(schema.applications)
       .where(drizzle.eq(schema.applications.id, id ?? ''));
     expect(second?.anonymisedAt?.getTime()).toBe(first?.anonymisedAt?.getTime());
-    expect(second?.applicantName).toBe(ANONYMISED_PLACEHOLDER);
+    expect(
+      await fields.openApplicantName(orgId, id ?? '', second?.applicantName ?? ''),
+    ).toBe(ANONYMISED_PLACEHOLDER);
     expect(await auditCount(orgId)).toBe(before);
     expect(await auditCount(orgId, 'once-second')).toBe(0);
   });
@@ -312,7 +350,8 @@ integration('retention sweep', () => {
       .select()
       .from(schema.familyLinks)
       .where(drizzle.eq(schema.familyLinks.applicationId, appId));
-    expect(link?.relativeName).toBe(ANONYMISED_PLACEHOLDER);
+    const [openedLink] = link ? await fields.openFamilyRows(orgId, [link]) : [];
+    expect(openedLink?.relativeName).toBe(ANONYMISED_PLACEHOLDER);
     expect(link?.community).toBeNull();
     expect(link?.notes).toBeNull();
     expect(link?.decisionNote).toBeNull();
@@ -333,13 +372,17 @@ integration('retention sweep', () => {
       .select()
       .from(schema.applicationNotes)
       .where(drizzle.eq(schema.applicationNotes.applicationId, appId));
-    expect(note?.body).toBe(ANONYMISED_PLACEHOLDER);
+    const [openedNote] = note ? await fields.openNoteRows(orgId, [note]) : [];
+    expect(openedNote?.body).toBe(ANONYMISED_PLACEHOLDER);
 
     const [response] = await db
       .select()
       .from(schema.formResponses)
       .where(drizzle.eq(schema.formResponses.formId, form?.id ?? ''));
-    expect(response?.answers).toEqual({});
+    const [openedResponse] = response
+      ? await fields.openFormResponses(orgId, [response])
+      : [];
+    expect(openedResponse?.answers).toEqual({});
     expect(response?.respondentName).toBeNull();
     expect(response?.respondentEmail).toBeNull();
     expect(response?.ipAddress).toBeNull();
@@ -358,6 +401,14 @@ integration('retention sweep', () => {
       .where(drizzle.eq(schema.decisions.applicationId, appId));
     expect(decision?.rationale).toBeNull();
     expect(decision?.status).toBe('proposed');
+
+    // The old name's blind index must not still find the anonymised matter.
+    const { blindIndex } = await import('@/lib/encryption/blind-index');
+    const [anonApp] = await db
+      .select({ bidx: schema.applications.applicantNameBidx })
+      .from(schema.applications)
+      .where(drizzle.eq(schema.applications.id, appId));
+    expect(anonApp?.bidx).toBe(await blindIndex(orgId, ANONYMISED_PLACEHOLDER));
   });
 
   it('keeps a held application and its evidence', async () => {

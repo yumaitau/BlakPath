@@ -1,0 +1,1 @@
+ALTER TABLE "webhook_endpoints" ADD CONSTRAINT "webhook_endpoints_secret_is_ciphertext" CHECK ("webhook_endpoints"."secret" ~ '^\{"v":[0-9]+,');

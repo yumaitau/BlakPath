@@ -21,10 +21,12 @@ import { applications } from './applications';
  * recipient completes the form via a public link WITHOUT signing in, and the
  * answers land in `form_responses`. All tenant-owned and org-leading indexed.
  *
- * SECURITY: an invitation stores only the SHA-256 HASH of its secret token, so a
- * database read never yields a usable link. The public completion path resolves
- * a presented token by hashing it and matching the hash — the token itself is
- * the capability, and it is scoped, single-use and expiring.
+ * SECURITY: an invitation stores the SHA-256 HASH of its secret token for
+ * lookup, plus a sealed copy used only to deliver the email. The seal is
+ * envelope ciphertext and is cleared after a successful send. A database read
+ * never yields a usable link. The public completion path resolves a presented
+ * token by hashing it and matching the hash — the token itself is the
+ * capability, and it is scoped, single-use and expiring.
  */
 export const forms = pgTable(
   'forms',
@@ -63,8 +65,13 @@ export const formInvitations = pgTable(
     formId: refId('form_id')
       .notNull()
       .references(() => forms.id, { onDelete: 'cascade' }),
-    /** SHA-256 hex of the secret token. The raw token is never stored. */
+    /** SHA-256 hex of the secret token. Lookup key; not a usable link. */
     tokenHash: text('token_hash').notNull(),
+    /**
+     * Envelope-encrypted bearer token. Present only until the worker sends
+     * the invitation email, then cleared. Never copied onto a queue.
+     */
+    tokenSeal: jsonb('token_seal'),
     recipientName: text('recipient_name'),
     recipientEmail: text('recipient_email'),
     status: formInvitationStatus('status').notNull().default('pending'),

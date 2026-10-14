@@ -7,7 +7,7 @@ import { generateCertificate, listCertificates } from '@/domains/certificates';
  * Certificates collection.
  * - GET  ?applicationId=<uuid> — list an application's certificates.
  * - POST { decisionId }        — generate a draft certificate from a finalised,
- *                                confirmed decision.
+ *                                confirmed decision on a decided case.
  */
 export async function GET(request: NextRequest): Promise<Response> {
   try {
@@ -16,7 +16,15 @@ export async function GET(request: NextRequest): Promise<Response> {
       return NextResponse.json({ error: 'applicationId is required' }, { status: 400 });
     }
     const items = await withRequestTenant(() => listCertificates(applicationId));
-    return NextResponse.json({ items });
+    return NextResponse.json({
+      items: items.map((item) => {
+        const { holderBindingSalt, holderNameHash, holderDobHash, ...publicItem } = item;
+        void holderBindingSalt;
+        void holderNameHash;
+        void holderDobHash;
+        return publicItem;
+      }),
+    });
   } catch (error) {
     return toErrorResponse(error);
   }

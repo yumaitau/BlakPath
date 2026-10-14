@@ -22,8 +22,7 @@ Generate the required secrets before first run:
 ```bash
 # .env: BETTER_AUTH_SECRET
 openssl rand -base64 48
-# .env: ENCRYPTION_MASTER_KEY (base64-encoded 32-byte key)
-openssl rand -base64 32
+# Dev envelope encryption uses the local provider. No master key required.
 ```
 
 ### Services

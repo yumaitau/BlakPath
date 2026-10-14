@@ -39,6 +39,13 @@ import type { Database } from '@/db/client';
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import type { AuditAction, ResourceType } from '@/domains/audit/events';
+import {
+  sealApplicationFields,
+  sealFamilyFields,
+  sealFormResponse,
+  sealNoteBody,
+} from '@/lib/encryption/tenant-fields';
+import { nextRowVersion } from '@/lib/concurrency/claim';
 import { logger } from '@/lib/observability/logger';
 import {
   deleteAllObjectVersions,
@@ -289,7 +296,7 @@ function sysAudit(
   resourceType: ResourceType,
   resourceId: string,
   result: 'success' | 'failure',
-  reason?: string,
+  reason?: 'retention.action_failed',
   phase?: 'hard_delete',
 ) {
   return recordAudit({
@@ -297,7 +304,7 @@ function sysAudit(
     resourceType,
     resourceId,
     result,
-    reason: reason?.slice(0, 500) ?? null,
+    reason: reason ?? null,
     organisationId,
     actorUserId: null,
     actingRole: 'system',
@@ -340,7 +347,6 @@ async function runRecord(
   try {
     outcome = await work();
   } catch (err) {
-    const reason = err instanceof Error ? err.message : 'retention action failed';
     logger.error(
       { err, organisationId: input.organisationId, resourceType, resourceId, action },
       'retention action failed',
@@ -352,7 +358,7 @@ async function runRecord(
       resourceType,
       resourceId,
       'failure',
-      reason,
+      'retention.action_failed',
     );
     return 'failed';
   }
@@ -526,29 +532,50 @@ async function anonymiseApplication(
   applicationId: string,
   now: Date,
 ): Promise<void> {
-  await tx
-    .update(familyLinks)
-    .set({
-      relativeName: ANONYMISED_PLACEHOLDER,
-      community: null,
-      notes: null,
-      decisionNote: null,
-    })
+  // Sealed columns get a sealed placeholder (and a fresh blind index) so the
+  // row stays a tenant envelope: no plaintext residue, no stale name index.
+  const links = await tx
+    .select({ id: familyLinks.id })
+    .from(familyLinks)
     .where(
       and(
         eq(familyLinks.organisationId, organisationId),
         eq(familyLinks.applicationId, applicationId),
       ),
     );
-  await tx
-    .update(applicationNotes)
-    .set({ body: ANONYMISED_PLACEHOLDER })
+  for (const link of links) {
+    const sealed = await sealFamilyFields(organisationId, link.id, {
+      relativeName: ANONYMISED_PLACEHOLDER,
+      community: null,
+      notes: null,
+    });
+    await tx
+      .update(familyLinks)
+      .set({ ...sealed, decisionNote: null })
+      .where(
+        and(eq(familyLinks.organisationId, organisationId), eq(familyLinks.id, link.id)),
+      );
+  }
+  const notes = await tx
+    .select({ id: applicationNotes.id })
+    .from(applicationNotes)
     .where(
       and(
         eq(applicationNotes.organisationId, organisationId),
         eq(applicationNotes.applicationId, applicationId),
       ),
     );
+  for (const note of notes) {
+    await tx
+      .update(applicationNotes)
+      .set({ body: await sealNoteBody(organisationId, note.id, ANONYMISED_PLACEHOLDER) })
+      .where(
+        and(
+          eq(applicationNotes.organisationId, organisationId),
+          eq(applicationNotes.id, note.id),
+        ),
+      );
+  }
   await tx
     .update(evidence)
     .set({
@@ -557,6 +584,7 @@ async function anonymiseApplication(
       evidenceKey: null,
       sha256: null,
       anonymisedAt: now,
+      version: nextRowVersion(),
     })
     .where(
       and(
@@ -575,7 +603,7 @@ async function anonymiseApplication(
     );
   await tx
     .update(reviews)
-    .set({ content: ANONYMISED_PLACEHOLDER })
+    .set({ content: ANONYMISED_PLACEHOLDER, version: nextRowVersion() })
     .where(
       and(
         eq(reviews.organisationId, organisationId),
@@ -598,7 +626,7 @@ async function anonymiseApplication(
   if (openDecisionIds.length > 0) {
     await tx
       .update(decisions)
-      .set({ rationale: null })
+      .set({ rationale: null, version: nextRowVersion() })
       .where(
         and(
           eq(decisions.organisationId, organisationId),
@@ -626,21 +654,18 @@ async function anonymiseApplication(
     );
   const formIds = await idsFor(tx, organisationId, applicationId, 'forms');
   if (formIds.length > 0) {
-    await tx
-      .update(formResponses)
-      .set({
-        answers: {},
-        respondentName: null,
-        respondentEmail: null,
-        ipAddress: null,
-        anonymisedAt: now,
-      })
+    const responses = await tx
+      .select({ id: formResponses.id })
+      .from(formResponses)
       .where(
         and(
           eq(formResponses.organisationId, organisationId),
           inArray(formResponses.formId, formIds),
         ),
       );
+    for (const response of responses) {
+      await anonymiseFormResponseRow(tx, organisationId, response.id, now);
+    }
     await tx
       .update(formInvitations)
       .set({ recipientName: null, recipientEmail: null })
@@ -694,20 +719,53 @@ async function anonymiseApplication(
     }
   }
 
+  const sealedName = await sealApplicationFields(organisationId, applicationId, {
+    applicantName: ANONYMISED_PLACEHOLDER,
+  });
   await tx
     .update(applications)
     .set({
-      applicantName: ANONYMISED_PLACEHOLDER,
+      applicantName: sealedName.applicantName,
+      applicantNameBidx: sealedName.applicantNameBidx,
+      applicantNameTokenBidx: sealedName.applicantNameTokenBidx,
       applicantUserId: null,
       intake: null,
       withdrawnReason: null,
       anonymisedAt: now,
+      version: nextRowVersion(),
       ...(detachClient ? { clientId: null } : {}),
     })
     .where(
       and(
         eq(applications.organisationId, organisationId),
         eq(applications.id, applicationId),
+      ),
+    );
+}
+
+async function anonymiseFormResponseRow(
+  tx: Tx,
+  organisationId: string,
+  formResponseId: string,
+  now: Date,
+): Promise<void> {
+  const sealed = await sealFormResponse(organisationId, formResponseId, {
+    answers: {},
+    respondentEmail: null,
+  });
+  await tx
+    .update(formResponses)
+    .set({
+      answers: sealed.answers,
+      respondentName: null,
+      respondentEmail: null,
+      ipAddress: null,
+      anonymisedAt: now,
+    })
+    .where(
+      and(
+        eq(formResponses.organisationId, organisationId),
+        eq(formResponses.id, formResponseId),
       ),
     );
 }
@@ -719,6 +777,9 @@ async function tombstoneApplication(
   now: Date,
 ): Promise<void> {
   const stamp = { deletedAt: now };
+  // Tables under optimistic concurrency also get a new version, so an editor
+  // holding the pre-disposal version cannot write the record back.
+  const versioned = () => ({ deletedAt: now, version: nextRowVersion() });
   await tx
     .update(familyLinks)
     .set(stamp)
@@ -739,7 +800,7 @@ async function tombstoneApplication(
     );
   await tx
     .update(evidence)
-    .set(stamp)
+    .set(versioned())
     .where(
       and(
         eq(evidence.organisationId, organisationId),
@@ -748,7 +809,7 @@ async function tombstoneApplication(
     );
   await tx
     .update(decisions)
-    .set(stamp)
+    .set(versioned())
     .where(
       and(
         eq(decisions.organisationId, organisationId),
@@ -757,7 +818,7 @@ async function tombstoneApplication(
     );
   await tx
     .update(certificates)
-    .set(stamp)
+    .set(versioned())
     .where(
       and(
         eq(certificates.organisationId, organisationId),
@@ -766,7 +827,7 @@ async function tombstoneApplication(
     );
   await tx
     .update(reviews)
-    .set(stamp)
+    .set(versioned())
     .where(
       and(
         eq(reviews.organisationId, organisationId),
@@ -826,7 +887,7 @@ async function tombstoneApplication(
   }
   await tx
     .update(applications)
-    .set(stamp)
+    .set(versioned())
     .where(
       and(
         eq(applications.organisationId, organisationId),
@@ -1520,6 +1581,7 @@ async function disposeEvidence(
           evidenceKey: null,
           sha256: null,
           anonymisedAt: now,
+          version: nextRowVersion(),
         })
         .where(
           and(
@@ -1530,7 +1592,7 @@ async function disposeEvidence(
     } else {
       await tx
         .update(evidence)
-        .set({ deletedAt: now })
+        .set({ deletedAt: now, version: nextRowVersion() })
         .where(
           and(
             eq(evidence.organisationId, input.organisationId),
@@ -1644,21 +1706,7 @@ async function disposeFormResponse(
       throw new Error('Official record became protected during retention disposal');
     }
     if (action === 'anonymise') {
-      await tx
-        .update(formResponses)
-        .set({
-          answers: {},
-          respondentName: null,
-          respondentEmail: null,
-          ipAddress: null,
-          anonymisedAt: now,
-        })
-        .where(
-          and(
-            eq(formResponses.organisationId, input.organisationId),
-            eq(formResponses.id, formResponseId),
-          ),
-        );
+      await anonymiseFormResponseRow(tx, input.organisationId, formResponseId, now);
     } else {
       await tx
         .update(formResponses)
