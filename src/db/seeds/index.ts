@@ -30,6 +30,8 @@ import { SYSTEM_ROLES, SYSTEM_ROLE_SEED } from '@/lib/permissions/roles';
  * SAFETY: developer accounts require ALLOW_DEV_SEED=1 and a loopback database
  * host. NODE_ENV=production never creates them. Any other non-local host fails
  * the process. Seeding is idempotent — re-running never duplicates rows.
+ * Further organisations are created with `pnpm org:provision`, which does not
+ * grant the operator a tenant membership.
  */
 
 const ARGON2_OPTIONS = {

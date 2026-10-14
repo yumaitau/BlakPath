@@ -581,6 +581,10 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     },
   ),
   route('POST', '/api/organisation/activation', anyOf(['tenant:configure'])),
+  route('GET', '/api/organisation/readiness', anyOf(['tenant:configure'])),
+  route('PATCH', '/api/organisation/readiness', anyOf(['tenant:configure']), {
+    body: { item: 'consent_wording', complete: true },
+  }),
   route('POST', '/api/organisation-key/health-check', anyOf(['tenant:configure'])),
   route('GET', '/api/organisation-keys', anyOf(['tenant:configure']), {
     allowRole: 'organisation-admin',

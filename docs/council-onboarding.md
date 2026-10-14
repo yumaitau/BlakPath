@@ -5,21 +5,79 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 
 ## 1. Create tenant
 
-1. Reserve the organisation slug and legal name. Do not insert the organisation
-   row by hand.
-2. Seed system roles + permission catalogue (`pnpm db:seed` covers platform
-   defaults; tenant clones roles on first admin sign-in).
-3. Email the first administrator with the operator job
-   `infra/k8s/jobs/invite-admin.yaml` (`pnpm admin:invite`). The job creates
-   the organisation (`organisationType='council'`, status `onboarding`,
-   applications closed, region `ap-southeast-2`), assigns only the
-   organisation-administrator role, and does not create a password. Production
-   keeps organisation tools closed until that person enrols a passkey or
-   authenticator. Further staff are invited from the people screen. The job
-   refuses when any organisation already exists.
-4. Create teams (Intake, Casework, Committee support) and groups via
-   `/settings/teams` or `POST /api/teams`, `/api/groups`.
-5. Record consent wording + evidence requirements in `organisation_settings`.
+`pnpm db:seed` loads the permission catalogue and system role templates only.
+It does not create a production organisation. Do not insert the organisation
+row by hand. Provision with the operator command (or the Kubernetes Job
+`infra/k8s/jobs/provision-organisation.yaml`). `pnpm admin:invite`
+(`infra/k8s/jobs/invite-admin.yaml`) still covers the very first organisation
+on an empty database, but refuses once any organisation exists.
+
+The command runs with the application database role (`DATABASE_URL`), never
+the migrator. `--operator-email` must belong to a platform operator account;
+the platform audit chain records that account's id, not the email. With
+`NODE_ENV=production` every subcommand also needs `--confirm-production`
+repeating the slug. The command is idempotent on slug. It does not print a
+password or the invitation token, and it does not give the operator a
+membership.
+
+```bash
+pnpm org:provision -- provision \
+  --legal-name "Example Aboriginal Corporation" \
+  --slug example-ac \
+  --type council \
+  --admin-email admin@example.org \
+  --operator-email operator@blakpath.example \
+  --confirm-production example-ac
+```
+
+That creates the organisation with status `onboarding`, applications closed and
+region `ap-southeast-2`, clones system role templates except
+`platform-operator`, seeds an empty readiness checklist, and emails the first
+administrator an invite (SES in production). The organisation row, roles,
+invitation and the platform audit event commit in one transaction. The
+administrator chooses their own password from that link and must enrol a
+passkey or authenticator before organisation tools open.
+
+Teams (Intake, Casework, Committee support) and groups are still created by
+the organisation after sign-in, via `/settings/teams` or `POST /api/teams` and
+`POST /api/groups`. Consent wording and evidence requirements are recorded in
+`organisation_settings`.
+
+Checklist items are recorded by a person. The software does not mark them
+complete. An organisation administrator can record items at
+`PATCH /api/organisation/readiness`. The operator can record the same items:
+
+```bash
+pnpm org:provision -- readiness \
+  --slug example-ac \
+  --item consent_wording \
+  --complete true \
+  --operator-email operator@blakpath.example \
+  --confirm-production example-ac
+```
+
+Items: `consent_wording`, `evidence_requirements`, `teams`,
+`administrator_mfa`, `escalation_contacts`.
+
+## 1a. Signed agreement
+
+A signed services agreement is required before status can become `active`
+through the operator command (the agreement document itself is counsel's
+work; see the contracts issue). Record the reference the humans signed. The
+reference stays on `organisation_settings`; the audit event records only that
+it changed.
+
+```bash
+pnpm org:provision -- agreement \
+  --slug example-ac \
+  --reference MSA-2026-014 \
+  --signed-at 2026-10-01 \
+  --operator-email operator@blakpath.example \
+  --confirm-production example-ac
+```
+
+If the invitation email fails, running `provision` again does nothing. Send the
+link again with `resend-invite` and the same slug and operator email.
 
 ## 2. Identity
 
@@ -56,9 +114,13 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 
 1. Complete `docs/production-readiness.md` release gate in exact EKS images.
 2. Run EKS restore drill (`docs/eks-runbook.md`), attach record.
-3. `POST /api/organisation/activation` (step-up). It refuses unless the key
-   is validated. Then open `publicApplicationsOpen` when ready. Platform
-   operators suspend, close or reactivate with
+3. Activate once the tenant key is validated (section 2b), the readiness
+   checklist is complete and the signed agreement is recorded:
+   `pnpm org:provision -- activate --slug example-ac --operator-email ...
+--confirm-production example-ac`. It refuses while any of the three is
+   missing. An organisation admin can instead `POST /api/organisation/activation`
+   (step-up), which checks the key only. Then open `publicApplicationsOpen`
+   when ready. Platform operators suspend, close or reactivate with
    `POST /api/admin/organisations/{id}/status` (recent sign-in); the change is
    appended to the platform audit chain, and a move to `active` still needs a
    validated key.

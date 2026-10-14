@@ -179,6 +179,7 @@ The app runs at <http://localhost:3000>.
 | `pnpm db:migrate`    | Apply migrations                              |
 | `pnpm db:studio`     | Open Drizzle Studio                           |
 | `pnpm db:seed`       | Seed baseline data                            |
+| `pnpm org:provision` | Provision an organisation (operator command)  |
 
 Accessibility acceptance coverage and the required assisted-review record are
 documented in [`docs/accessibility-acceptance.md`](docs/accessibility-acceptance.md).
