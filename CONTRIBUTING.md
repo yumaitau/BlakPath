@@ -30,15 +30,11 @@ genealogy or secrets in a public contribution.
 
 ## Code owners
 
-Changes under these paths need review from the owners in
-[`.github/CODEOWNERS`](.github/CODEOWNERS):
-
-- `src/lib/auth`
-- `src/lib/tenancy`
-- `src/lib/permissions`
-- `src/db/migrations`
-- `infra/`
-- `.github/`
+[`.github/CODEOWNERS`](.github/CODEOWNERS) lists the security-sensitive paths
+and their owners. It is the source of truth; this guide does not repeat it.
+Pull requests land on `main` only through the ruleset and merge queue
+described in [`docs/branch-protection.md`](docs/branch-protection.md), which
+also says when code owner review becomes required.
 
 ## Development
 

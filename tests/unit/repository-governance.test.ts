@@ -53,8 +53,11 @@ describe('repository governance', () => {
     ]) {
       expect(owners).toContain(path);
     }
+    for (const path of ['/LICENSE', '/SECURITY.md', '/CONTRIBUTING.md']) {
+      expect(owners).toContain(path);
+    }
     expect(owners).toContain('@jusso-dev');
-    expect(owners).toContain('@joshluongo');
+    expect(read('CONTRIBUTING.md')).toContain('](docs/branch-protection.md)');
   });
 
   it('groups dependency updates and asks the identity question', () => {

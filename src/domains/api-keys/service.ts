@@ -64,6 +64,8 @@ export async function createApiKey(
         keyHash: hashApiKey(raw),
         prefix: displayPrefix(raw),
         scopes: input.scopes,
+        purpose: input.purpose ?? null,
+        destination: input.destination ?? null,
         createdByUserId: ctx.userId,
         expiresAt,
       }),
@@ -77,8 +79,13 @@ export async function createApiKey(
     resourceId: apiKey.id,
     result: 'success',
     after: {
-      data: { name: input.name, prefix: apiKey.prefix },
-      allow: ['name', 'prefix'],
+      data: {
+        name: input.name,
+        prefix: apiKey.prefix,
+        purpose: input.purpose ?? null,
+        destination: input.destination ?? null,
+      },
+      allow: ['name', 'prefix', 'purpose', 'destination'],
     },
   });
 
@@ -94,6 +101,8 @@ export async function listApiKeys(): Promise<
       | 'name'
       | 'prefix'
       | 'scopes'
+      | 'purpose'
+      | 'destination'
       | 'lastUsedAt'
       | 'expiresAt'
       | 'revokedAt'
@@ -111,6 +120,8 @@ export async function listApiKeys(): Promise<
       name: apiKeys.name,
       prefix: apiKeys.prefix,
       scopes: apiKeys.scopes,
+      purpose: apiKeys.purpose,
+      destination: apiKeys.destination,
       lastUsedAt: apiKeys.lastUsedAt,
       expiresAt: apiKeys.expiresAt,
       revokedAt: apiKeys.revokedAt,

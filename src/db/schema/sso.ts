@@ -10,8 +10,8 @@ import { organisations } from './tenancy';
  * Client secrets live in Secrets Manager / env, never here — this table holds
  * only routing metadata. A binding takes effect only after the organisation's
  * domain is verified (`organisation_domains.verified`) AND an admin enables it.
- * SCIM provisioning maps onto membership status transitions; the SCIM bearer
- * credential is a runtime secret, stored like other secrets.
+ * SCIM provisioning uses `scim_credentials` (hashed, per organisation), not a
+ * column on this table.
  */
 export const organisationSsoProviders = pgTable(
   'organisation_sso_providers',

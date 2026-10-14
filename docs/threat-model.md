@@ -14,15 +14,15 @@ threats (STRIDE), the mitigations, and our **fail-secure** stance.
 
 ## Assets
 
-| Asset                          | Why it matters                                         | Where it lives                                                  |
-| ------------------------------ | ------------------------------------------------------ | --------------------------------------------------------------- |
-| **Identity evidence**          | Uploaded documents proving identity; highly sensitive. | Object storage (evidence/quarantine buckets), `ap-southeast-2`. |
-| **Genealogy / ancestry**       | Family relationships and ancestry records.             | PostgreSQL (later-phase domain), tenant-scoped.                 |
-| **Determinations & decisions** | Human-recorded outcomes and their reasoning.           | PostgreSQL, tenant-scoped; recorded via audited actions.        |
-| **Certificates**               | Issued Confirmation certificates.                      | PostgreSQL + object storage; issue/revoke audited.              |
-| **Authentication secrets**     | Password hashes, TOTP secrets, recovery codes.         | `accounts`, `twoFactors` — hashed / envelope-encrypted.         |
-| **Audit trail**                | Tamper-evident record of who did what.                 | `audit_events` (append-only, hash-chained).                     |
-| **Tenant boundary metadata**   | `organisation_id` on every tenant row.                 | PostgreSQL.                                                     |
+| Asset                          | Why it matters                                         | Where it lives                                                                                       |
+| ------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Identity evidence**          | Uploaded documents proving identity; highly sensitive. | Object storage (evidence/quarantine buckets), `ap-southeast-2`.                                      |
+| **Genealogy / ancestry**       | Family relationships and ancestry records.             | PostgreSQL (later-phase domain), tenant-scoped.                                                      |
+| **Determinations & decisions** | Human-recorded outcomes and their reasoning.           | PostgreSQL, tenant-scoped; recorded via audited actions.                                             |
+| **Certificates**               | Issued Confirmation certificates.                      | PostgreSQL + object storage; issue/revoke audited.                                                   |
+| **Authentication secrets**     | Password hashes, TOTP secrets, recovery codes.         | `accounts`, `twoFactors` — hashed / envelope-encrypted.                                              |
+| **Audit trail**                | Tamper-evident record of who did what.                 | `audit_events` (append-only, hash-chained) plus daily signed heads in the object-lock anchor bucket. |
+| **Tenant boundary metadata**   | `organisation_id` on every tenant row.                 | PostgreSQL.                                                                                          |
 
 ## Trust boundaries
 
@@ -76,9 +76,14 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
 
 - **Threat:** impersonating a user or another tenant.
 - **Mitigations:** Better Auth sessions; argon2 password hashing; **mandatory
-  staff MFA** (passkeys/TOTP); step-up re-auth for sensitive actions; sessions
-  bound server-side with `ipAddress`/`userAgent`; tenant id derived from the
+  staff MFA** (passkeys or verified TOTP, enforced before tenant access);
+  step-up re-auth for sensitive actions; sessions
+  bound server-side with `ipAddress`/`userAgent`. `ipAddress` is
+  `CF-Connecting-IP` only after the origin-verify secret matches (`clientIp`);
+  a forwarded-for header is not a client identity. Tenant id is derived from the
   verified membership, never the request (`docs/authentication.md`).
+  Cookie-authenticated `/api` mutations require the application origin and a
+  JSON content type. Production session cookies use the `__Host-` prefix.
 
 ### Tampering
 
@@ -103,18 +108,28 @@ trusted as a tenant id (`docs/tenant-isolation.md`).
   tenants.
 - **Mitigations:** layered tenant isolation (application scoping + `assertOwned`
   - `NOT NULL` FKs + composite indexes + **RLS backstop**); per-tenant
-    object-storage namespaces and short-lived presigned URLs; **envelope
-    encryption (AES-256-GCM)** for sensitive fields and secrets; TLS in transit;
+    object-storage namespaces and short-lived presigned URLs; **per-tenant
+    envelope encryption (AES-256-GCM)** under that organisation's KMS key,
+    failing closed when the key is unavailable, including after the key is
+    deleted so backup ciphertext under that CMK cannot be opened; TLS in transit
+    (Cloudflare Full (strict) to an HTTPS origin listener; HTTP only redirects);
     audit redaction (secrets/payloads never written to audit); least-privilege
-    RBAC; **no standing operator access** (break-glass only)
-    (`docs/tenant-isolation.md`, `docs/privacy-architecture.md`).
+    RBAC; **no standing operator access** (break-glass only); runtime secrets
+    sync only into the `blakpath` namespace; public certificate checks return
+    no holder name and compare a typed name with a salted hash
+    (`docs/tenant-isolation.md`, `docs/privacy-architecture.md`,
+    `docs/eks-runbook.md`).
 
 ### Denial of service
 
 - **Threat:** overwhelming the app, the scanner, or the queues.
-- **Mitigations:** Redis-backed, tenant-prefixed rate limiting; bounded upload
+- **Mitigations:** Redis-backed rate limiting keyed by the trusted client
+  address, including public certificate lookups and holder-name checks;
+  regional WAFv2 managed rules on the origin load balancer; bounded upload
   sizes/types; presigned uploads keep large transfers off the app tier; BullMQ
-  retries with backoff and dead-lettering; a stalled scanner **holds** files in
+  retries with backoff and dead-lettering; a tenant whose key is unavailable has
+  its jobs delayed rather than retried to exhaustion, and other tenants are not
+  paused; a stalled scanner **holds** files in
   quarantine rather than failing open (fail-secure, below).
 
 ### Elevation of privilege
@@ -140,14 +155,23 @@ When something goes wrong, BlakPath **denies rather than exposes**:
   `denied` result (audited), not a default-allow.
 - **Config invalid → don't boot.** `src/lib/env.ts` fails fast on malformed
   configuration rather than starting with unsafe defaults.
+- **Outbound webhook → public HTTPS only.** Endpoint URLs are refused unless
+  they are HTTPS names that resolve to global addresses. The same check runs
+  again when the worker opens the socket. Redirects are not followed. Signing
+  secrets are envelope-encrypted, returned once on create or rotation, and
+  omitted from list responses. Cluster-specific ranges can be added with
+  `WEBHOOK_DENY_CIDRS`. Network policy for the worker is reviewed before
+  production (`infra/k8s/network-policy.example.yaml`).
 - **AI off by default.** `AI_FEATURES_ENABLED` defaults to `false`, and even when
-  on, AI can never decide, score or infer identity
-  (`docs/privacy-architecture.md`).
+  on, AI can never decide, score or infer identity. External tool access also
+  needs a tenant opt-in (step-up, recorded governance approval) and an `mcp:`
+  scope (`docs/privacy-architecture.md`).
 
 ## Residual risks & assumptions
 
 - Cultural governance and the correctness of human determinations sit with the
   organisation; BlakPath assures process integrity, not the merits of a decision.
-- Infrastructure hardening (network policy, secret management via KMS, backups,
-  patching) is assumed to be enforced in the `ap-southeast-2` deployment
-  environment and is out of scope for this application-level model.
+- Infrastructure hardening (network policy, node placement, backups, patching)
+  is enforced in the `ap-southeast-2` deployment. Secret sync and the API
+  endpoint contract are in `docs/eks-runbook.md`. The dedicated cluster is
+  `docs/adr/0001-dedicated-cluster.md`.

@@ -18,9 +18,8 @@ acts. If the honest answer above is yes, do not open this pull request.
       server, not from a client-supplied organisation id
 - [ ] Permission checks still run before sensitive reads and writes
 - [ ] Migrations, if any, do not weaken tenant isolation or the audit trail
-- [ ] Changes under `src/lib/auth`, `src/lib/tenancy`, `src/lib/permissions`,
-      `src/db/migrations`, `infra/` or `.github/` were reviewed against
-      `docs/threat-model.md` and `docs/tenant-isolation.md`
+- [ ] Changes under a path listed in `.github/CODEOWNERS` were reviewed
+      against `docs/threat-model.md` and `docs/tenant-isolation.md`
 - [ ] This pull request does not describe a vulnerability. Vulnerability
       reports follow `SECURITY.md`
 
