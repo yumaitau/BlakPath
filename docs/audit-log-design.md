@@ -114,6 +114,10 @@ recomputed and every `prevHash` must link to the previous event.
   only by a full walk: `verifyChain` still walks a full chain, or an explicit
   slice, for restore drills (`scripts/verify-restored-data.ts`).
 
+Verification is not a permission. People with `audit:view` read the result in
+the trail (`audit.chain_verified`, `audit.checkpoint_created`,
+`audit.divergence_detected`).
+
 The first anchor is the baseline. Take it before the organisation records
 production decisions. Later anchors must stay monotonic and must link to the
 previous day's anchor.
@@ -161,8 +165,12 @@ sensitive content itself:
   the chain stays intact. Retention anonymisation removes a name from the
   application row. It does not rewrite `audit_events`. That is safe only
   because new events never received the name.
-- Reads of the audit trail are themselves permission-checked (`audit:read`) and
-  tenant-scoped, so one tenant can never read another's audit history.
+- Reads of the audit trail are themselves permission-checked (`audit:view`) and
+  tenant-scoped, so one tenant can never read another's audit history. The
+  organisation id comes from the verified tenant context, never from the query.
+  Opening the log (`audit.viewed`), exporting it (`audit.exported`) and
+  acknowledging the monthly review (`audit.monthly_review_recorded`) are events
+  on the same chain.
 
 ## Existing chains
 
@@ -185,3 +193,29 @@ every permission **denial**, all membership/role changes, application and
 evidence lifecycle actions, **recording and reviewing determinations**,
 certificate issue/revoke, feature-flag and settings changes, and every
 break-glass state transition. Both allowed and refused attempts are logged.
+
+## Viewer and export
+
+People who hold `audit:view` (the `organisation-admin` system role, or a tenant
+role that grants that key alone) open `/audit`.
+
+Filters, all optional and combined:
+
+- **Case** — events whose `resourceId` is that id, or whose change metadata
+  records `applicationId` as that id.
+- **User** — `actorUserId`.
+- **Action** — exact action name, for example `application.viewed`.
+- **Date** — inclusive `from` / `to`. A date with no time covers that whole UTC
+  day on the end bound.
+- **Break-glass** — `break_glass.*` actions and `break_glass_request` resources.
+- **Denials** — `result = denied`.
+
+Export downloads a CSV of the newest 5000 matching rows. Cells that start with
+`=`, `+`, `-`, `@`, a tab or a carriage return are prefixed with an apostrophe
+so spreadsheet software does not treat them as formulas. The file is UTF-8 with
+a byte-order mark. The screen does not show IP addresses; the CSV does, because
+the export is the investigation copy and is itself audited.
+
+The monthly checklist is `/audit/review` and
+[`docs/audit-monthly-review.md`](audit-monthly-review.md). Recording it is a
+human act. It does not score, rank or decide Aboriginality.
