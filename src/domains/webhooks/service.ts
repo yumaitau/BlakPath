@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { customAlphabet } from 'nanoid';
+import { uuidv7 } from 'uuidv7';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
@@ -7,11 +8,11 @@ import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { addJob, QueueName } from '@/lib/queues';
+import { sealWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { assertWebhookDestinationForCreate } from './destination';
 import type { WebhookEvent } from './events';
 import { createEndpointSchema, type CreateEndpointInput } from './schemas';
-import { sealWebhookSecret } from './secret';
 import { toWebhookEndpointView, type WebhookEndpointView } from './view';
 
 /**
@@ -57,12 +58,16 @@ export async function createEndpoint(
   await assertWebhookDestinationForCreate(input.url);
   const secret = secretGen();
   const scope = currentScope();
+  // The id is fixed before sealing so the ciphertext is bound to this row.
+  const id = uuidv7();
+  const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
   const inserted = await scope.db
     .insert(webhookEndpoints)
     .values(
       scope.insertValues({
+        id,
         url: input.url,
-        secretCiphertext: sealWebhookSecret(secret),
+        secretCiphertext,
         events: input.events,
         active: true,
         createdByUserId: ctx.userId,
@@ -120,9 +125,10 @@ export async function rotateEndpointSecret(
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const secret = secretGen();
   const scope = currentScope();
+  const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
   const updated = await scope.db
     .update(webhookEndpoints)
-    .set({ secretCiphertext: sealWebhookSecret(secret), updatedAt: new Date() })
+    .set({ secretCiphertext, updatedAt: new Date() })
     .where(
       scope.where(
         webhookEndpoints.organisationId,

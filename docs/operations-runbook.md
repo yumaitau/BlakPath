@@ -88,3 +88,9 @@ readable ([`key-lifecycle.md`](key-lifecycle.md)).
    `unavailable` row back to `active` and resumes paused jobs. `disabled` and
    `pending_deletion` stay off until an operator changes the status.
 4. Other tenants keep running. A probe network error does not pause them.
+
+## Vulnerability reports
+
+Do not report a suspected vulnerability in a public issue, pull request,
+discussion or this runbook. Do not paste personal information, evidence or
+secrets into an operational ticket. Follow [`SECURITY.md`](../SECURITY.md).
