@@ -21,12 +21,14 @@ const readyReport = {
 describe('detailed health access', () => {
   it('allows direct pod and VPC calls', () => {
     expect(detailedHealthForbidden(new Headers())).toBe(false);
-    expect(detailedHealthForbidden(new Headers({ 'x-forwarded-for': '   ' }))).toBe(
-      false,
-    );
+    expect(detailedHealthForbidden(new Headers({ 'cf-ray': '   ' }))).toBe(false);
+    // Next adds x-forwarded-for to every request, so it is not an edge signal.
+    expect(
+      detailedHealthForbidden(new Headers({ 'x-forwarded-for': '203.0.113.10' })),
+    ).toBe(false);
   });
 
-  it.each(['x-forwarded-for', 'cf-connecting-ip', 'cf-ray'])(
+  it.each(['cf-connecting-ip', 'cf-ray'])(
     'refuses an edge request that carries %s',
     (header) => {
       expect(detailedHealthForbidden(new Headers({ [header]: '203.0.113.10' }))).toBe(
