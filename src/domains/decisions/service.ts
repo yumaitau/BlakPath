@@ -2,6 +2,14 @@ import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { conflictDeclarations, decisions, decisionVotes } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import {
+  beforeConditionalWrite,
+  nextRowVersion,
+  takeVersionText,
+  versionedSelection,
+  versionMatches,
+} from '@/lib/concurrency/claim';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { recordAudit } from '@/domains/audit/service';
 import {
   applyApplicationTransition,
@@ -58,9 +66,16 @@ function must<T>(row: T | undefined, what: string): T {
 }
 
 async function loadDecision(id: string): Promise<DecisionRow | null> {
+  const loaded = await loadDecisionClaim(id);
+  return loaded?.row ?? null;
+}
+
+async function loadDecisionClaim(
+  id: string,
+): Promise<{ row: DecisionRow; versionText: string } | null> {
   const scope = currentScope();
   const rows = await scope.db
-    .select()
+    .select(versionedSelection(decisions))
     .from(decisions)
     .where(
       scope.where(
@@ -70,10 +85,14 @@ async function loadDecision(id: string): Promise<DecisionRow | null> {
       ),
     )
     .limit(1);
-  const row = scope.assertOwned(rows[0]) ?? null;
-  if (!row) return null;
-  const [opened] = await openDecisionRows(scope.organisationId, [row]);
-  return opened ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) return null;
+  const split = takeVersionText(owned);
+  if (!split) return null;
+  const [opened] = await openDecisionRows(scope.organisationId, [
+    split.record as DecisionRow,
+  ]);
+  return opened ? { row: opened, versionText: split.versionText } : null;
 }
 
 /** The set of users conflicted out of an application (declared or recused). */
@@ -255,8 +274,9 @@ export async function finaliseDecision(
   requirePermission(subjectFromContext(ctx), 'decision:finalise');
 
   const input = finaliseDecisionSchema.parse(rawInput);
-  const decision = await loadDecision(decisionId);
-  if (!decision) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadDecisionClaim(decisionId);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const decision = loaded.row;
   if (!canFinalise(decision.status as DecisionStatus)) {
     throw new AuthorizationError('POLICY_DENIED', 'This decision cannot be finalised.');
   }
@@ -265,7 +285,10 @@ export async function finaliseDecision(
   const scope = currentScope();
   // Decision write and case transition share one transaction. If the case is
   // not in committee, `record_decision` throws and the finalisation rolls back.
+  // The decision update is conditional on the status and version read above:
+  // a concurrent finaliser that already won leaves zero rows to match.
   const committed = await scope.db.transaction(async (tx) => {
+    await beforeConditionalWrite();
     const updated = await tx
       .update(decisions)
       .set({
@@ -273,9 +296,22 @@ export async function finaliseDecision(
         finalOutcome: input.outcome,
         finalisedByUserId: ctx.userId,
         finalisedAt: new Date(),
+        version: nextRowVersion(),
       })
-      .where(scope.where(decisions.organisationId, eq(decisions.id, decisionId)))
+      .where(
+        scope.where(
+          decisions.organisationId,
+          eq(decisions.id, decisionId),
+          eq(decisions.status, 'proposed'),
+          versionMatches(decisions.version, loaded.versionText),
+        ),
+      )
       .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This decision changed while you were working. Refresh and try again.',
+      );
+    }
     const row = must(updated[0], 'decision');
     const transition = await applyApplicationTransition(
       tx,

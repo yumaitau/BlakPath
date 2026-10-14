@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyEvidenceSchema,
+  onBehalfReceiptSchema,
   requestEvidenceSchema,
   requestUploadSchema,
 } from '@/domains/evidence/schemas';
@@ -45,6 +46,43 @@ describe('requestUploadSchema', () => {
       requestUploadSchema.safeParse({ ...valid, fileName: 'My Document 2026.pdf' })
         .success,
     ).toBe(true);
+  });
+
+  it('accepts a receipt channel and date together', () => {
+    const parsed = requestUploadSchema.parse({
+      ...valid,
+      receiptChannel: 'post',
+      receivedOn: '2020-03-04',
+    });
+    expect(parsed.receiptChannel).toBe('post');
+    expect(parsed.receivedOn).toBe('2020-03-04');
+  });
+
+  it('rejects a receipt channel without a date, and a future or impossible date', () => {
+    expect(
+      requestUploadSchema.safeParse({ ...valid, receiptChannel: 'email' }).success,
+    ).toBe(false);
+    expect(
+      requestUploadSchema.safeParse({ ...valid, receivedOn: '2020-01-02' }).success,
+    ).toBe(false);
+    expect(
+      onBehalfReceiptSchema.safeParse({
+        receiptChannel: 'in_person',
+        receivedOn: '2026-02-31',
+      }).success,
+    ).toBe(false);
+    expect(
+      onBehalfReceiptSchema.safeParse({
+        receiptChannel: 'other',
+        receivedOn: '2099-01-01',
+      }).success,
+    ).toBe(false);
+    expect(
+      onBehalfReceiptSchema.safeParse({
+        receiptChannel: 'fax',
+        receivedOn: '2020-01-02',
+      }).success,
+    ).toBe(false);
   });
 });
 

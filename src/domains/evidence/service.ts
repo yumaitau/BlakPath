@@ -6,7 +6,11 @@ import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit, type AuditMetaInput } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
-import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
+import {
+  requireAny,
+  requirePermission,
+  subjectFromContext,
+} from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { addJob, QueueName } from '@/lib/queues';
 import { logger } from '@/lib/observability/logger';
@@ -26,6 +30,7 @@ import {
 import { scanStream, type ScanVerdict } from '@/lib/scanning/clamav';
 import {
   classifyEvidenceSchema,
+  onBehalfReceiptSchema,
   requestEvidenceSchema,
   requestUploadSchema,
   type ClassifyEvidenceInput,
@@ -34,6 +39,7 @@ import {
 } from './schemas';
 import { detectContentType } from './detect';
 import { isServable, uploadSizeAcceptable, verifiedContentType } from './status';
+import { assertCanCompleteEvidenceUpload, decideEvidenceUpload } from './upload-auth';
 
 /**
  * Evidence service — the tenant-scoped, permission-checked, audited path for
@@ -76,23 +82,38 @@ async function loadEvidence(id: string): Promise<EvidenceRow | null> {
 
 /**
  * Start an upload: create a `pending` evidence record and mint a short-lived
- * presigned PUT into the quarantine bucket. Applicants upload to their OWN
- * application only (`evidence:upload-own`).
+ * presigned PUT into the quarantine bucket.
+ *
+ * Applicants upload to their own application (`evidence:upload-own`). Intake
+ * and case officers may record a file received for an applicant on any
+ * application they can already read (`evidence:upload-on-behalf`), and must
+ * say how and when it arrived. Both paths use this same quarantine key. The
+ * scan does not read the receipt.
  */
 export async function requestUpload(
   applicationId: string,
   rawInput: RequestUploadInput,
 ): Promise<{ evidence: EvidenceRow; upload: PresignedUpload }> {
   const ctx = requireTenantContext();
-  requirePermission(subjectFromContext(ctx), 'evidence:upload-own');
+  const subject = subjectFromContext(ctx);
+  requireAny(subject, ['evidence:upload-own', 'evidence:upload-on-behalf']);
 
   const input = requestUploadSchema.parse(rawInput);
 
-  // Enforce that the actor may see the application AND is its applicant. The
-  // getApplication call applies the read policy and audits the view.
+  // Read policy: own, assigned, team, or any. Audits the view. A caller who
+  // cannot read the case cannot attach evidence to it.
   const detail = await getApplication(applicationId);
-  if (detail.application.applicantUserId !== ctx.userId) {
-    throw new AuthorizationError('POLICY_DENIED');
+  const decision = decideEvidenceUpload(
+    subject,
+    detail.application.applicantUserId === ctx.userId,
+    input,
+  );
+  if (decision.mode === 'receipt-required') {
+    onBehalfReceiptSchema.parse({
+      receiptChannel: input.receiptChannel,
+      receivedOn: input.receivedOn,
+    });
+    throw new AuthorizationError('PERMISSION_DENIED');
   }
 
   const scope = currentScope();
@@ -118,6 +139,8 @@ export async function requestUpload(
         sizeBytes: input.sizeBytes,
         status: 'pending',
         quarantineKey: key,
+        receiptChannel: decision.mode === 'on-behalf' ? decision.receiptChannel : null,
+        receivedOn: decision.mode === 'on-behalf' ? decision.receivedOn : null,
       }),
     )
     .returning();
@@ -140,12 +163,10 @@ export async function requestUpload(
  */
 export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
   const ctx = requireTenantContext();
-  requirePermission(subjectFromContext(ctx), 'evidence:upload-own');
 
   const existing = await loadEvidence(evidenceId);
-  if (!existing || existing.uploadedByUserId !== ctx.userId) {
-    throw new AuthorizationError('POLICY_DENIED');
-  }
+  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  assertCanCompleteEvidenceUpload(subjectFromContext(ctx), ctx.userId, existing);
   if (existing.status !== 'pending') {
     // Already progressed; return as-is (idempotent).
     return existing;
@@ -170,15 +191,22 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
     { jobId: evidenceId },
   );
 
+  const after: { data: Record<string, unknown>; allow: string[] } = {
+    data: { applicationId: row.applicationId },
+    allow: ['applicationId'],
+  };
+  // Coded channel and civil date only. Never the file name or free text.
+  if (row.receiptChannel) {
+    after.data.receiptChannel = row.receiptChannel;
+    after.data.receivedOn = row.receivedOn;
+    after.allow.push('receiptChannel', 'receivedOn');
+  }
   await recordAudit({
     action: 'evidence.uploaded',
     resourceType: 'evidence',
     resourceId: evidenceId,
     result: 'success',
-    after: {
-      data: { applicationId: row.applicationId },
-      allow: ['applicationId'],
-    },
+    after,
   });
   await recordAudit({
     action: 'evidence.scan_started',
