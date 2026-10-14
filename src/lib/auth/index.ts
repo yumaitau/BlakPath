@@ -19,6 +19,7 @@ import {
   noteSignInResult,
   signInOutcome,
 } from './sign-in-guard';
+import { ssoPlugin } from './sso-plugin';
 import { stepUp } from './step-up-plugin';
 
 /**
@@ -114,7 +115,8 @@ export const auth = betterAuth({
   /**
    * OAuth access and refresh tokens are encrypted with the platform auth
    * secret before storage. This is not the tenant CMK. Tokens that do not
-   * already look encrypted still read back as stored.
+   * already look encrypted still read back as stored. Federated sign-in
+   * (`sso-plugin.ts`) deliberately stores no IdP tokens at all.
    */
   account: {
     encryptOAuthTokens: true,
@@ -331,7 +333,16 @@ export const auth = betterAuth({
     },
   },
 
-  plugins: [...createAuthPlugins(env.BETTER_AUTH_URL), stepUp()],
+  plugins: [
+    ...createAuthPlugins(env.BETTER_AUTH_URL),
+    stepUp(),
+    /**
+     * Tenant-bound federated sign-in (Entra ID OIDC). Inert unless a provider
+     * is configured AND an organisation has an enabled binding on a verified
+     * domain; password + MFA remain the default path.
+     */
+    ssoPlugin(),
+  ],
 });
 
 export type Auth = typeof auth;

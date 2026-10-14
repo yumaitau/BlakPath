@@ -26,9 +26,18 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 - Invite staff via membership invitations (hash-only tokens, verified email).
 - Assign team/group memberships. Verify deny-by-default with
   `tests/e2e/team-isolation.spec.ts` against staging.
-- Optional SSO: register provider (`src/lib/auth/sso-provider.ts`), add
-  binding `POST /api/sso/providers`, verify domain in `organisation_domains`,
-  then enable. SCIM, if used, needs a per-organisation credential from
+- Optional SSO (Entra ID): register the BlakPath app in the council tenant
+  with redirect URI `https://<app>/api/auth/sso/callback`; put
+  `SSO_ENTRA_CLIENT_ID`, `SSO_ENTRA_CLIENT_SECRET` and `SSO_STATE_SECRET` in
+  the Secrets Manager runtime secret; add binding `POST /api/sso/providers`
+  with the tenant-specific issuer
+  `https://login.microsoftonline.com/<tenant-id>/v2.0`; verify the domain in
+  `organisation_domains`, then enable. In the Entra app registration, add
+  `amr` as an optional ID token claim, and require MFA with Conditional
+  Access. BlakPath rejects the sign-in unless `amr` includes a second factor.
+  First sign-in links the invited user by UPN on that verified domain, not by
+  the mail attribute. Staff must already be invited members.
+- SCIM, if used, needs a per-organisation credential from
   `POST /api/scim/credentials` (hashed at rest, rotatable, revocable). The IdP
   calls `/api/scim/v2/{orgId}/Users` with that credential. Group display names
   must match role slugs. `organisation-admin` stays unavailable unless the
