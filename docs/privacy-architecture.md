@@ -52,8 +52,12 @@ database. These are protected with **envelope encryption**:
   `ENCRYPTION_MASTER_KEY` is that legacy reader key. It is not required in
   production.
 - `organisation_keys` records custody mode, key ARN, version, status
-  (`active`, `disabled`, `pending_deletion`, `unavailable`) and whether an
-  escrow copy exists. Changes are appended to the platform audit chain.
+  (`pending_validation`, `active`, `disabled`, `pending_deletion`,
+  `unavailable`), validation (`pending`, `passed`, `failed`) and whether an
+  escrow copy exists. A tenant cannot become `active` until validation has
+  passed. Changes are appended to the platform audit chain. A worker
+  re-checks the key every five minutes. Client templates and the XKS notes
+  are in `docs/client-key-onboarding.md`.
 - A disabled or unreachable key fails closed (`TenantKeyUnavailableError`).
   The API returns 423 or 503 with code `TENANT_KEY_UNAVAILABLE`. There is no
   plaintext fallback. Unwrapped data keys stay in a process-local cache for at

@@ -19,8 +19,10 @@ Parameters:
   # Informational. Tenant and platform envelope calls are authorised by the
   # encryption-context condition below, because BYOK / XKS ARNs are not known
   # when this role is deployed. The customer key policy must grant this role
-  # kms:Decrypt, kms:Encrypt, and kms:GenerateDataKey. S3 object encryption
-  # uses the tenant CMK via kms:ViaService, not the purpose condition.
+  # kms:Decrypt, kms:Encrypt, kms:GenerateDataKey and kms:DescribeKey.
+  # DescribeKey has no encryption context, so it is a separate statement on
+  # the worker role only. S3 object encryption uses the tenant CMK via
+  # kms:ViaService, not the purpose condition.
   PlatformKmsKeyArn:
     Type: String
 
@@ -61,7 +63,7 @@ Resources:
                 Resource: [!Ref PlatformKmsKeyArn]
               - Sid: TenantEnvelopeKeys
                 Effect: Allow
-                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
                 Resource: '*'
                 Condition:
                   StringEquals:
@@ -69,6 +71,7 @@ Resources:
                       - field
                       - platform
                       - blind-index
+                      - key_validation
               - Sid: TenantObjectSse
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
@@ -138,7 +141,7 @@ Resources:
                 Resource: [!Ref PlatformKmsKeyArn]
               - Sid: TenantEnvelopeKeys
                 Effect: Allow
-                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
                 Resource: '*'
                 Condition:
                   StringEquals:
@@ -146,6 +149,7 @@ Resources:
                       - field
                       - platform
                       - blind-index
+                      - key_validation
               - Sid: TenantObjectSse
                 Effect: Allow
                 Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
@@ -157,6 +161,10 @@ Resources:
                     kms:EncryptionContext:aws:s3:arn:
                       - !Sub '${EvidenceBucketArn}/*'
                       - !Sub '${QuarantineBucketArn}/*'
+              - Sid: TenantKeyDescribe
+                Effect: Allow
+                Action: kms:DescribeKey
+                Resource: '*'
 
   TaskExecutionRole:
     Type: AWS::IAM::Role

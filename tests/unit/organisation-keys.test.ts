@@ -60,6 +60,14 @@ describe('organisation key changes', () => {
         result: 'success',
       }),
     );
+    const values = insert.mock.results[0]?.value.values as ReturnType<typeof vi.fn>;
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'pending_validation',
+        validationStatus: 'pending',
+        kmsKeyArn: crossAccountArn,
+      }),
+    );
   });
 
   it('rejects an ARN that is not a KMS key', async () => {
@@ -70,7 +78,7 @@ describe('organisation key changes', () => {
         custodyMode: 'blakpath_managed',
         kmsKeyArn: 'alias/blakpath',
       }),
-    ).rejects.toThrow(/ARN/);
+    ).rejects.toThrow(/Invalid request/);
     expect(insert).not.toHaveBeenCalled();
     expect(recordPlatformAudit).not.toHaveBeenCalled();
   });

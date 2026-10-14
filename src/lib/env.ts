@@ -139,6 +139,10 @@ const serverSchema = z
     RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(86_400_000),
     REMINDER_SWEEP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     SCHEDULER_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    // How often each active tenant's CMK is described and canary-decrypted.
+    KEY_HEALTH_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    // Operator address for key-health state changes. Not a secret.
+    OPERATOR_ONCALL_EMAIL: z.email().optional(),
 
     // Feature toggles
     AI_FEATURES_ENABLED: booleanish('false'),

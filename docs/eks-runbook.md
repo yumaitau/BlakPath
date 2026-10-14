@@ -99,6 +99,10 @@ manifest is `infra/k8s/service-ingress.yaml`. The example stack is
 - ElastiCache runs with transit and at-rest encryption. Redis holds
   ephemeral state only. Queue payloads are identifiers, never tenant field
   contents.
+- Set `OPERATOR_ONCALL_EMAIL` on the worker. Key-health state changes email
+  that address and emit `key_health_state_change` for the on-call alarm.
+  Tenant CMKs are registered per organisation; see
+  `docs/client-key-onboarding.md`.
 
 ## Mail credentials
 

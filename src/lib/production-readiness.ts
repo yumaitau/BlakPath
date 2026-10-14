@@ -190,6 +190,13 @@ export function validateProductionReadiness(
       message: 'must reference a customer-managed ap-southeast-2 KMS key',
     });
   }
+  const onCall = environment.OPERATOR_ONCALL_EMAIL;
+  if (!onCall || !onCall.includes('@') || PLACEHOLDER.test(onCall)) {
+    issues.push({
+      key: 'OPERATOR_ONCALL_EMAIL',
+      message: 'must be a real on-call email address',
+    });
+  }
 
   const webhookSecret = environment.EMAIL_WEBHOOK_SECRET;
   if (!webhookSecret || webhookSecret.length < 16 || PLACEHOLDER.test(webhookSecret)) {
