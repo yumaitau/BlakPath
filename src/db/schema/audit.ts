@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
 } from 'drizzle-orm/pg-core';
 import { primaryId, refId, timestamps } from './_helpers';
 import { auditResult, breakGlassStatus } from './enums';
@@ -18,10 +19,13 @@ import { tenantIsolationPolicy } from './_rls';
  * Audit & integrity tables.
  *
  * Every sensitive action is audit-logged here. `auditEvents` is APPEND-ONLY:
- * rows are NEVER updated or deleted. Tamper-evidence comes from a SHA-256 hash
- * chain — each row hashes its own content together with the previous row's
- * hash (`prevHash`), and `auditIntegrityCheckpoints` periodically anchors the
- * chain so gaps or edits are detectable.
+ * rows are NEVER updated or deleted. Each row hashes its own content together
+ * with the previous row's hash (`prevHash`). That digest is unkeyed, so a
+ * privileged rewrite can recompute it. Detection of a rewrite depends on the
+ * signed chain-head anchor stored outside this database (see
+ * `src/domains/audit/anchor.ts`). `UNIQUE (organisation_id, prev_hash) NULLS
+ * NOT DISTINCT` stops a second child of the same predecessor, including a
+ * second genesis row.
  *
  * A null `organisationId` denotes a platform-level event (not tenant-owned);
  * tenant events carry the organisation id and are indexed tenant-first.
@@ -49,7 +53,10 @@ export const auditEvents = pgTable(
     resourceType: text('resource_type').notNull(),
     resourceId: text('resource_id'),
     result: auditResult('result').notNull(),
-    /** Human-readable reason, especially for `denied`/`failure` outcomes. */
+    /**
+     * Coded reason (`code` or `code:recordId`). Free text is not stored here;
+     * `recordId` points at the mutable row that holds it.
+     */
     reason: text('reason'),
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
@@ -65,6 +72,11 @@ export const auditEvents = pgTable(
   (table) => [
     // Tenant-leading time index for scoped audit queries.
     index('audit_events_org_timestamp_idx').on(table.organisationId, table.timestamp),
+    // One successor per predecessor. NULLS NOT DISTINCT makes the genesis
+    // prev_hash (null) unique per chain, including the platform chain.
+    unique('audit_events_org_prev_hash_unique')
+      .on(table.organisationId, table.prevHash)
+      .nullsNotDistinct(),
     tenantIsolationPolicy(),
   ],
 ).enableRLS();
@@ -120,6 +132,11 @@ export const breakGlassRequests = pgTable(
     /** Narrowed scope of what may be accessed. */
     scope: text('scope').notNull(),
     status: breakGlassStatus('status').notNull().default('requested'),
+    /**
+     * Free-text explanation when a request is denied. Mutable, so it can be
+     * corrected or erased. The audit trail stores `break_glass.denied` only.
+     */
+    denialReason: text('denial_reason'),
     approvedByUserId: refId('approved_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),

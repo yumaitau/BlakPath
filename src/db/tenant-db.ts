@@ -31,6 +31,11 @@ export interface TenantScope {
   ): T & { organisationId: string };
 }
 
+/**
+ * Scope queries to `organisationId`. The id must already be trusted: request
+ * paths take it from the verified TenantContext, and the worker checks the
+ * organisation is active before calling this.
+ */
 export function scopeFor(organisationId: string): TenantScope {
   return {
     organisationId,

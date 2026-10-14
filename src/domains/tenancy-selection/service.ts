@@ -28,9 +28,11 @@ export interface SetActiveOrganisationInput {
  * membership before it is written to the session — it is never trusted from the
  * client. We call {@link resolveTenantContext}, which queries the database for
  * an active membership binding this exact user to this exact organisation and
- * throws {@link TenantContextError} if none exists. Only on success do we write
- * the id. This means the session's advisory `activeOrganisationId` can only ever
- * name an organisation the user genuinely belongs to.
+ * throws {@link TenantContextError} if none exists, and
+ * {@link OrganisationUnavailableError} when the organisation is suspended or
+ * closed. Only on success do we write the id. This means the session's advisory
+ * `activeOrganisationId` can only ever name an organisation the user genuinely
+ * belongs to and that is still operational.
  */
 export async function setActiveOrganisation(
   input: SetActiveOrganisationInput,

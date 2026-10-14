@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { env } from '@/lib/env';
+import { postgresClientOptions } from './postgres-options';
 import * as schema from './schema';
 
 /**
@@ -15,17 +16,21 @@ const globalForDb = globalThis as unknown as {
   __blakpathSql?: ReturnType<typeof postgres>;
 };
 
+const poolMax =
+  env.BLAKPATH_PROCESS === 'worker'
+    ? env.DATABASE_WORKER_POOL_MAX
+    : env.DATABASE_POOL_MAX;
+
 const client =
   globalForDb.__blakpathSql ??
-  postgres(env.DATABASE_URL, {
-    max: env.DATABASE_POOL_MAX,
-    idle_timeout: 20,
-    connect_timeout: 10,
-    // Prepared statements are planned as the role that first executes them.
-    // Tenant and platform work SET LOCAL ROLE on pooled connections, so a
-    // cached plan would outlive the role change. Unprepared queries re-plan.
-    prepare: false,
-  });
+  postgres(
+    env.DATABASE_URL,
+    postgresClientOptions({
+      role: env.BLAKPATH_PROCESS,
+      poolMax,
+      databaseUrl: env.DATABASE_URL,
+    }),
+  );
 
 if (env.NODE_ENV !== 'production') {
   globalForDb.__blakpathSql = client;

@@ -1,5 +1,5 @@
 {
-  "id": "3cbfc607-4fcc-4ea8-8cd5-c701fce5b30e",
+  "id": "b76854e1-4ba5-4e09-97ec-9bce58b81107",
   "prevId": "e1a6652d-3756-465e-ac7c-9ed3d84da830",
   "version": "7",
   "dialect": "postgresql",
@@ -193,6 +193,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "aaguid": {
+          "name": "aaguid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -379,6 +385,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "verified": {
+          "name": "verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "failed_verification_count": {
+          "name": "failed_verification_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -453,6 +479,13 @@
         },
         "is_platform_operator": {
           "name": "is_platform_operator",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "two_factor_enabled": {
+          "name": "two_factor_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -632,29 +665,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        },
-        "tenant_shared_read": {
-          "name": "tenant_shared_read",
-          "as": "PERMISSIVE",
-          "for": "SELECT",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id is null"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.organisation_domains": {
       "name": "organisation_domains",
@@ -740,20 +753,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.organisation_settings": {
       "name": "organisation_settings",
@@ -874,20 +876,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.organisations": {
       "name": "organisations",
@@ -1225,20 +1216,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.membership_roles": {
       "name": "membership_roles",
@@ -1472,20 +1452,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.permissions": {
       "name": "permissions",
@@ -1713,20 +1682,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.role_permissions": {
       "name": "role_permissions",
@@ -1918,29 +1876,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        },
-        "tenant_shared_read": {
-          "name": "tenant_shared_read",
-          "as": "PERMISSIVE",
-          "for": "SELECT",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id is null"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.clients": {
       "name": "clients",
@@ -2123,20 +2061,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.group_memberships": {
       "name": "group_memberships",
@@ -2289,20 +2216,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.groups": {
       "name": "groups",
@@ -2433,20 +2349,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.team_memberships": {
       "name": "team_memberships",
@@ -2606,20 +2511,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.teams": {
       "name": "teams",
@@ -2731,20 +2625,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.calendar_event_attendees": {
       "name": "calendar_event_attendees",
@@ -2916,20 +2799,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.calendar_event_reminders": {
       "name": "calendar_event_reminders",
@@ -3041,20 +2913,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.calendar_events": {
       "name": "calendar_events",
@@ -3303,20 +3164,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.application_assignments": {
       "name": "application_assignments",
@@ -3500,20 +3350,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.application_notes": {
       "name": "application_notes",
@@ -3643,20 +3482,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.application_status_history": {
       "name": "application_status_history",
@@ -3786,20 +3614,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.applications": {
       "name": "applications",
@@ -4088,20 +3905,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.evidence": {
       "name": "evidence",
@@ -4364,20 +4170,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.evidence_requests": {
       "name": "evidence_requests",
@@ -4520,20 +4315,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.review_comments": {
       "name": "review_comments",
@@ -4656,20 +4440,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.reviews": {
       "name": "reviews",
@@ -4865,20 +4638,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.family_links": {
       "name": "family_links",
@@ -5086,20 +4848,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.conflict_declarations": {
       "name": "conflict_declarations",
@@ -5289,20 +5040,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.meeting_agenda_items": {
       "name": "meeting_agenda_items",
@@ -5447,20 +5187,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.meetings": {
       "name": "meetings",
@@ -5624,20 +5353,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.decision_votes": {
       "name": "decision_votes",
@@ -5782,20 +5500,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.decisions": {
       "name": "decisions",
@@ -6018,20 +5725,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.certificates": {
       "name": "certificates",
@@ -6331,20 +6027,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.tasks": {
       "name": "tasks",
@@ -6555,20 +6240,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.form_invitations": {
       "name": "form_invitations",
@@ -6738,20 +6412,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.form_responses": {
       "name": "form_responses",
@@ -6893,20 +6556,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.forms": {
       "name": "forms",
@@ -7057,20 +6709,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.api_keys": {
       "name": "api_keys",
@@ -7214,20 +6855,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.webhook_deliveries": {
       "name": "webhook_deliveries",
@@ -7385,20 +7015,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.webhook_endpoints": {
       "name": "webhook_endpoints",
@@ -7516,20 +7135,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.export_requests": {
       "name": "export_requests",
@@ -7671,20 +7279,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.legal_holds": {
       "name": "legal_holds",
@@ -7825,20 +7422,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.retention_policies": {
       "name": "retention_policies",
@@ -7962,20 +7548,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.notifications": {
       "name": "notifications",
@@ -8115,20 +7690,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.email_suppressions": {
       "name": "email_suppressions",
@@ -8327,20 +7891,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.consent_records": {
       "name": "consent_records",
@@ -8510,20 +8063,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.user_dashboard_layouts": {
       "name": "user_dashboard_layouts",
@@ -8622,20 +8164,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.audit_events": {
       "name": "audit_events",
@@ -8784,20 +8315,9 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.audit_integrity_checkpoints": {
       "name": "audit_integrity_checkpoints",
@@ -8898,20 +8418,9 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     },
     "public.break_glass_requests": {
       "name": "break_glass_requests",
@@ -9085,20 +8594,9 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {
-        "tenant_isolation": {
-          "name": "tenant_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "organisation_id = current_setting('app.org_id')::uuid",
-          "withCheck": "organisation_id = current_setting('app.org_id')::uuid"
-        }
-      },
+      "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": true
+      "isRLSEnabled": false
     }
   },
   "enums": {

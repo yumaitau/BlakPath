@@ -37,6 +37,16 @@ export const apiKeys = pgTable(
     prefix: text('prefix').notNull(),
     /** The permission keys this key may exercise (subset of the catalogue). */
     scopes: jsonb('scopes').notNull().default([]),
+    /**
+     * Why this key exists. Required when `scopes` includes an `mcp:` permission,
+     * so a disclosure has a declared purpose on the credential itself.
+     */
+    purpose: text('purpose'),
+    /**
+     * Where responses from this key are sent (system or organisation name).
+     * Required together with `purpose` for `mcp:` scopes.
+     */
+    destination: text('destination'),
     createdByUserId: refId('created_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),

@@ -22,10 +22,14 @@ import { tenantIsolationPolicy } from './_rls';
  * recipient completes the form via a public link WITHOUT signing in, and the
  * answers land in `form_responses`. All tenant-owned and org-leading indexed.
  *
- * SECURITY: an invitation stores only the SHA-256 HASH of its secret token, so a
- * database read never yields a usable link. The public completion path resolves
- * a presented token by hashing it and matching the hash — the token itself is
- * the capability, and it is scoped, single-use and expiring.
+ * SECURITY: an invitation stores the SHA-256 HASH of its secret token for
+ * lookup, plus a sealed copy used only to deliver the email. The seal is
+ * envelope ciphertext and is cleared after a successful send. A database read
+ * never yields a usable link. The public completion path resolves a presented
+ * token by hashing it and matching the hash — the token itself is the
+ * capability, and it is scoped, single-use for submission, and expiring.
+ * A half-finished draft may be saved against that same token and resumed until
+ * the invitation expires; submitting still consumes the token.
  */
 export const forms = pgTable(
   'forms',
@@ -67,8 +71,13 @@ export const formInvitations = pgTable(
     formId: refId('form_id')
       .notNull()
       .references(() => forms.id, { onDelete: 'cascade' }),
-    /** SHA-256 hex of the secret token. The raw token is never stored. */
+    /** SHA-256 hex of the secret token. Lookup key; not a usable link. */
     tokenHash: text('token_hash').notNull(),
+    /**
+     * Envelope-encrypted bearer token. Present only until the worker sends
+     * the invitation email, then cleared. Never copied onto a queue.
+     */
+    tokenSeal: jsonb('token_seal'),
     recipientName: text('recipient_name'),
     recipientEmail: text('recipient_email'),
     status: formInvitationStatus('status').notNull().default('pending'),
@@ -78,6 +87,14 @@ export const formInvitations = pgTable(
     }),
     openedAt: timestamp('opened_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /**
+     * Partial answers saved by the recipient so the same token can resume the
+     * form. Cleared on submit. Never shown to anyone but that token holder.
+     */
+    draftAnswers: jsonb('draft_answers'),
+    draftSavedAt: timestamp('draft_saved_at', { withTimezone: true }),
+    /** Drafts are unreadable once this passes, even if the row remains. */
+    draftExpiresAt: timestamp('draft_expires_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
@@ -103,15 +120,29 @@ export const formResponses = pgTable(
     }),
     /** The validated answer set, keyed by field key. */
     answers: jsonb('answers').notNull(),
+    /**
+     * Case this response belongs to. Set when the form is already linked to a
+     * case, or when staff create/attach a case afterwards. Null until then.
+     */
+    applicationId: refId('application_id').references(() => applications.id, {
+      onDelete: 'set null',
+    }),
     respondentName: text('respondent_name'),
     respondentEmail: text('respondent_email'),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
     /** Coarse origin for abuse investigation; not shown in the UI. */
     ipAddress: text('ip_address'),
+    /** Set once retention has anonymised this response. A later sweep skips it. */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
+    ...softDelete,
   },
   (table) => [
     index('form_responses_org_form_idx').on(table.organisationId, table.formId),
+    index('form_responses_org_application_idx').on(
+      table.organisationId,
+      table.applicationId,
+    ),
     tenantIsolationPolicy(),
   ],
 ).enableRLS();
@@ -160,5 +191,9 @@ export const formResponsesRelations = relations(formResponses, ({ one }) => ({
   invitation: one(formInvitations, {
     fields: [formResponses.invitationId],
     references: [formInvitations.id],
+  }),
+  application: one(applications, {
+    fields: [formResponses.applicationId],
+    references: [applications.id],
   }),
 }));

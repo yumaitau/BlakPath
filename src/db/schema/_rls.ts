@@ -4,10 +4,15 @@ import { pgPolicy } from 'drizzle-orm/pg-core';
 /**
  * Row-level security policies for tenant-owned tables.
  *
- * The app role sets `app.org_id` with `set_config(..., true)` (SET LOCAL)
- * inside a transaction. Missing or mismatched settings fail closed: the
- * comparison is false, or the cast/setting lookup errors. `WITH CHECK` stops
- * a tenant writing another tenant's key.
+ * Every table with an `organisation_id` column has RLS enabled and forced, and
+ * the policy below. `blakpath_rls_allows` (created in migration 0043) reads
+ * the transaction-local settings applied by `src/db/bound-db.ts`:
+ *
+ * - `app.bypass_rls = on` (platform handle): every row.
+ * - `app.org_id` set (tenant handle): only that organisation's rows, for
+ *   reads and for the new row of an insert or update (`WITH CHECK`).
+ * - neither set: allowed while release N-1 (which sets neither) can still be
+ *   running. A later migration makes this deny; see docs/tenant-isolation.md.
  *
  * A fresh policy object is required per table — drizzle links one instance
  * to one table.
@@ -17,8 +22,8 @@ export function tenantIsolationPolicy() {
     as: 'permissive',
     for: 'all',
     to: 'public',
-    using: sql`organisation_id = current_setting('app.org_id')::uuid`,
-    withCheck: sql`organisation_id = current_setting('app.org_id')::uuid`,
+    using: sql`blakpath_rls_allows(organisation_id)`,
+    withCheck: sql`blakpath_rls_allows(organisation_id)`,
   });
 }
 

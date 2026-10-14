@@ -44,8 +44,14 @@ export const applications = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    /** Human-friendly per-organisation reference, e.g. "APP-2026-0007". */
+    /**
+     * Human-friendly per-organisation reference, e.g. "APP-2026-0007".
+     * Stored in the clear so staff can read it. Uniqueness and lookup use
+     * `reference_bidx`, not a plaintext index.
+     */
     reference: text('reference').notNull(),
+    /** HMAC of the normalised reference under the tenant blind-index key. */
+    referenceBidx: text('reference_bidx'),
     /**
      * The applicant's account, when they have one. Null while an application is
      * started on someone's behalf before an account is linked.
@@ -53,8 +59,12 @@ export const applications = pgTable(
     applicantUserId: refId('applicant_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
-    /** The applicant's name as given at intake (no derived judgement). */
+    /** The applicant's name as given at intake, sealed under the tenant key. */
     applicantName: text('applicant_name').notNull(),
+    /** HMAC of the full normalised name. Lookup only — not a judgement. */
+    applicantNameBidx: text('applicant_name_bidx'),
+    /** HMAC of the full name and of each word, for whole-token lookup. */
+    applicantNameTokenBidx: text('applicant_name_token_bidx').array(),
     status: applicationStatus('status').notNull().default('draft'),
     priority: applicationPriority('priority').notNull().default('normal'),
     /** Denormalised active assignee for scoped listings; history is authoritative. */
@@ -80,15 +90,25 @@ export const applications = pgTable(
     withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
     withdrawnReason: text('withdrawn_reason'),
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    /**
+     * Set when retention has anonymised this row. The sweep skips a non-null
+     * value so a later run does not rewrite or re-audit the same matter.
+     */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
     ...rowVersion,
     ...softDelete,
   },
   (table) => [
-    uniqueIndex('applications_org_reference_unique').on(
+    uniqueIndex('applications_org_reference_bidx_unique').on(
       table.organisationId,
-      table.reference,
+      table.referenceBidx,
     ),
+    index('applications_org_name_bidx_idx').on(
+      table.organisationId,
+      table.applicantNameBidx,
+    ),
+    index('applications_name_token_bidx_gin').using('gin', table.applicantNameTokenBidx),
     index('applications_org_status_idx').on(table.organisationId, table.status),
     index('applications_org_assignee_idx').on(
       table.organisationId,

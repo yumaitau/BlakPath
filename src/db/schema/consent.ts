@@ -42,6 +42,11 @@ export const consentRecords = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     notes: text('notes'),
+    /**
+     * Organisation consent wording copied at grant time and sealed under the
+     * tenant key. Null when the organisation had no wording to snapshot.
+     */
+    wordingSnapshot: text('wording_snapshot'),
     ...timestamps,
   },
   (table) => [

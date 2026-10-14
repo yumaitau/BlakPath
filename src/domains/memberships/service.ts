@@ -20,8 +20,8 @@ import {
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
-import { queueTenantEmail } from '@/lib/email/queue';
-import { env } from '@/lib/env';
+import { queueInvitationEmail } from '@/lib/email/queue';
+import { sealInvitationToken } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError, isAuthorizationError } from '@/lib/permissions/errors';
@@ -69,13 +69,14 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
       resourceType: 'user',
       resourceId: existing.id,
       result: 'denied',
-      reason: 'account already exists — sign in instead',
+      reason: 'auth.account_exists',
       organisationId: invitation.organisationId,
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
 
   const userId = uuidv7();
+  const passwordHash = await argon2Hash(input.password, ARGON2_OPTIONS);
   await db.transaction(async (tx) => {
     await tx.insert(users).values({
       id: userId,
@@ -88,16 +89,19 @@ export async function createInvitedAccount(raw: unknown): Promise<{ userId: stri
       userId,
       providerId: 'credential',
       accountId: userId,
-      password: await argon2Hash(input.password, ARGON2_OPTIONS),
+      password: passwordHash,
     });
-  });
-  await recordAudit({
-    action: 'auth.signed_up',
-    resourceType: 'user',
-    resourceId: userId,
-    result: 'success',
-    reason: 'invite-bound signup',
-    organisationId: invitation.organisationId,
+    await recordAudit(
+      {
+        action: 'auth.signed_up',
+        resourceType: 'user',
+        resourceId: userId,
+        result: 'success',
+        reason: 'auth.invite_signup',
+        organisationId: invitation.organisationId,
+      },
+      tx,
+    );
   });
   return { userId };
 }
@@ -219,29 +223,16 @@ async function loadAssignableRole(
 async function queueMembershipInvitationEmail(input: {
   invitationId: string;
   organisationId: string;
-  organisationName: string;
   correlationId: string;
-  email: string;
-  roleName: string;
-  token: string;
+  generation: string;
 }): Promise<void> {
-  const joinUrl = `${env.APP_URL}/join/${input.token}`;
   try {
-    await queueTenantEmail({
+    await queueInvitationEmail({
       organisationId: input.organisationId,
       correlationId: input.correlationId,
-      to: input.email,
-      subject: `Invitation to join ${input.organisationName} in BlakPath`,
-      text: [
-        `You have been invited to join ${input.organisationName} as ${input.roleName}.`,
-        '',
-        'Sign in with this email address and review the invitation:',
-        joinUrl,
-        '',
-        'The link expires in 14 days. If you were not expecting this invitation, you can ignore it.',
-        '',
-        'BlakPath',
-      ].join('\n'),
+      invitationId: input.invitationId,
+      kind: 'membership',
+      generation: input.generation,
     });
   } catch (error) {
     logger.error(
@@ -390,13 +381,16 @@ export async function addMember(input: {
       await tx
         .insert(membershipRoles)
         .values({ id: uuidv7(), membershipId, roleId: role.id });
-    });
-    await recordAudit({
-      action: existing ? 'membership.role_assigned' : 'membership.invited',
-      resourceType: 'membership',
-      resourceId: membershipId,
-      result: 'success',
-      after: { data: { role: role.name }, allow: ['role'] },
+      await recordAudit(
+        {
+          action: existing ? 'membership.role_assigned' : 'membership.invited',
+          resourceType: 'membership',
+          resourceId: membershipId,
+          result: 'success',
+          after: { data: { role: role.name }, allow: ['role'] },
+        },
+        tx,
+      );
     });
     return {
       id: membershipId,
@@ -467,6 +461,12 @@ export async function createMembershipInvitation(input: {
       teamId = team.id;
     }
 
+    const tokenSeal = await sealInvitationToken(
+      scope.organisationId,
+      'membership_invitations',
+      invitationId,
+      token,
+    );
     await db.transaction(async (tx) => {
       await tx
         .update(membershipInvitations)
@@ -485,28 +485,29 @@ export async function createMembershipInvitation(input: {
         roleId: role.id,
         teamId,
         tokenHash: hashToken(token),
+        tokenSeal,
         invitedByUserId,
         status: 'pending',
         expiresAt,
         lastSentAt: now,
       });
+      await recordAudit(
+        {
+          action: 'membership.invited',
+          resourceType: 'membership',
+          resourceId: invitationId,
+          result: 'success',
+          after: { data: { role: role.name }, allow: ['role'] },
+        },
+        tx,
+      );
     });
 
-    await recordAudit({
-      action: 'membership.invited',
-      resourceType: 'membership',
-      resourceId: invitationId,
-      result: 'success',
-      after: { data: { role: role.name }, allow: ['role'] },
-    });
     await queueMembershipInvitationEmail({
       invitationId,
       organisationId: scope.organisationId,
-      organisationName: organisation.name,
       correlationId: ctx.correlationId,
-      email,
-      roleName: role.name,
-      token,
+      generation: String(now.getTime()),
     });
     return {
       invitation: {
@@ -543,7 +544,6 @@ export async function resendMembershipInvitation(id: string): Promise<{
         status: membershipInvitations.status,
         roleId: membershipInvitations.roleId,
         roleName: roles.name,
-        organisationName: organisations.legalName,
       })
       .from(membershipInvitations)
       .innerJoin(roles, eq(membershipInvitations.roleId, roles.id))
@@ -565,31 +565,44 @@ export async function resendMembershipInvitation(id: string): Promise<{
     const token = nanoid(36);
     const lastSentAt = new Date();
     const expiresAt = new Date(lastSentAt.getTime() + INVITATION_LIFETIME_MS);
-    await db
-      .update(membershipInvitations)
-      .set({ tokenHash: hashToken(token), expiresAt, lastSentAt })
-      .where(
-        and(
-          eq(membershipInvitations.id, id),
-          eq(membershipInvitations.organisationId, scope.organisationId),
-          eq(membershipInvitations.status, 'pending'),
-        ),
+    const tokenSeal = await sealInvitationToken(
+      scope.organisationId,
+      'membership_invitations',
+      id,
+      token,
+    );
+    await db.transaction(async (tx) => {
+      await tx
+        .update(membershipInvitations)
+        .set({
+          tokenHash: hashToken(token),
+          tokenSeal,
+          expiresAt,
+          lastSentAt,
+        })
+        .where(
+          and(
+            eq(membershipInvitations.id, id),
+            eq(membershipInvitations.organisationId, scope.organisationId),
+            eq(membershipInvitations.status, 'pending'),
+          ),
+        );
+      await recordAudit(
+        {
+          action: 'membership.invited',
+          resourceType: 'membership',
+          resourceId: id,
+          result: 'success',
+          after: { data: { resent: true }, allow: ['resent'] },
+        },
+        tx,
       );
-    await recordAudit({
-      action: 'membership.invited',
-      resourceType: 'membership',
-      resourceId: id,
-      result: 'success',
-      after: { data: { resent: true }, allow: ['resent'] },
     });
     await queueMembershipInvitationEmail({
       invitationId: id,
       organisationId: scope.organisationId,
-      organisationName: current.organisationName,
       correlationId: ctx.correlationId,
-      email: current.email,
-      roleName: current.roleName,
-      token,
+      generation: String(lastSentAt.getTime()),
     });
     return {
       invitation: {
@@ -615,23 +628,28 @@ export async function revokeMembershipInvitation(id: string): Promise<void> {
   try {
     requirePermission(subjectFromContext(ctx), 'membership:manage');
     const scope = currentScope();
-    const updated = await db
-      .update(membershipInvitations)
-      .set({ status: 'revoked', revokedAt: new Date() })
-      .where(
-        and(
-          eq(membershipInvitations.id, id),
-          eq(membershipInvitations.organisationId, scope.organisationId),
-          eq(membershipInvitations.status, 'pending'),
-        ),
-      )
-      .returning({ id: membershipInvitations.id });
-    if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
-    await recordAudit({
-      action: 'membership.invitation_revoked',
-      resourceType: 'membership',
-      resourceId: id,
-      result: 'success',
+    await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(membershipInvitations)
+        .set({ status: 'revoked', revokedAt: new Date() })
+        .where(
+          and(
+            eq(membershipInvitations.id, id),
+            eq(membershipInvitations.organisationId, scope.organisationId),
+            eq(membershipInvitations.status, 'pending'),
+          ),
+        )
+        .returning({ id: membershipInvitations.id });
+      if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
+      await recordAudit(
+        {
+          action: 'membership.invitation_revoked',
+          resourceType: 'membership',
+          resourceId: id,
+          result: 'success',
+        },
+        tx,
+      );
     });
   } catch (error) {
     await recordDenied('membership.invitation_revoked', id, error);
@@ -776,6 +794,33 @@ export async function acceptMembershipInvitation(input: {
         .update(sessions)
         .set({ activeOrganisationId: invitation.organisationId })
         .where(and(eq(sessions.id, input.sessionId), eq(sessions.userId, input.userId)));
+      await recordAudit(
+        {
+          action: 'membership.invitation_accepted',
+          resourceType: 'membership',
+          resourceId: membershipId,
+          result: 'success',
+          organisationId: invitation.organisationId,
+          actorUserId: input.userId,
+          sessionId: input.sessionId,
+          after: { data: { role: invitation.roleName }, allow: ['role'] },
+        },
+        tx,
+      );
+      if (invitation.teamId) {
+        await recordAudit(
+          {
+            action: 'team.member_added',
+            resourceType: 'team',
+            resourceId: invitation.teamId,
+            result: 'success',
+            organisationId: invitation.organisationId,
+            actorUserId: input.userId,
+            sessionId: input.sessionId,
+          },
+          tx,
+        );
+      }
     });
   } catch (error) {
     if (isAuthorizationError(error)) {
@@ -793,27 +838,6 @@ export async function acceptMembershipInvitation(input: {
     throw error;
   }
 
-  await recordAudit({
-    action: 'membership.invitation_accepted',
-    resourceType: 'membership',
-    resourceId: membershipId,
-    result: 'success',
-    organisationId: invitation.organisationId,
-    actorUserId: input.userId,
-    sessionId: input.sessionId,
-    after: { data: { role: invitation.roleName }, allow: ['role'] },
-  });
-  if (invitation.teamId) {
-    await recordAudit({
-      action: 'team.member_added',
-      resourceType: 'team',
-      resourceId: invitation.teamId,
-      result: 'success',
-      organisationId: invitation.organisationId,
-      actorUserId: input.userId,
-      sessionId: input.sessionId,
-    });
-  }
   return {
     organisationId: invitation.organisationId,
     organisationName: invitation.organisationName,
@@ -861,14 +885,17 @@ export async function changeMemberRole(id: string, roleId: string): Promise<void
       await tx
         .insert(membershipRoles)
         .values({ id: uuidv7(), membershipId: id, roleId: role.id });
-    });
-    await recordAudit({
-      action: 'membership.role_assigned',
-      resourceType: 'membership',
-      resourceId: id,
-      result: 'success',
-      before: { data: { roles: beforeRoles }, allow: ['roles'] },
-      after: { data: { role: role.name }, allow: ['role'] },
+      await recordAudit(
+        {
+          action: 'membership.role_assigned',
+          resourceType: 'membership',
+          resourceId: id,
+          result: 'success',
+          before: { data: { roles: beforeRoles }, allow: ['roles'] },
+          after: { data: { role: role.name }, allow: ['role'] },
+        },
+        tx,
+      );
     });
   } catch (error) {
     await recordDenied('membership.role_assigned', id, error);
@@ -916,18 +943,26 @@ export async function changeMemberStatus(
     ) {
       throw new AuthorizationError('POLICY_DENIED');
     }
-    await db
-      .update(memberships)
-      .set({ status })
-      .where(
-        and(eq(memberships.id, id), eq(memberships.organisationId, scope.organisationId)),
+    await db.transaction(async (tx) => {
+      await tx
+        .update(memberships)
+        .set({ status })
+        .where(
+          and(
+            eq(memberships.id, id),
+            eq(memberships.organisationId, scope.organisationId),
+          ),
+        );
+      await recordAudit(
+        {
+          action,
+          resourceType: 'membership',
+          resourceId: id,
+          result: 'success',
+          after: { data: { status }, allow: ['status'] },
+        },
+        tx,
       );
-    await recordAudit({
-      action,
-      resourceType: 'membership',
-      resourceId: id,
-      result: 'success',
-      after: { data: { status }, allow: ['status'] },
     });
   } catch (error) {
     await recordDenied(action, id, error);

@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -41,17 +41,27 @@ export const familyLinks = pgTable(
     }),
     /** How the relative connects to the applicant, e.g. "grandmother". */
     relationship: text('relationship').notNull(),
-    /** The relative's name as recorded (no derived judgement). */
+    /**
+     * Relative's name as recorded. Envelope-encrypted JSON, bound to this row.
+     * Never a judgement about Aboriginality.
+     */
     relativeName: text('relative_name').notNull(),
-    /** Community / nation / language group as recorded, if given. */
+    /** Community / nation / language group as recorded. Envelope-encrypted JSON, or null. */
     community: text('community'),
+    /** Research notes. Envelope-encrypted JSON, or null. */
     notes: text('notes'),
+    /**
+     * The relative has passed. The case panel keeps the name hidden until a
+     * person acknowledges the organisation's deceased-name warning.
+     */
+    relativeDeceased: boolean('relative_deceased').notNull().default(false),
     status: familyLinkStatus('status').notNull().default('requested'),
     /** The authorised human who approved or disputed the link (never the requester). */
     decidedByUserId: refId('decided_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
     decidedAt: timestamp('decided_at', { withTimezone: true }),
+    /** Decider's note. Envelope-encrypted JSON, or null. Can name the relative. */
     decisionNote: text('decision_note'),
     ...timestamps,
     ...rowVersion,

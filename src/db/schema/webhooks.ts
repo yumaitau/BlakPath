@@ -1,6 +1,7 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   integer,
   index,
   jsonb,
@@ -28,9 +29,9 @@ import { tenantIsolationPolicy } from './_rls';
  * signed, …). Each dispatch is recorded as a delivery with its own status and
  * attempt count so failures are visible and retryable. Tenant-owned.
  *
- * SECURITY: `secret` is the per-endpoint HMAC signing secret shared with the
- * receiver so it can verify authenticity. It is stored as given because the
- * receiver must know it; a follow-up will envelope-encrypt it at rest. Payloads
+ * SECURITY: `secret` stores envelope ciphertext (AES-256-GCM), never the
+ * signing secret itself. Plaintext is returned once on create and on rotation,
+ * then decrypted only inside the delivery worker to compute the HMAC. Payloads
  * carry only ids and non-sensitive fields — never applicant PII or evidence.
  */
 export const webhookEndpoints = pgTable(
@@ -41,8 +42,11 @@ export const webhookEndpoints = pgTable(
       onDelete: 'cascade',
     }),
     url: text('url').notNull(),
-    /** Per-endpoint HMAC-SHA256 signing secret. */
-    secret: text('secret').notNull(),
+    /**
+     * Envelope ciphertext of the HMAC signing secret. The column name stays
+     * `secret` so existing rows keep their place; the value must be ciphertext.
+     */
+    secretCiphertext: text('secret').notNull(),
     /** Event types this endpoint subscribes to. */
     events: jsonb('events').notNull().default([]),
     active: boolean('active').notNull().default(true),
@@ -54,6 +58,12 @@ export const webhookEndpoints = pgTable(
   },
   (table) => [
     index('webhook_endpoints_org_idx').on(table.organisationId),
+    // `sealWebhookSecret` always emits this prefix. Legacy plaintext cannot be
+    // written once the constraint is in place.
+    check(
+      'webhook_endpoints_secret_is_ciphertext',
+      sql`${table.secretCiphertext} ~ '^\\{"v":[0-9]+,'`,
+    ),
     tenantIsolationPolicy(),
   ],
 ).enableRLS();
