@@ -1,7 +1,14 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { applications, certificates, decisions, exportRequests } from '@/db/schema';
+import {
+  applications,
+  certificates,
+  decisions,
+  destructionRegister,
+  exportRequests,
+} from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import { destructionRegisterRows } from '@/domains/retention/register';
 import { logger } from '@/lib/observability/logger';
 import { openApplicationRows } from '@/lib/encryption/tenant-fields';
 import { EVIDENCE_BUCKET, objectKey, putObjectBytes } from '@/lib/storage/s3';
@@ -83,19 +90,31 @@ async function buildReport(
     };
   }
 
+  if (type === 'certificates') {
+    const items = await scope.db
+      .select()
+      .from(certificates)
+      .where(
+        and(
+          eq(certificates.organisationId, scope.organisationId),
+          isNull(certificates.deletedAt),
+        ),
+      )
+      .orderBy(desc(certificates.createdAt));
+    return {
+      headers,
+      rows: items.map((c) => [c.reference, c.status, c.signedAt, c.revokedAt]),
+    };
+  }
+
   const items = await scope.db
     .select()
-    .from(certificates)
-    .where(
-      and(
-        eq(certificates.organisationId, scope.organisationId),
-        isNull(certificates.deletedAt),
-      ),
-    )
-    .orderBy(desc(certificates.createdAt));
+    .from(destructionRegister)
+    .where(eq(destructionRegister.organisationId, scope.organisationId))
+    .orderBy(desc(destructionRegister.destroyedAt));
   return {
     headers,
-    rows: items.map((c) => [c.reference, c.status, c.signedAt, c.revokedAt]),
+    rows: destructionRegisterRows(items),
   };
 }
 

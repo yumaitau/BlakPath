@@ -30,7 +30,7 @@ import {
 } from '@/domains/organisation-keys';
 import { WebhookDestinationError } from '@/domains/webhooks/destination';
 import { EvidenceUploadIncompleteError } from '@/domains/evidence/errors';
-import { RetentionTargetError } from '@/domains/retention';
+import { RetentionError, RetentionTargetError } from '@/domains/retention';
 import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 import { logger } from '@/lib/observability/logger';
 import { AuthorizationError } from '@/lib/permissions/errors';
@@ -166,6 +166,19 @@ describe('errorResponse', () => {
       [new ConcurrencyConflictError(), 409, CONCURRENCY_CONFLICT_MESSAGE],
       [new EvidenceUploadIncompleteError('missing'), 409, 'Upload incomplete'],
       [new RetentionTargetError(), 404, 'Legal hold target does not exist'],
+      [
+        new RetentionError(
+          'SIGN_OFF_REQUIRED',
+          'A records manager must sign the disposal authority for this class before a purge can be scheduled.',
+        ),
+        409,
+        'A records manager must sign the disposal authority for this class before a purge can be scheduled.',
+      ],
+      [
+        new RetentionError('ALREADY_ACTIVE', 'This policy is already active.'),
+        409,
+        'This policy is already active.',
+      ],
       [new EvidenceUploadIncompleteError('size-mismatch'), 409, 'Upload incomplete'],
       [
         new ConcurrencyConflictError('This form was already submitted.'),

@@ -37,6 +37,8 @@ export const STEP_UP_ROUTES = {
   'POST /api/sso/providers': STEP_UP_WINDOWS.privileged,
   'DELETE /api/retention/holds/[id]': STEP_UP_WINDOWS.destructive,
   'DELETE /api/retention/policies/[id]': STEP_UP_WINDOWS.destructive,
+  'POST /api/retention/policies/[id]/activate': STEP_UP_WINDOWS.destructive,
+  'POST /api/retention/disposal-authorities': STEP_UP_WINDOWS.destructive,
   'POST /api/break-glass/[id]/deny': STEP_UP_WINDOWS.privileged,
   'POST /api/break-glass/[id]/revoke': STEP_UP_WINDOWS.privileged,
 } as const;

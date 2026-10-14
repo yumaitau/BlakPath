@@ -553,6 +553,28 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowRole: 'records-officer',
     allowProbe: true,
   }),
+  route('GET', '/api/retention/destruction-register', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
+  route('GET', '/api/retention/disposal-authorities', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
+  route('POST', '/api/retention/disposal-authorities', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+    body: {
+      jurisdiction: 'organisation',
+      disposalClass: 'operational_record',
+      authorityReference: 'Matrix schedule 1',
+      permanent: false,
+    },
+  }),
+  route('GET', '/api/retention/disposal-classes', anyOf(['retention:manage']), {
+    allowRole: 'records-officer',
+    allowProbe: true,
+  }),
   route('POST', '/api/retention/holds', anyOf(['retention:manage'])),
   route('DELETE', '/api/retention/holds/[id]', anyOf(['retention:manage'])),
   route('GET', '/api/retention/policies', anyOf(['retention:manage']), {
@@ -562,9 +584,15 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/retention/policies', anyOf(['retention:manage']), {
     allowRole: 'records-officer',
     allowProbe: true,
-    body: { resourceType: 'application', retentionDays: 30, action: 'anonymise' },
+    body: {
+      resourceType: 'application',
+      retentionDays: 30,
+      action: 'anonymise',
+      jurisdiction: 'organisation',
+    },
   }),
   route('DELETE', '/api/retention/policies/[id]', anyOf(['retention:manage'])),
+  route('POST', '/api/retention/policies/[id]/activate', anyOf(['retention:manage'])),
   route('GET', '/api/retention/preview', anyOf(['retention:manage']), {
     allowRole: 'records-officer',
     allowProbe: true,
