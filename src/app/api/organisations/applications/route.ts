@@ -21,12 +21,15 @@ const bodySchema = z.object({
 });
 
 /**
- * POST /api/public/applications
+ * POST /api/organisations/applications
  *
  * Starts an application for a signed-in member of an organisation that has
  * opened public applications. Unknown and closed organisations return the same
  * response. The flag is checked before a tenant context is opened, and again
  * inside the start service.
+ *
+ * This is a session-cookie mutation, so it lives outside `/api/public` (which
+ * the cookie-mutation origin and content-type guard exempts).
  */
 export const POST = tenantHandler(async function POST(
   request: Request,

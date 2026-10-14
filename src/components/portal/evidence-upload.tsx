@@ -68,8 +68,10 @@ export function EvidenceUpload({
         setError('The file did not send. You can try again.');
         return;
       }
+      // The cookie-mutation guard only accepts JSON bodies on /api mutations.
       const completed = await fetch(`/api/evidence/${prepared.evidence.id}/complete`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!completed.ok) {
         setError(

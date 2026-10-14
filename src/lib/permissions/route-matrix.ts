@@ -624,7 +624,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   // Unknown or closed organisations answer 403 before the session is read.
   // For an open organisation the caller needs an active membership there, and
   // `startPublicApplication` → `createApplication` enforces `application:create`.
-  route('POST', '/api/public/applications', anyOf(['application:create']), {
+  route('POST', '/api/organisations/applications', anyOf(['application:create']), {
     body: { slug: 'matrix-org', applicantName: 'Matrix Applicant' },
   }),
   route(

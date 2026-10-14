@@ -29,7 +29,7 @@ export function StartApplicationForm({
     setPending(true);
     setError(null);
     try {
-      const response = await fetch('/api/public/applications', {
+      const response = await fetch('/api/organisations/applications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slug, applicantName: name }),
