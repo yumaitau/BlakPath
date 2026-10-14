@@ -215,6 +215,7 @@ integration('authorisation matrix', () => {
   let revoked: FixtureUser | undefined;
   let organisationId = '';
   let closeDatabase: (() => Promise<unknown>) | undefined;
+  let restoreCounters: (() => void) | undefined;
 
   function userIdFor(actor: DenyActor | null, allowRole?: SystemRoleSlug): string | null {
     if (allowRole) return users.get(allowRole)?.id ?? null;
@@ -235,16 +236,30 @@ integration('authorisation matrix', () => {
   }
 
   beforeAll(async () => {
-    const [{ db, sqlClient }, schema, catalog, roles, drizzle, { uuidv7 }] =
-      await Promise.all([
-        import('@/db/client'),
-        import('@/db/schema'),
-        import('@/lib/permissions/catalog'),
-        import('@/lib/permissions/roles'),
-        import('drizzle-orm'),
-        import('uuidv7'),
-      ]);
+    const [
+      { db, sqlClient },
+      schema,
+      catalog,
+      roles,
+      drizzle,
+      { uuidv7 },
+      counters,
+      organisationKeys,
+    ] = await Promise.all([
+      import('@/db/client'),
+      import('@/db/schema'),
+      import('@/lib/permissions/catalog'),
+      import('@/lib/permissions/roles'),
+      import('drizzle-orm'),
+      import('uuidv7'),
+      import('@/lib/http/counter-store'),
+      import('@/domains/organisation-keys'),
+    ]);
     closeDatabase = () => sqlClient.end({ timeout: 5 });
+    // Probes share one client IP. A private counter store keeps other suites'
+    // SCIM and MCP traffic from turning an auth deny into a 429.
+    counters.setCounterStore(counters.createMemoryCounterStore());
+    restoreCounters = () => counters.setCounterStore(undefined);
 
     await db
       .insert(schema.permissions)
@@ -296,6 +311,8 @@ integration('authorisation matrix', () => {
       slug: `matrix-${suffix}`,
       status: 'active',
     });
+    // Tenant data routes refuse an organisation with no usable key.
+    await organisationKeys.ensureOrganisationKey(organisationId);
 
     const created: FixtureUser[] = [];
     for (const slug of SYSTEM_ROLE_SLUGS) {
@@ -335,6 +352,17 @@ integration('authorisation matrix', () => {
         };
       }),
     );
+    // Staff roles must hold a verified second factor. The matrix tests
+    // permission gates, so every fixture is enrolled.
+    await db.insert(schema.twoFactors).values(
+      created.map((user) => ({
+        id: randomUUID(),
+        userId: user.id,
+        secret: 'ciphertext-not-a-secret',
+        backupCodes: 'ciphertext-not-codes',
+        verified: true,
+      })),
+    );
 
     const membershipRows = created.map((user) => ({
       id: uuidv7(),
@@ -358,6 +386,7 @@ integration('authorisation matrix', () => {
   }, 120_000);
 
   afterAll(async () => {
+    restoreCounters?.();
     if (!closeDatabase || !organisationId) return;
     const [{ db }, schema, drizzle] = await Promise.all([
       import('@/db/client'),

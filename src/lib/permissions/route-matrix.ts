@@ -24,10 +24,10 @@ export type Gate =
   | { readonly kind: 'session' }
   | { readonly kind: 'public' }
   | { readonly kind: 'webhook-secret' }
-  | { readonly kind: 'bootstrap-token' }
   | { readonly kind: 'api-key' }
   | { readonly kind: 'scim' }
   | { readonly kind: 'bearer-token' }
+  | { readonly kind: 'verification-code' }
   | { readonly kind: 'auth' };
 
 /** Who the integration test authenticates as for the deny probe. */
@@ -48,7 +48,7 @@ export interface RouteMatrixEntry {
   readonly body?: unknown;
   /** Query string without the leading `?`. May contain `{{org}}` or `{{user}}`. */
   readonly search?: string;
-  /** Raw request body (calendar import). Wins over `body`. */
+  /** Raw non-JSON body, sent as `text/calendar`. Wins over `body`. */
   readonly rawBody?: string;
   /** Request URL when it differs from the App Router path (Better Auth). */
   readonly requestPath?: string;
@@ -185,6 +185,7 @@ function route(
   return probe ? { method, path, gate, ...probe } : { method, path, gate };
 }
 
+const KMS_KEY_ARN = `arn:aws:kms:ap-southeast-2:111122223333:key/${FAKE_ID}`;
 const MEMBER_EMAIL = { email: 'deny@example.test', roleId: FAKE_ID };
 const CALENDAR_BODY = {
   title: 'Matrix event',
@@ -197,7 +198,14 @@ const CALENDAR_BODY = {
  * Gate unions mirror the domain checks the handler can reach.
  */
 export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
-  route('POST', '/api/admin/pilot-bootstrap', { kind: 'bootstrap-token' }, { body: {} }),
+  route(
+    'POST',
+    '/api/admin/email-suppressions',
+    { kind: 'platform-operator' },
+    {
+      body: { address: 'deny@example.test' },
+    },
+  ),
   route(
     'GET',
     '/api/applications',
@@ -256,7 +264,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/calendar/events/[id]/attendees', anyOf(['calendar:update-any'])),
   route('POST', '/api/calendar/events/[id]/invite', anyOf(['calendar:update-any'])),
   route('POST', '/api/calendar/import', anyOf(['meeting:create']), {
-    rawBody: 'BEGIN:VCALENDAR',
+    body: { ics: 'BEGIN:VCALENDAR' },
   }),
   route('GET', '/api/calendar/meetings', anyOf(MEETING_READ), {
     allowRole: 'committee-chair',
@@ -283,6 +291,18 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
     search: 'subject={{user}}',
   }),
+  // Public browser report sink. No credential exists; the probe checks that a
+  // non-report media type is refused.
+  route(
+    'POST',
+    '/api/csp-report',
+    { kind: 'public' },
+    {
+      rawBody: 'not-a-report',
+      denyActor: { type: 'anonymous' },
+      denyStatuses: [415],
+    },
+  ),
   route('POST', '/api/consents', anyOf(CONSENT_WRITE), {
     allowRole: 'applicant',
     allowProbe: true,
@@ -352,7 +372,26 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/keys', anyOf(['tenant:configure'])),
   route('DELETE', '/api/keys/[id]', anyOf(['tenant:configure'])),
   route('GET', '/api/live', { kind: 'public' }, { allowProbe: true }),
-  route('POST', '/api/mcp', { kind: 'api-key' }, { body: {} }),
+  // GET is closed: it always answers 404 whatever the caller holds.
+  route(
+    'GET',
+    '/api/mcp',
+    { kind: 'public' },
+    {
+      denyActor: { type: 'anonymous' },
+      denyStatuses: [404],
+    },
+  ),
+  // 404 while the platform AI flag is off; otherwise a request with no key is 401.
+  route(
+    'POST',
+    '/api/mcp',
+    { kind: 'api-key' },
+    {
+      body: {},
+      denyStatuses: [401, 404],
+    },
+  ),
   route('GET', '/api/membership-invitations', anyOf(['membership:manage']), {
     allowRole: 'organisation-admin',
     allowProbe: true,
@@ -411,6 +450,15 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       body: { all: true },
     },
   ),
+  route('POST', '/api/organisation/activation', anyOf(['tenant:configure'])),
+  route('POST', '/api/organisation-key/health-check', anyOf(['tenant:configure'])),
+  route('GET', '/api/organisation-keys', anyOf(['tenant:configure']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('POST', '/api/organisation-keys', anyOf(['tenant:configure']), {
+    body: { kmsKeyArn: KMS_KEY_ARN, custodyMode: 'client_owned' },
+  }),
   route(
     'GET',
     '/api/organisations',
@@ -430,6 +478,13 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       body: { organisationId: '{{org}}' },
     },
   ),
+  route('GET', '/api/organisations/session-policy', anyOf(['tenant:configure']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('PATCH', '/api/organisations/session-policy', anyOf(['tenant:configure']), {
+    body: { idleTimeoutMinutes: 45 },
+  }),
   route(
     'POST',
     '/api/public/forms/[token]',
@@ -438,6 +493,12 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       body: { answers: {} },
       denyStatuses: [404],
     },
+  ),
+  route(
+    'POST',
+    '/api/public/verify/[code]',
+    { kind: 'verification-code' },
+    { denyStatuses: [400, 404] },
   ),
   route('GET', '/api/ready', { kind: 'public' }, { skipProbe: true }),
   route('GET', '/api/reports/exports', anyOf(REPORT_READ), {
@@ -469,9 +530,31 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('PATCH', '/api/reviews/[id]', anyOf(['review:finalise']), {
     body: { operation: 'finalise' },
   }),
+  route('GET', '/api/scim/credentials', anyOf(['tenant:configure']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('POST', '/api/scim/credentials', anyOf(['tenant:configure'])),
+  route('DELETE', '/api/scim/credentials/[id]', anyOf(['tenant:configure'])),
+  route('POST', '/api/scim/credentials/[id]/rotate', anyOf(['tenant:configure'])),
   route('POST', '/api/scim/v2/[orgId]/Users', { kind: 'scim' }),
   route('PATCH', '/api/scim/v2/[orgId]/Users', { kind: 'scim' }),
   route('DELETE', '/api/scim/v2/[orgId]/Users', { kind: 'scim' }),
+  route('POST', '/api/session/step-up/complete', { kind: 'session' }),
+  route(
+    'POST',
+    '/api/session/step-up/prepare',
+    { kind: 'session' },
+    {
+      allowRole: 'applicant',
+      allowProbe: true,
+    },
+  ),
+  route('GET', '/api/settings/ai-features', anyOf(['tenant:configure']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('POST', '/api/settings/ai-features', anyOf(['tenant:configure'])),
   route('GET', '/api/sso/providers', anyOf(['tenant:configure']), {
     allowRole: 'organisation-admin',
     allowProbe: true,
@@ -507,6 +590,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('POST', '/api/webhooks', anyOf(['tenant:configure'])),
   route('DELETE', '/api/webhooks/[id]', anyOf(['tenant:configure'])),
   route('GET', '/api/webhooks/[id]/deliveries', anyOf(['tenant:configure'])),
+  route('POST', '/api/webhooks/[id]/rotate', anyOf(['tenant:configure'])),
 ];
 
 /**
@@ -527,6 +611,10 @@ export const UNROUTED_PERMISSIONS = {
   'group:manage':
     'addGroupMember has no route. Group list uses team:manage or membership:manage; create uses group:create.',
   'client:assign-team': 'assignClient has no route.',
+  'mcp:read':
+    'API-key scope. POST /api/mcp authenticates the key, then hasMcpScope checks the key permissions. No session route checks it.',
+  'mcp:read-pii':
+    'API-key scope. MCP tools omit direct identifiers unless the key holds it. No session route checks it.',
 } as const satisfies Partial<Record<Permission, string>>;
 
 export type UnroutedPermission = keyof typeof UNROUTED_PERMISSIONS;
@@ -604,7 +692,6 @@ export function denyStatusesFor(entry: RouteMatrixEntry): readonly number[] {
     case 'session':
       return [401];
     case 'webhook-secret':
-    case 'bootstrap-token':
       return [403, 503];
     case 'public':
       return [];
@@ -631,14 +718,14 @@ export function accessLabel(entry: RouteMatrixEntry): string {
       return 'public';
     case 'webhook-secret':
       return 'email webhook secret';
-    case 'bootstrap-token':
-      return 'pilot bootstrap token';
     case 'api-key':
       return 'API key';
     case 'scim':
       return 'SCIM bearer token';
     case 'bearer-token':
       return 'invitation or form token';
+    case 'verification-code':
+      return 'certificate verification code (public capability)';
     case 'auth':
       return 'Better Auth';
     default: {
