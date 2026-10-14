@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { requireRecentAuth } from '@/lib/auth/session';
+import { STEP_UP_ROUTES } from '@/lib/auth/step-up-policy';
 import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
 import { deletePolicy } from '@/domains/retention';
 
@@ -8,6 +10,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   try {
+    await requireRecentAuth(STEP_UP_ROUTES['DELETE /api/retention/policies/[id]']);
     const { id } = await params;
     await withRequestTenant(() => deletePolicy(id));
     return NextResponse.json({ ok: true });

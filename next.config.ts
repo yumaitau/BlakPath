@@ -5,8 +5,8 @@ import type { NextConfig } from 'next';
  *
  * Security posture: strict headers are applied globally. Sensitive routes
  * (evidence, certificates) additionally set no-store cache headers at the
- * route-handler level. A Content-Security-Policy nonce is injected by
- * `src/middleware.ts`; the header below is the static fallback baseline.
+ * route-handler level. The per-request Content-Security-Policy nonce is set
+ * by `src/proxy.ts`. The headers below are the non-CSP baseline.
  */
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
