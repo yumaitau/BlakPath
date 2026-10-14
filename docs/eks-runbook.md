@@ -5,7 +5,11 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
 ## Deploy
 
-1. Build web + worker images, push to ECR ap-southeast-2 with immutable tags.
+1. Build web + worker images and push them to ECR in ap-southeast-2.
+   `infra/aws/ecr-repositories.example.yaml` sets `ImageTagMutability` to
+   `IMMUTABLE` on `blakpath/app` and `blakpath/worker`. Repositories that
+   already exist are not created again; set tag mutability to `IMMUTABLE` on
+   those repositories (or import them into the stack) before relying on it.
 2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
    `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
@@ -27,9 +31,14 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    `infra/aws/blakpath-eks-runtime-trust.example.json` and set that document as
    the trust policy on `blakpath-eks-runtime`.
 5. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-6. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
-   after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, certificate ARN,
-   trust store ARN and WAF ACL ARN. Complete the edge section below first.
+6. Set the app and worker digests in
+   `infra/k8s/components/images/kustomization.yaml` (the only image pin).
+   Copy each `imageDigest` from ECR. Prefer tag `4676c43` for both
+   repositories; if the app repository has no such tag, use `538319c` for the
+   app only. Do not pin `7350f7c`. Do not apply while either BlakPath digest
+   is still 64 zeros. Then apply `kubectl kustomize infra/k8s | kubectl apply -f -`
+   after replacing host, role ARNs, certificate ARN, trust store ARN and WAF
+   ACL ARN. Complete the edge section below first.
    Rolling the app before the origin-verify header is live makes production
    requests return 403.
 7. Delete any pod identity association for `blakpath/blakpath` that was left
@@ -40,8 +49,12 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    `PAPERBOY_*` and `PILOT_BOOTSTRAP_TOKEN`, and requires the SES sender
    config. SDK uses the workload role. Do not put
    `PILOT_BOOTSTRAP_TOKEN` in the runtime secret.
-9. Apply the migrate job, then the seed job, then
-   `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
+9. The migrate and seed Jobs are in the step 6 build and use the worker
+   digest. Delete a finished Job before applying a new digest; its pod
+   template is immutable. After migrate and seed complete, set the first
+   administrator's email in `infra/k8s/jobs/invite-admin/job.yaml` and apply
+   `kubectl kustomize infra/k8s/jobs/invite-admin | kubectl apply -f -`
+   (same worker digest).
    The job emails an organisation-administrator invitation and does not create
    a password. That person enrols a passkey or authenticator before the
    organisation tools open.

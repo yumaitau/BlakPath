@@ -4,6 +4,10 @@ These CloudFormation examples are deployment inputs, not a turn-key account
 bootstrap. Deploy them only in `ap-southeast-2` after replacing every parameter
 with resources owned by the production environment.
 
+- `ecr-repositories.example.yaml` creates `blakpath/app` and `blakpath/worker`
+  with `ImageTagMutability: IMMUTABLE`. Repositories that already exist must be
+  imported into the stack, or have tag mutability set to `IMMUTABLE` in place;
+  deploying this template as a second create fails on the name.
 - `workload-roles.example.yaml` separates web, worker and ECS execution roles.
   The application roles have no Secrets Manager permission and no access keys;
   the execution role can inject one named runtime secret into the tasks.

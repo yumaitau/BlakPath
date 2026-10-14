@@ -23,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: worker
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
           imagePullPolicy: IfNotPresent
           command: [pnpm, exec, tsx, worker/index.ts]
           envFrom:
@@ -63,7 +63,7 @@ spec:
       serviceAccountName: blakpath
       containers:
         - name: clamav
-          image: clamav/clamav-debian:1.4
+          image: clamav/clamav-debian
           ports:
             - containerPort: 3310
               name: clamav

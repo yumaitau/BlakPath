@@ -1,7 +1,8 @@
 # Production seed: permission catalogue + system role templates only.
 # Developer accounts require ALLOW_DEV_SEED=1 and a loopback database host.
 # NODE_ENV=production never creates them (see src/db/seeds).
-#   kubectl apply -f infra/k8s/jobs/seed.yaml
+# Image digest comes from components/images (worker), via
+# `kubectl kustomize infra/k8s`. Delete this Job before a new digest.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -15,7 +16,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: seed
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
           imagePullPolicy: IfNotPresent
           command: [pnpm, exec, tsx, src/db/seeds/index.ts]
           envFrom:

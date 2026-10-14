@@ -1,0 +1,10 @@
+# One-shot first-administrator invitation. Not part of infra/k8s; render and
+# apply this directory on its own. The image digest comes from the shared
+# components/images pin.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: blakpath
+resources:
+  - job.yaml
+components:
+  - ../../components/images

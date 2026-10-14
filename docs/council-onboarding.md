@@ -10,7 +10,7 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 2. Seed system roles + permission catalogue (`pnpm db:seed` covers platform
    defaults; tenant clones roles on first admin sign-in).
 3. Email the first administrator with the operator job
-   `infra/k8s/jobs/invite-admin.yaml` (`pnpm admin:invite`). The job creates
+   `infra/k8s/jobs/invite-admin` (`pnpm admin:invite`). The job creates
    the organisation (`organisationType='council'`, status `onboarding`,
    applications closed, region `ap-southeast-2`), assigns only the
    organisation-administrator role, and does not create a password. Production

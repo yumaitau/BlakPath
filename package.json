@@ -51,6 +51,7 @@
     "test:e2e": "playwright test",
     "test:live": "bash scripts/verify-live-stack.sh",
     "release:check": "tsx scripts/check-production-readiness.ts",
+    "k8s:check-images": "tsx scripts/check-k8s-image-digests.ts",
     "test:restore": "bash scripts/verify-restore-drill.sh",
     "key-ceremony": "tsx scripts/key-ceremony.ts",
     "screenshot": "tsx scripts/capture-readme-screenshots.ts",

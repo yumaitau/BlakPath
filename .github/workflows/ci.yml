@@ -259,9 +259,28 @@ jobs:
   manifests:
     name: Validate Kubernetes manifests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-kubectl@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Build kustomization
         run: kubectl kustomize infra/k8s > /dev/null && echo "kustomize build OK"
+
+      - name: Require digest-pinned images
+        run: pnpm k8s:check-images -- --render

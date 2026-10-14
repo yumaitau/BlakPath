@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath ECR repositories with immutable tags. Creating this stack fails
+  when blakpath/app or blakpath/worker already exist; import those
+  repositories, or set imageTagMutability to IMMUTABLE on them, instead of
+  creating a second pair. Deleting the stack retains the repositories.
+
+Resources:
+  AppRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: blakpath/app
+      ImageTagMutability: IMMUTABLE
+
+  WorkerRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: blakpath/worker
+      ImageTagMutability: IMMUTABLE
