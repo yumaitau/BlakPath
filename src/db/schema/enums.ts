@@ -104,6 +104,17 @@ export const evidenceRequestStatus = pgEnum('evidence_request_status', [
 ]);
 
 /**
+ * How a file was received when staff record it for an applicant.
+ * Absent when the applicant uploaded the file themselves. This is a receipt
+ * fact, not a judgement about the person.
+ */
+export const EVIDENCE_RECEIPT_CHANNELS = ['post', 'in_person', 'email', 'other'] as const;
+export const evidenceReceiptChannel = pgEnum(
+  'evidence_receipt_channel',
+  EVIDENCE_RECEIPT_CHANNELS,
+);
+
+/**
  * Lifecycle of a review of an application. A review records a human reviewer's
  * observations for the committee — never a determination. `finalised` means the
  * observations are locked into the record put before the committee.
@@ -225,4 +236,40 @@ export const breakGlassStatus = pgEnum('break_glass_status', [
   'active',
   'expired',
   'revoked',
+]);
+
+/**
+ * Who holds the tenant's key-encryption key. These are custody arrangements,
+ * not judgements about a person. `client_owned` is a CMK in the client's
+ * account or an external key store (XKS) key. Escrow is a separate flag.
+ */
+export const keyCustodyMode = pgEnum('key_custody_mode', [
+  'blakpath_managed',
+  'client_owned',
+  'client_owned_escrow',
+]);
+
+/**
+ * Whether a tenant key may wrap or unwrap data.
+ * `pending_validation` is not usable: the handshake has not passed.
+ */
+export const organisationKeyStatus = pgEnum('organisation_key_status', [
+  'active',
+  'disabled',
+  'pending_deletion',
+  'unavailable',
+  'pending_validation',
+]);
+
+/** Result of the GenerateDataKey / Decrypt handshake for a tenant key. */
+export const organisationKeyValidationStatus = pgEnum(
+  'organisation_key_validation_status',
+  ['pending', 'passed', 'failed'],
+);
+
+/** Background re-wrap of fields and objects onto a replacement CMK. */
+export const organisationKeyRewrapStatus = pgEnum('organisation_key_rewrap_status', [
+  'running',
+  'completed',
+  'failed',
 ]);

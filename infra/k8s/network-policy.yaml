@@ -8,6 +8,18 @@
 # VPC CNI matches pod traffic by pod/namespace selectors only. ipBlock rules
 # are for addresses outside the pod network (ALB, RDS, public webhooks).
 # A debug pod in another namespace is not an ipBlock match.
+#
+# ClamAV and its signature mirror carry their own policies next to the
+# workload (clamav.yaml, clamav-mirror.yaml). This file adds DNS for them and
+# the web/worker side of the 3310 path.
+#
+# Pod labels (app.kubernetes.io/name) covered here:
+#   blakpath-app           web Deployment
+#   blakpath-worker        worker Deployment
+#   blakpath-clamav        scanner StatefulSet (clamav.yaml)
+#   blakpath-clamav-mirror freshclam + nginx mirror (clamav-mirror.yaml)
+#   blakpath-job           jobs/migrate.yaml, jobs/seed.yaml
+#   blakpath-admin-job     jobs/invite-admin.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -24,6 +36,7 @@ spec:
 # (172.20.0.0/16); 10.100.0.10 is the other common service CIDR. Confirm with
 # the cluster serviceIpv4Cidr and replace both if this cluster uses neither.
 # The kube-system rule covers a mixed cluster that still runs CoreDNS pods.
+# 169.254.20.10 is NodeLocal DNSCache, port 53 only.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -38,7 +51,9 @@ spec:
           - blakpath-app
           - blakpath-worker
           - blakpath-clamav
+          - blakpath-clamav-mirror
           - blakpath-job
+          - blakpath-admin-job
   policyTypes:
     - Egress
   egress:
@@ -47,6 +62,8 @@ spec:
             cidr: 172.20.0.10/32
         - ipBlock:
             cidr: 10.100.0.10/32
+        - ipBlock:
+            cidr: 169.254.20.10/32
       ports:
         - protocol: UDP
           port: 53
@@ -62,7 +79,9 @@ spec:
         - protocol: TCP
           port: 53
 ---
-# EKS Pod Identity agent. Instance metadata stays denied.
+# EKS Pod Identity agent, for the pods that run as a role: web, worker and
+# the invite-admin job (blakpath-web identity). ClamAV, the mirror and
+# migrate/seed have no AWS role. Instance metadata stays denied.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -76,7 +95,7 @@ spec:
         values:
           - blakpath-app
           - blakpath-worker
-          - blakpath-job
+          - blakpath-admin-job
   policyTypes:
     - Egress
   egress:
@@ -87,7 +106,8 @@ spec:
         - protocol: TCP
           port: 80
 ---
-# ALB target-type ip delivers to the pod on container port 3000. The service
+# ALB target-type ip delivers to the pod on container port 3000, and the
+# target-group health check (/api/ready) uses the same path. The service
 # port is the same port: VPC CNI ignores a service whose port differs.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -108,29 +128,8 @@ spec:
         - protocol: TCP
           port: 3000
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: blakpath-clamav-ingress
-  namespace: blakpath
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: blakpath-clamav
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: blakpath-app
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: blakpath-worker
-      ports:
-        - protocol: TCP
-          port: 3310
----
+# Egress half of the 3310 path. ClamAV ingress (web and worker only) is the
+# blakpath-clamav policy in clamav.yaml.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -156,7 +155,8 @@ spec:
           port: 3310
 ---
 # Web egress by name. No general internet. Webhooks are not sent from web.
-# Add the OTLP collector host here before relying on traces.
+# Mail is the SES v2 API on 443 (no SMTP, no PaperBoy). Redis is ElastiCache
+# with TLS on 6379. Add the OTLP collector host here before relying on traces.
 apiVersion: networking.k8s.aws/v1alpha1
 kind: ApplicationNetworkPolicy
 metadata:
@@ -191,24 +191,17 @@ spec:
             - sts.amazonaws.com
             - email.ap-southeast-2.amazonaws.com
             - sns.ap-southeast-2.amazonaws.com
-            - paperboy.yumait.au
             - login.microsoftonline.com
       ports:
         - protocol: TCP
           port: 443
-    - to:
-        - domainNames:
-            - email-smtp.ap-southeast-2.amazonaws.com
-      ports:
-        - protocol: TCP
-          port: 587
 ---
 # Worker data plane plus the only general egress in the namespace.
 # Private 443/5432/6379 covers RDS, ElastiCache and interface VPC endpoints.
 # Narrow those three CIDRs to the data and endpoint subnets before apply.
-# Public 443/587 is the webhook and SES/PaperBoy path: worker only, and not
-# into the VPC or link-local. The worker has no domainNames rule so DNS for
-# tenant webhook hosts is not filtered down to a fixed list.
+# Public 443 is the webhook, SES, KMS, S3 and OTLP path: worker only, and not
+# into the VPC, loopback or link-local. The worker has no domainNames rule so
+# DNS for tenant webhook hosts is not filtered down to a fixed list.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -239,18 +232,18 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
+              - 0.0.0.0/8
               - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
               - 172.16.0.0/12
               - 192.168.0.0/16
-              - 169.254.0.0/16
-              - 100.64.0.0/10
       ports:
         - protocol: TCP
           port: 443
-        - protocol: TCP
-          port: 587
 ---
-# One-shot migrate/seed pods. Database only.
+# One-shot migrate/seed pods. Database only. No AWS role, no Pod Identity.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -274,23 +267,32 @@ spec:
         - protocol: TCP
           port: 5432
 ---
-# Signature updates. HTTPS mirror only; no data plane and no public 443.
+# invite-admin job: Postgres, plus the SES v2 send and the KMS/STS calls the
+# blakpath-web identity makes. No Redis, no ClamAV, no general internet.
 apiVersion: networking.k8s.aws/v1alpha1
 kind: ApplicationNetworkPolicy
 metadata:
-  name: blakpath-clamav-egress
+  name: blakpath-admin-job-egress
   namespace: blakpath
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: blakpath-clamav
+      app.kubernetes.io/name: blakpath-admin-job
   policyTypes:
     - Egress
   egress:
     - to:
         - domainNames:
-            - database.clamav.net
-            - current.cvd.clamav.net
+            - '*.rds.amazonaws.com'
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - domainNames:
+            - kms.ap-southeast-2.amazonaws.com
+            - sts.ap-southeast-2.amazonaws.com
+            - sts.amazonaws.com
+            - email.ap-southeast-2.amazonaws.com
       ports:
         - protocol: TCP
           port: 443

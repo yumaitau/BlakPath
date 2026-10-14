@@ -68,13 +68,18 @@ describe('blakpath network policy', () => {
   });
 
   it('lets only web and worker reach ClamAV', () => {
-    const ingress = policy('blakpath-clamav-ingress');
-    expect(ingress).toContain('app.kubernetes.io/name: blakpath-clamav');
-    expect(ingress).toContain('app.kubernetes.io/name: blakpath-app');
-    expect(ingress).toContain('app.kubernetes.io/name: blakpath-worker');
-    expect(ingress).toContain('port: 3310');
-    expect(ingress).not.toContain('ipBlock:');
-    expect(ingress).not.toContain('namespaceSelector:');
+    // Ingress lives with the workload in clamav.yaml.
+    const ingress =
+      read('infra/k8s/clamav.yaml')
+        .split(/^---$/m)
+        .find((doc) => doc.includes('kind: NetworkPolicy')) ?? '';
+    const ingressRules = ingress.slice(0, ingress.indexOf('  egress:'));
+    expect(ingress).toContain('kind: NetworkPolicy');
+    expect(ingressRules).toContain('app.kubernetes.io/name: blakpath-app');
+    expect(ingressRules).toContain('app.kubernetes.io/name: blakpath-worker');
+    expect(ingressRules).toContain('port: 3310');
+    expect(ingressRules).not.toContain('ipBlock:');
+    expect(ingressRules).not.toContain('namespaceSelector:');
 
     const egress = policy('blakpath-to-clamav');
     expect(egress).toContain('blakpath-app');
@@ -95,15 +100,19 @@ describe('blakpath network policy', () => {
       'blakpath-app',
       'blakpath-worker',
       'blakpath-clamav',
+      'blakpath-clamav-mirror',
       'blakpath-job',
+      'blakpath-admin-job',
     ]) {
-      expect(dns).toContain(workload);
+      expect(dns).toContain(`- ${workload}\n`);
     }
 
     const identity = policy('blakpath-pod-identity');
     expect(identity).toContain('cidr: 169.254.170.23/32');
     expect(identity).toContain('port: 80');
+    expect(identity).toContain('- blakpath-admin-job\n');
     expect(identity).not.toContain('blakpath-clamav');
+    expect(identity).not.toContain('- blakpath-job\n');
     expect(identity).not.toContain('169.254.169.254');
 
     expect(read('infra/k8s/network-policy.yaml')).not.toContain('169.254.169.254');
@@ -122,9 +131,7 @@ describe('blakpath network policy', () => {
       'secretsmanager.ap-southeast-2.amazonaws.com',
       'sts.ap-southeast-2.amazonaws.com',
       'email.ap-southeast-2.amazonaws.com',
-      'email-smtp.ap-southeast-2.amazonaws.com',
       'sns.ap-southeast-2.amazonaws.com',
-      'paperboy.yumait.au',
       'login.microsoftonline.com',
     ]) {
       expect(web).toContain(host);
@@ -132,7 +139,10 @@ describe('blakpath network policy', () => {
     expect(web).toContain('port: 5432');
     expect(web).toContain('port: 6379');
     expect(web).toContain('port: 443');
-    expect(web).toContain('port: 587');
+    // SES v2 API only (ADR 0090): no SMTP relay, no PaperBoy.
+    expect(web).not.toContain('port: 587');
+    expect(web).not.toContain('email-smtp');
+    expect(web).not.toContain('paperboy');
     expect(web).not.toContain('0.0.0.0/0');
     expect(web).not.toContain('blakpath-worker');
   });
@@ -145,36 +155,80 @@ describe('blakpath network policy', () => {
     expect(worker).toContain('port: 5432');
     expect(worker).toContain('port: 6379');
     expect(worker).toContain('port: 443');
-    expect(worker).toContain('port: 587');
+    expect(worker).not.toContain('port: 587');
     expect(worker).toContain('cidr: 0.0.0.0/0');
     for (const excluded of [
       '10.0.0.0/8',
       '172.16.0.0/12',
       '192.168.0.0/16',
       '169.254.0.0/16',
+      '100.64.0.0/10',
+      '127.0.0.0/8',
     ]) {
       expect(worker).toContain(excluded);
     }
     expect(worker).not.toContain('namespaceSelector:');
 
-    const clamav = policy('blakpath-clamav-egress');
-    expect(clamav).toContain('database.clamav.net');
-    expect(clamav).toContain('current.cvd.clamav.net');
-    expect(clamav).toContain('port: 443');
-    expect(clamav).not.toContain('0.0.0.0/0');
-    expect(clamav).not.toContain('port: 5432');
-    expect(clamav).not.toContain('port: 3310');
+    // The scanner talks only to the in-namespace mirror (clamav.yaml); the
+    // mirror is the one ClamAV pod with public 80/443, never private ranges.
+    const scanner = read('infra/k8s/clamav.yaml');
+    expect(scanner).not.toContain('0.0.0.0/0');
+    expect(scanner).toContain('app.kubernetes.io/name: blakpath-clamav-mirror');
+    const mirror = read('infra/k8s/clamav-mirror.yaml');
+    for (const excluded of [
+      '10.0.0.0/8',
+      '172.16.0.0/12',
+      '192.168.0.0/16',
+      '169.254.0.0/16',
+    ]) {
+      expect(mirror).toContain(`- ${excluded}`);
+    }
+    expect(mirror).not.toContain('port: 5432');
 
     const job = policy('blakpath-job-egress');
     expect(job).toContain('blakpath-job');
     expect(job).toContain('port: 5432');
     expect(job).not.toContain('port: 443');
     expect(job).not.toContain('port: 6379');
-    expect(read('infra/k8s/jobs/migrate.yaml')).toContain(
-      'app.kubernetes.io/name: blakpath-job',
-    );
-    expect(read('infra/k8s/jobs/seed.yaml')).toContain(
-      'app.kubernetes.io/name: blakpath-job',
-    );
+
+    const admin = policy('blakpath-admin-job-egress');
+    expect(admin).toContain('app.kubernetes.io/name: blakpath-admin-job');
+    expect(admin).toContain('email.ap-southeast-2.amazonaws.com');
+    expect(admin).toContain('port: 5432');
+    expect(admin).not.toContain('port: 6379');
+    expect(admin).not.toContain('0.0.0.0/0');
+  });
+
+  it('selects every workload in infra/k8s with at least one allow policy', () => {
+    const manifests = [
+      'web-deployment.yaml',
+      'worker-deployment.yaml',
+      'clamav.yaml',
+      'clamav-mirror.yaml',
+      'jobs/migrate.yaml',
+      'jobs/seed.yaml',
+      'jobs/invite-admin.yaml',
+    ];
+    const allPolicies = [
+      read('infra/k8s/network-policy.yaml'),
+      read('infra/k8s/clamav.yaml'),
+      read('infra/k8s/clamav-mirror.yaml'),
+    ].join('\n');
+    for (const file of manifests) {
+      const body = read(`infra/k8s/${file}`);
+      const workloads = body
+        .split(/^---$/m)
+        .filter((doc) => /^kind: (Deployment|StatefulSet|Job)$/m.test(doc));
+      expect(workloads.length, file).toBeGreaterThan(0);
+      for (const doc of workloads) {
+        const template = doc.slice(doc.indexOf('  template:'));
+        const label = template.match(/app\.kubernetes\.io\/name: (\S+)/)?.[1];
+        expect(label, `${file} pod template label`).toBeTruthy();
+        expect(policy('blakpath-dns'), `${file} DNS`).toContain(`- ${label}\n`);
+        expect(allPolicies, `${file} selected`).toContain(
+          `app.kubernetes.io/name: ${label}`,
+        );
+      }
+    }
   });
 });

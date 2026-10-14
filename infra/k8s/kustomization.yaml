@@ -5,9 +5,13 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - serviceaccounts.yaml
+  - secretstore.yaml
   - externalsecret.yaml
+  - migrator-externalsecret.yaml
   - web-deployment.yaml
   - worker-deployment.yaml
+  - clamav.yaml
+  - clamav-mirror.yaml
   - service-ingress.yaml
   - network-policy.yaml
   - autoscaling.yaml

@@ -4,6 +4,7 @@
  *   - `events`  — the closed set of subscribable event types.
  *   - `signing` — pure HMAC-SHA256 payload signing/verification.
  *   - `schemas` — zod v4 endpoint validation.
+ *   - `destination` — public-HTTPS address policy, re-checked at connect time.
  *   - `service` — tenant-scoped management + `emitWebhookEvent` (worker-safe).
  *   - `deliver` — the worker-side signed delivery with fail-secure retries.
  */
@@ -26,8 +27,12 @@ export {
   emitWebhookEventSafe,
   listDeliveries,
   listEndpoints,
+  rotateEndpointSecret,
   type WebhookDeliveryRow,
+  type WebhookEndpointCreated,
   type WebhookEndpointRow,
 } from './service';
+
+export { type WebhookEndpointView } from './view';
 
 export { MAX_ATTEMPTS, processWebhookDelivery, type DeliverInput } from './deliver';
