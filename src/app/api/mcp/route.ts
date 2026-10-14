@@ -70,7 +70,7 @@ export const POST = tenantHandler(async function POST(
           resourceType: 'api_key',
           resourceId: keyId,
           result: 'denied',
-          reason: 'mcp:endpoint',
+          reason: 'mcp.scope_denied',
           after: mcpAuditAfter({ keyId, tool: 'endpoint', piiDisclosed: false }),
         });
         throw new AuthorizationError('POLICY_DENIED');

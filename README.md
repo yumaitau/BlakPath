@@ -71,6 +71,9 @@ the platform's underlying systems to use it.
 
 - The top navigation takes staff directly to the dashboard, work board,
   meetings, forms and account settings.
+- Organisation tools (reports, imports, consents, representatives, API keys,
+  webhooks, single sign-on and retention) appear only when the person's role
+  includes that task.
 - The dashboard starts with clear counts and visual workload charts, then
   highlights items that need attention.
 - The work board has an **Add task** action and accepts drops into every column,
