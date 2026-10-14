@@ -302,6 +302,13 @@
       "when": 1792013522530,
       "tag": "0042_organisation_agreement",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1792014848729,
+      "tag": "0043_tenant_rls",
+      "breakpoints": true
     }
   ]
 }

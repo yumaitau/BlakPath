@@ -10,7 +10,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 const queue: unknown[][] = [];
 
-vi.mock('@/db/platform-db', () => {
+// Bound handles (scopeFor / platformDb) reach the mocked client below.
+vi.mock('@/db/platform-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.platformDbModule()),
+);
+vi.mock('@/db/tenant-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.tenantDbModule()),
+);
+vi.mock('@/db/client', () => {
   /** A thenable, chainable stub. Any builder method returns the same object;
    *  awaiting it resolves to the head of the result queue. */
   function makeChain(): unknown {
@@ -43,7 +50,7 @@ vi.mock('@/db/platform-db', () => {
   }
 
   return {
-    platformDb: {
+    db: {
       select: () => makeChain(),
     },
   };

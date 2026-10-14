@@ -11,6 +11,13 @@ const { recordAudit, recordPlatformAudit, select, update } = vi.hoisted(() => ({
   update: vi.fn(),
 }));
 
+// Bound handles (scopeFor / platformDb) reach the mocked client below.
+vi.mock('@/db/platform-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.platformDbModule()),
+);
+vi.mock('@/db/tenant-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.tenantDbModule()),
+);
 vi.mock('@/db/client', () => {
   const db = {
     select: (...args: unknown[]) => select(...args),

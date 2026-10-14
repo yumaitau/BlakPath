@@ -1,4 +1,5 @@
-import { assertAuditRoleName, DEFAULT_AUDIT_APP_ROLE } from './audit-guard';
+import { env } from '@/lib/env';
+import { assertAuditRoleName } from './audit-guard';
 
 /**
  * Row-level security context.
@@ -47,7 +48,7 @@ export function sameRlsContext(a: RlsContext, b: RlsContext): boolean {
  * which bypasses RLS; switching makes tests see what production sees.
  */
 export function rlsAppRole(): string {
-  return assertAuditRoleName(process.env.AUDIT_DB_APP_ROLE || DEFAULT_AUDIT_APP_ROLE);
+  return assertAuditRoleName(env.AUDIT_DB_APP_ROLE);
 }
 
 export interface RlsSettings {
@@ -64,8 +65,14 @@ export function rlsSettings(context: RlsContext): RlsSettings {
   };
 }
 
-/** Parameterised SET LOCAL for role, organisation and bypass, in one round trip. */
-export const APPLY_RLS_SQL = `select set_config('role', $1, true), set_config('${TENANT_GUC}', $2, true), set_config('${BYPASS_GUC}', $3, true)`;
+/**
+ * Parameterised SET LOCAL for organisation, bypass and role, in one round trip.
+ * The role switch only happens when the session may assume the app role: a
+ * superuser (local, CI) or the app role itself (production). Any other login
+ * keeps its own identity, which is not the owner or a superuser, so RLS
+ * still applies to it.
+ */
+export const APPLY_RLS_SQL = `select set_config('${TENANT_GUC}', $2, true), set_config('${BYPASS_GUC}', $3, true), case when to_regrole($1) is not null and pg_has_role(current_user, to_regrole($1), 'MEMBER') then set_config('role', $1, true) end`;
 
 export interface RlsExecutor {
   unsafe(query: string, parameters: string[]): PromiseLike<unknown>;

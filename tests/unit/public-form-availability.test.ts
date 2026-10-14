@@ -3,6 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const queue: unknown[][] = [];
 let updates = 0;
 
+// Bound handles (scopeFor / platformDb) reach the mocked client below.
+vi.mock('@/db/platform-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.platformDbModule()),
+);
+vi.mock('@/db/tenant-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.tenantDbModule()),
+);
 vi.mock('@/db/client', () => {
   function makeChain(next: () => unknown): unknown {
     const chain: Record<string, unknown> = {};

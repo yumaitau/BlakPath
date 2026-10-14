@@ -1,5 +1,5 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import {
   memberships,
   membershipRoles,
@@ -75,7 +75,7 @@ export async function resolveTenantContext(
   // 1. Verify an ACTIVE membership binding THIS user to THIS org. The org id is
   //    part of the WHERE clause, never applied after the fact — an inactive or
   //    absent membership yields no row and therefore no context.
-  const membershipRow = await db
+  const membershipRow = await platformDb
     .select({
       id: memberships.id,
       organisationStatus: organisations.status,
@@ -103,7 +103,7 @@ export async function resolveTenantContext(
   }
 
   // 2. Load the roles attached to this membership.
-  const roleRows = await db
+  const roleRows = await platformDb
     .select({ id: roles.id, slug: roles.slug })
     .from(membershipRoles)
     .innerJoin(roles, eq(membershipRoles.roleId, roles.id))
@@ -117,7 +117,7 @@ export async function resolveTenantContext(
   //    permission key can never confer access.
   const permissionSet = new Set<Permission>();
   if (roleIds.length > 0) {
-    const permissionRows = await db
+    const permissionRows = await platformDb
       .select({ permissionKey: rolePermissions.permissionKey })
       .from(rolePermissions)
       .where(inArray(rolePermissions.roleId, roleIds));

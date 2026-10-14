@@ -6,6 +6,13 @@ vi.mock('@/domains/audit', () => ({
   recordAudit: (...args: unknown[]) => recordAudit(...args),
 }));
 
+// Bound handles (scopeFor / platformDb) reach the mocked client below.
+vi.mock('@/db/platform-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.platformDbModule()),
+);
+vi.mock('@/db/tenant-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.tenantDbModule()),
+);
 vi.mock('@/db/client', () => ({ db: {} }));
 
 import {

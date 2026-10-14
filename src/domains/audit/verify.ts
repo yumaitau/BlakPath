@@ -14,7 +14,9 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import { auditEvents, auditIntegrityCheckpoints } from '@/db/schema';
 import type { AnchoredChainProbe } from './anchor';
 import type { AuditAction, AuditResult, ResourceType } from './events';
@@ -374,6 +376,15 @@ function foldToResult(
 }
 
 /**
+ * Handle for one chain under row-level security: a tenant chain is read and
+ * checkpointed as that tenant; the platform chain (null organisation) needs
+ * the explicit bypass because tenants cannot see it.
+ */
+export function chainDatabase(organisationId: string | null): Database {
+  return organisationId ? scopeFor(organisationId).db : platformDb;
+}
+
+/**
  * Verify events produced by `loadPage`. Each call must return the next keyset
  * page and must not be retained by the caller alongside previous pages.
  * `eventCount` counts events actually read; on divergence that is the prefix
@@ -494,7 +505,7 @@ function databaseReader(database: Database): AuditVerificationReader {
 export async function verifyChain(
   organisationId: string | null,
   options: VerifyChainOptions = {},
-  database: Database = db,
+  database: Database = chainDatabase(organisationId),
 ): Promise<VerifyChainResult> {
   return verifyChainFromPages(
     organisationId,
@@ -547,7 +558,7 @@ export class AuditChainDivergenceError extends Error {
  */
 export async function createCheckpoint(
   input: CreateCheckpointInput,
-  database: Database = db,
+  database: Database = chainDatabase(input.organisationId),
 ): Promise<{ id: string; result: VerifyChainResult } | null> {
   const result = await verifyChain(
     input.organisationId,
@@ -646,7 +657,7 @@ function failedAtCheckpoint(
 export async function verifyFromCheckpoint(
   organisationId: string | null,
   options: VerifyAndCheckpointOptions = {},
-  database: Database = db,
+  database: Database = chainDatabase(organisationId),
 ): Promise<VerifyFromCheckpointResult> {
   const reader = options.reader ?? databaseReader(database);
   const explicitSlice =
@@ -729,7 +740,7 @@ export async function verifyFromCheckpoint(
 export async function checkpointVerifiedSuffix(
   verified: VerifyFromCheckpointResult,
   options: Pick<VerifyAndCheckpointOptions, 'reader' | 'verifiedByUserId'> = {},
-  database: Database = db,
+  database: Database = chainDatabase(verified.organisationId),
 ): Promise<string | null> {
   if (
     !verified.ok ||
@@ -765,7 +776,7 @@ export async function checkpointVerifiedSuffix(
 export async function verifyAndCheckpoint(
   organisationId: string | null,
   options: VerifyAndCheckpointOptions = {},
-  database: Database = db,
+  database: Database = chainDatabase(organisationId),
 ): Promise<VerifyAndCheckpointResult> {
   const verified = await verifyFromCheckpoint(organisationId, options, database);
   const checkpointId = await checkpointVerifiedSuffix(verified, options, database);
@@ -785,7 +796,7 @@ export async function auditChainProbe(
   verified: Pick<VerifyFromCheckpointResult, 'ok' | 'tip'> & {
     readonly organisationId: string | null;
   },
-  database: Database = db,
+  database: Database = chainDatabase(verified.organisationId),
 ): Promise<AnchoredChainProbe> {
   const tip = verified.tip;
   if (!verified.ok || !tip) {

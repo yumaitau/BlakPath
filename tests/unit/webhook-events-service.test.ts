@@ -44,6 +44,7 @@ vi.mock('@/db/tenant-db', () => {
 });
 
 vi.mock('@/db/client', () => ({ db: {} }));
+vi.mock('@/db/platform-db', () => ({ platformDb: {} }));
 
 vi.mock('@/lib/tenancy/context', () => ({
   requireTenantContext: () => ({

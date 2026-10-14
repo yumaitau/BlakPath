@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, gte } from 'drizzle-orm';
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import { evidence, tenantEncryptedFields } from '@/db/schema';
 import {
   isEnvelopeV2,
@@ -72,7 +73,7 @@ function asBinding(row: {
 
 export function fieldStoreFor(
   organisationId: string,
-  database: Database = db,
+  database: Database = scopeFor(organisationId).db,
 ): FieldRewrapStore {
   return {
     async list(afterId, limit) {
@@ -109,7 +110,7 @@ export function fieldStoreFor(
 
 export function objectStoreFor(
   organisationId: string,
-  database: Database = db,
+  database: Database = scopeFor(organisationId).db,
 ): ObjectRewrapStore {
   return {
     async list(afterId, limit) {

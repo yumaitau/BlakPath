@@ -2,6 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerSession } from '@/lib/auth/session';
 import { script } from './helpers/scripted-db';
 
+// Bound handles (scopeFor / platformDb) reach the mocked client below.
+vi.mock('@/db/platform-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.platformDbModule()),
+);
+vi.mock('@/db/tenant-db', () =>
+  import('../helpers/bound-db-mocks').then((m) => m.tenantDbModule()),
+);
 vi.mock('@/db/client', async () => {
   const { scriptedDatabase } = await import('./helpers/scripted-db');
   return { db: scriptedDatabase() };

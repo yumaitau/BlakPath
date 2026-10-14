@@ -1,4 +1,5 @@
-import { db, type Database } from '@/db/client';
+import type { Database } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import { destructionCertificates } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit';
 import type { DestructionCertificate } from '@/lib/encryption/destruction';
@@ -11,7 +12,7 @@ import { applyOrganisationKeyStatus, type OrganisationKeyRow } from './service';
  */
 export async function scheduleKeyDeletion(
   organisationId: string,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<OrganisationKeyRow> {
   // Status change, its audit and the deletion audit commit together.
   const row = await database.transaction(async (tx) => {
@@ -48,7 +49,7 @@ export async function scheduleKeyDeletion(
 /** Persist the certificate outside the tenant key, then audit its id. */
 export async function recordDestructionCertificate(
   certificate: DestructionCertificate,
-  database: Database = db,
+  database: Database = platformDb,
 ): Promise<void> {
   await database.transaction(async (tx) => {
     await tx.insert(destructionCertificates).values({

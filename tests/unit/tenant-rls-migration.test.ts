@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { is } from 'drizzle-orm';
+import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
+import * as schema from '@/db/schema';
 import {
   PLATFORM_CHAIN_TABLES,
   SHARED_READ_TABLES,
@@ -9,40 +10,69 @@ import {
 } from '../helpers/tenant-tables';
 
 const POLICY =
-  "USING (organisation_id = current_setting('app.org_id')::uuid) WITH CHECK (organisation_id = current_setting('app.org_id')::uuid)";
+  'AS PERMISSIVE FOR ALL TO public USING (blakpath_rls_allows(organisation_id)) WITH CHECK (blakpath_rls_allows(organisation_id))';
 
-describe('tenant RLS migration', () => {
+/**
+ * Fails when a table with an `organisation_id` column has no RLS policy, in
+ * the Drizzle schema or in the committed migrations. A new tenant table needs
+ * `tenantIsolationPolicy()` + `.enableRLS()` in its schema and a hand-written
+ * `FORCE ROW LEVEL SECURITY` in its migration.
+ */
+describe('tenant RLS coverage', () => {
   const tables = tenantTables();
   const sql = migrationSql();
 
-  it('enables and forces RLS with tenant_isolation on every tenant table', () => {
-    expect(tables.length).toBeGreaterThan(40);
+  it('every schema table with organisation_id enables RLS with tenant_isolation', () => {
+    const missing: string[] = [];
+    let seen = 0;
+    for (const value of Object.values(schema)) {
+      if (!is(value, PgTable)) continue;
+      const config = getTableConfig(value);
+      if (!config.columns.some((column) => column.name === 'organisation_id')) continue;
+      seen += 1;
+      const isolation = config.policies.find(
+        (policy) => policy.name === 'tenant_isolation',
+      );
+      if (!config.enableRLS || !isolation || isolation.for !== 'all') {
+        missing.push(config.name);
+      }
+    }
+    expect(seen).toBe(tables.length);
+    expect(seen).toBeGreaterThanOrEqual(60);
+    expect(missing).toEqual([]);
+  });
+
+  it('migrations enable, force and install tenant_isolation on every tenant table', () => {
     const missing: string[] = [];
     for (const table of tables) {
       const enable = `ALTER TABLE "${table.name}" ENABLE ROW LEVEL SECURITY`;
       const force = `ALTER TABLE "${table.name}" FORCE ROW LEVEL SECURITY`;
-      const policy = `CREATE POLICY "tenant_isolation" ON "${table.name}"`;
-      if (
-        !sql.includes(enable) ||
-        !sql.includes(force) ||
-        !sql.includes(`${policy} AS PERMISSIVE FOR ALL TO public ${POLICY}`)
-      ) {
+      const policy = `CREATE POLICY "tenant_isolation" ON "${table.name}" ${POLICY}`;
+      if (!sql.includes(enable) || !sql.includes(force) || !sql.includes(policy)) {
         missing.push(table.name);
       }
     }
     expect(missing).toEqual([]);
   });
 
+  it('defines the policy function with the bypass first and tenant match last', () => {
+    const start = sql.indexOf(
+      'CREATE OR REPLACE FUNCTION blakpath_rls_allows(row_org uuid)',
+    );
+    expect(start).toBeGreaterThan(-1);
+    const body = sql.slice(start, sql.indexOf('$rls$;', start));
+    expect(body).toContain('STABLE');
+    expect(body).not.toMatch(/SECURITY DEFINER/i);
+    expect(body).toMatch(
+      /current_setting\('app\.bypass_rls', true\) = 'on' THEN true[\s\S]*ELSE row_org = pg_catalog\.current_setting\('app\.org_id', true\)::uuid/,
+    );
+  });
+
   it('shares null-org reads only for roles and feature flags', () => {
-    for (const name of SHARED_READ_TABLES) {
-      expect(sql).toContain(
-        `CREATE POLICY "tenant_shared_read" ON "${name}" AS PERMISSIVE FOR SELECT TO public USING (organisation_id is null)`,
-      );
-    }
     for (const table of tables) {
       const shared = (SHARED_READ_TABLES as readonly string[]).includes(table.name);
       const present = sql.includes(
-        `CREATE POLICY "tenant_shared_read" ON "${table.name}"`,
+        `CREATE POLICY "tenant_shared_read" ON "${table.name}" AS PERMISSIVE FOR SELECT TO public USING (organisation_id is null)`,
       );
       expect(present, table.name).toBe(shared);
     }
@@ -60,27 +90,13 @@ describe('tenant RLS migration', () => {
       'permissions',
       'role_permissions',
       'email_suppressions',
+      'signing_keys',
     ]) {
       expect(sql).not.toContain(`ALTER TABLE "${name}" ENABLE ROW LEVEL SECURITY`);
-      expect(sql).not.toContain(`ALTER TABLE "${name}" FORCE ROW LEVEL SECURITY`);
     }
   });
 
-  it('does not create roles inside the transactional migration', () => {
-    const force = readFileSync(
-      join(process.cwd(), 'src/db/migrations/0020_rls-force-and-roles.sql'),
-      'utf8',
-    );
-    const statements = force
-      .split('\n')
-      .filter((line) => !line.trimStart().startsWith('--'))
-      .join('\n');
-    expect(statements).not.toMatch(/CREATE ROLE/i);
-    expect(force).toContain('GRANT blakpath_app TO CURRENT_USER');
-    expect(force).toContain('GRANT blakpath_platform TO CURRENT_USER');
-    const roles = readFileSync(join(process.cwd(), 'src/db/rls-roles.ts'), 'utf8');
-    expect(roles).toContain('NOBYPASSRLS');
-    expect(roles).toMatch(/PLATFORM_ROLE[\s\S]*BYPASSRLS/);
-    expect(roles).not.toMatch(/PLATFORM_ROLE[\s\S]{0,120}NOBYPASSRLS/);
+  it('creates no roles and grants no role membership in migrations', () => {
+    expect(sql).not.toMatch(/CREATE ROLE|GRANT\s+\w+\s+TO\s+CURRENT_USER|BYPASSRLS/i);
   });
 });

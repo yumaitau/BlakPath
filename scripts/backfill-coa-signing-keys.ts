@@ -1,5 +1,7 @@
 import { and, eq, isNotNull, isNull, ne } from 'drizzle-orm';
-import { db, sqlClient } from '@/db/client';
+import { sqlClient } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import { certificates, signingKeys } from '@/db/schema';
 import { rebuildCanonicalPayload, recordSigningKey } from '@/domains/certificates';
 import {
@@ -31,7 +33,7 @@ async function main(): Promise<void> {
   const apply = args.includes('--apply');
   const extraCandidates = args.filter((arg) => arg !== '--apply');
 
-  const pending = await db
+  const pending = await platformDb
     .select({
       id: certificates.id,
       organisationId: certificates.organisationId,
@@ -114,8 +116,8 @@ async function main(): Promise<void> {
     console.info(`${cert.reference}: ${cert.signingKeyId} -> ${match.keyId}`);
     if (apply) {
       await recordSigningKey(match);
-      await db
-        .update(certificates)
+      await scopeFor(cert.organisationId)
+        .db.update(certificates)
         .set({ signingKeyId: match.keyId })
         .where(eq(certificates.id, cert.id));
     }

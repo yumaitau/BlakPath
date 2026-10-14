@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { platformDb as db } from '@/db/platform-db';
+import { platformDb } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import { apiKeys } from '@/db/schema';
 import { isPermission, type Permission } from '@/lib/permissions/catalog';
 import type { TenantContext } from '@/lib/tenancy/context';
@@ -43,7 +44,7 @@ export async function resolveApiKeyContext(
   rawKey: string,
   input: ApiKeyContextInput,
 ): Promise<TenantContext> {
-  const rows = await db
+  const rows = await platformDb
     .select()
     .from(apiKeys)
     .where(eq(apiKeys.keyHash, hashApiKey(rawKey)))
@@ -57,8 +58,8 @@ export async function resolveApiKeyContext(
 
   // Record last use (best-effort; a failure here must not deny a valid request).
   try {
-    await db
-      .update(apiKeys)
+    await scopeFor(key.organisationId)
+      .db.update(apiKeys)
       .set({ lastUsedAt: new Date() })
       .where(eq(apiKeys.id, key.id));
   } catch {

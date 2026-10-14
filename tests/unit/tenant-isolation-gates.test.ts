@@ -76,11 +76,12 @@ describe('tenant isolation gates', () => {
     expect(() => tenantKey('', 'cache')).toThrow(/organisationId/);
   });
 
-  it('organisation foreign keys cascade, except the append-only audit chain', () => {
+  it('organisation foreign keys cascade, except records that must outlive the tenant', () => {
     const exempt = tenantTables()
       .filter((table) => !table.referencesOrganisation || table.onDelete !== 'cascade')
       .map((table) => table.name)
       .sort();
-    expect(exempt).toEqual([...PLATFORM_CHAIN_TABLES].sort());
+    // Destruction certificates prove a crypto-shred after the organisation is gone.
+    expect(exempt).toEqual([...PLATFORM_CHAIN_TABLES, 'destruction_certificates'].sort());
   });
 });

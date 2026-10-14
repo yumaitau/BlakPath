@@ -1,5 +1,4 @@
 import { and, asc, eq, gt, isNotNull, sql } from 'drizzle-orm';
-import { db } from '@/db/client';
 import {
   applicationNotes,
   applications,
@@ -521,7 +520,7 @@ async function backfillConsent(
   scope: EncryptionScope,
 ): Promise<Step> {
   const tenant = tenantScope(organisationId);
-  const wordingRows = await db
+  const wordingRows = await tenant.db
     .select({ consentWording: organisationSettings.consentWording })
     .from(organisationSettings)
     .where(eq(organisationSettings.organisationId, organisationId))
@@ -728,8 +727,8 @@ function advance(
 }
 
 async function ensureRun(organisationId: string): Promise<{ id: string }> {
-  const existing = await db
-    .select({ id: encryptionBackfillRuns.id })
+  const existing = await tenantScope(organisationId)
+    .db.select({ id: encryptionBackfillRuns.id })
     .from(encryptionBackfillRuns)
     .where(
       and(
@@ -739,8 +738,8 @@ async function ensureRun(organisationId: string): Promise<{ id: string }> {
     )
     .limit(1);
   if (existing[0]) return existing[0];
-  const inserted = await db
-    .insert(encryptionBackfillRuns)
+  const inserted = await tenantScope(organisationId)
+    .db.insert(encryptionBackfillRuns)
     .values({ organisationId, status: 'running' })
     .returning({ id: encryptionBackfillRuns.id });
   const row = inserted[0];
@@ -764,7 +763,7 @@ export async function runBackfillBatch(
     const moved = advance(position.table, step);
     // Progress and its audit commit together. The re-sealed rows above are
     // idempotent, so a rolled-back batch is simply redone from the old cursor.
-    await db.transaction(async (tx) => {
+    await tenantScope(input.organisationId).db.transaction(async (tx) => {
       const updated = await tx
         .update(encryptionBackfillRuns)
         .set({
@@ -827,8 +826,8 @@ export async function runBackfillBatch(
       0,
       200,
     );
-    await db
-      .update(encryptionBackfillRuns)
+    await tenantScope(input.organisationId)
+      .db.update(encryptionBackfillRuns)
       .set({ status: 'failed', lastError: message, finishedAt: new Date() })
       .where(eq(encryptionBackfillRuns.id, run.id));
     throw error;

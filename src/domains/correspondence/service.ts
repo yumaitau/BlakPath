@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import {
   certificates,
   correspondenceItems,
@@ -12,7 +12,7 @@ import {
   organisations,
   users,
 } from '@/db/schema';
-import { currentScope } from '@/db/tenant-db';
+import { currentScope, scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication, type ApplicationRow } from '@/domains/applications';
 import { isSuppressed } from '@/domains/email';
@@ -157,8 +157,8 @@ function organisationLabel(row: {
 }
 
 async function loadOrganisationName(organisationId: string): Promise<string> {
-  const rows = await db
-    .select({
+  const rows = await scopeFor(organisationId)
+    .db.select({
       legalName: organisations.legalName,
       tradingName: organisations.tradingName,
     })
@@ -176,8 +176,8 @@ async function resolveRecipientEmail(
 ): Promise<string | null> {
   if (override) return override.trim();
   if (application.applicantUserId) {
-    const rows = await db
-      .select({ email: users.email })
+    const rows = await scopeFor(application.organisationId)
+      .db.select({ email: users.email })
       .from(users)
       .where(eq(users.id, application.applicantUserId))
       .limit(1);
@@ -1006,7 +1006,7 @@ export async function getLetterDownloadUrl(
 
 async function loadByToken(token: string): Promise<CorrespondenceItemRow | null> {
   if (!token || token.length < 20 || token.length > 80) return null;
-  const rows = await db
+  const rows = await platformDb
     .select()
     .from(correspondenceItems)
     .where(eq(correspondenceItems.portalTokenHash, hashToken(token)))
@@ -1030,8 +1030,8 @@ export async function getPublicCorrespondence(
 
   let certificateAvailable = false;
   if (row.kind === 'certificate' && row.certificateId) {
-    const certs = await db
-      .select({
+    const certs = await scopeFor(row.organisationId)
+      .db.select({
         status: certificates.status,
         pdfObjectKey: certificates.pdfObjectKey,
       })
@@ -1075,8 +1075,8 @@ export async function getPublicCertificateDownloadUrl(
 ): Promise<string | null> {
   const row = await loadByToken(token);
   if (!row || row.kind !== 'certificate' || !row.certificateId) return null;
-  const certs = await db
-    .select({
+  const certs = await scopeFor(row.organisationId)
+    .db.select({
       id: certificates.id,
       status: certificates.status,
       pdfObjectKey: certificates.pdfObjectKey,

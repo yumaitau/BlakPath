@@ -1,10 +1,11 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
 import { schema, sqlClient, type Database } from './client';
 import {
   applyRlsContext,
   PLATFORM_CONTEXT,
+  rlsSettings,
   sameRlsContext,
   tenantContext,
   type RlsContext,
@@ -15,86 +16,44 @@ import {
  *
  * A bound handle is a real Drizzle database, so builders, subqueries and
  * relational queries behave as usual. Only execution differs: the handle's
- * client runs each statement inside a transaction that first applies the
- * context (`SET LOCAL` role, `app.org_id`, `app.bypass_rls`).
+ * client runs each statement inside its own transaction that first applies
+ * the context (`SET LOCAL` of `app.org_id`, `app.bypass_rls` and role), and
+ * `handle.transaction(fn)` applies it once at the start of the transaction.
  *
- * Inside a bound transaction, every bound handle with the same context reuses
- * that transaction. A different context runs in a savepoint and the outer
- * context is put back afterwards. So a caller transaction (`scope.db.transaction`)
- * stays one transaction even when a helper reaches for `currentScope().db`.
- * Do not run two contexts concurrently (`Promise.all`) inside one transaction:
- * they share one connection and one set of settings.
+ * Transaction boundaries are the same as on the raw pool: a bound handle
+ * never joins a transaction it was not given. Work that must be atomic with a
+ * caller's transaction uses that `tx`. When such work needs another context
+ * (e.g. a platform-chain audit row from a tenant transaction) it goes through
+ * `withRlsContextOn(tx, ...)`, which switches in a savepoint and restores.
  */
 
 type TxSql = postgres.TransactionSql;
 
-interface Binding {
-  readonly sql: TxSql;
-  readonly context: RlsContext;
-  active: boolean;
-}
+/** A Drizzle transaction handle (top level or savepoint). */
+export type DbTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
-const bindings = new AsyncLocalStorage<Binding>();
+/** Context applied to each open bound transaction, keyed by its connection. */
+const transactionContexts = new WeakMap<object, RlsContext>();
 
-/** The open bound transaction for this async call chain, if any. */
-function currentBinding(): Binding | undefined {
-  const binding = bindings.getStore();
-  // A promise that outlives its transaction (fire-and-forget) must not reuse it.
-  return binding?.active ? binding : undefined;
-}
-
-async function runBound<T>(
-  sql: TxSql,
-  context: RlsContext,
-  work: (sql: TxSql) => Promise<T>,
-): Promise<T> {
-  const binding: Binding = { sql, context, active: true };
-  try {
-    return await bindings.run(binding, () => work(sql));
-  } finally {
-    binding.active = false;
-  }
-}
-
-/**
- * postgres.js resolves an array returned from `begin`/`savepoint` with
- * `Promise.all`, which strips `count` from a result list. Box the value.
- */
 type Box<T> = { value: T };
 
-async function withContext<T>(
+/**
+ * postgres.js resolves an array returned from `begin` with `Promise.all`,
+ * which strips `count` from a result list. Box the value through it.
+ */
+async function inContext<T>(
   context: RlsContext,
   work: (sql: TxSql) => Promise<T>,
-  options: { savepointWhenNested: boolean },
 ): Promise<T> {
-  const current = currentBinding();
-  if (current && sameRlsContext(current.context, context)) {
-    if (!options.savepointWhenNested) return work(current.sql);
-    const boxed = (await current.sql.savepoint(async (sp) => ({
-      value: await runBound(sp, context, work),
-    }))) as unknown as Box<T>;
-    return boxed.value;
-  }
-  if (current) {
-    try {
-      const boxed = (await current.sql.savepoint(async (sp) => {
-        await applyRlsContext(sp, context);
-        return { value: await runBound(sp, context, work) };
-      })) as unknown as Box<T>;
-      return boxed.value;
-    } finally {
-      // SET LOCAL from a released savepoint sticks to the outer transaction.
-      await applyRlsContext(current.sql, current.context).catch(() => undefined);
-    }
-  }
   const boxed = (await sqlClient.begin(async (tx) => {
     await applyRlsContext(tx, context);
-    return { value: await runBound(tx, context, work) };
+    transactionContexts.set(tx, context);
+    return { value: await work(tx) };
   })) as unknown as Box<T>;
   return boxed.value;
 }
 
-type Parameters_ = Parameters<postgres.Sql['unsafe']>[1];
+type UnsafeParameters = Parameters<postgres.Sql['unsafe']>[1];
 
 /**
  * The subset of the postgres.js client Drizzle's session calls: `unsafe`
@@ -103,15 +62,12 @@ type Parameters_ = Parameters<postgres.Sql['unsafe']>[1];
 function boundClient(context: RlsContext): postgres.Sql {
   const client = {
     options: sqlClient.options,
-    unsafe(query: string, parameters?: Parameters_) {
+    unsafe(query: string, parameters?: UnsafeParameters) {
       const run = (values: boolean) =>
-        withContext(
-          context,
-          async (sql) =>
-            values
-              ? await sql.unsafe(query, parameters).values()
-              : await sql.unsafe(query, parameters),
-          { savepointWhenNested: false },
+        inContext(context, async (tx) =>
+          values
+            ? await tx.unsafe(query, parameters).values()
+            : await tx.unsafe(query, parameters),
         );
       return {
         values: () => run(true),
@@ -124,14 +80,10 @@ function boundClient(context: RlsContext): postgres.Sql {
       };
     },
     begin(callback: (sql: TxSql) => unknown) {
-      return withContext(
-        context,
-        async (sql) => {
-          const result = await callback(sql);
-          return Array.isArray(result) ? Promise.all(result) : result;
-        },
-        { savepointWhenNested: true },
-      );
+      return inContext(context, async (tx) => {
+        const result = await callback(tx);
+        return Array.isArray(result) ? Promise.all(result) : result;
+      });
     },
   };
   return client as unknown as postgres.Sql;
@@ -165,7 +117,50 @@ export function platformBoundDb(): Database {
   return platformHandle;
 }
 
-/** For tests: the context of the open bound transaction, if any. */
-export function activeRlsContext(): RlsContext | undefined {
-  return currentBinding()?.context;
+function connectionOf(tx: DbTransaction): object | undefined {
+  return (tx as unknown as { session?: { client?: object } }).session?.client;
+}
+
+/** Context of a transaction opened by a bound handle; undefined for the raw pool. */
+export function transactionRlsContext(tx: DbTransaction): RlsContext | undefined {
+  const connection = connectionOf(tx);
+  return connection ? transactionContexts.get(connection) : undefined;
+}
+
+function settingsSql(context: RlsContext) {
+  const settings = rlsSettings(context);
+  return sql`select set_config('app.org_id', ${settings.organisationId}, true), set_config('app.bypass_rls', ${settings.bypass}, true), case when to_regrole(${settings.role}) is not null and pg_has_role(current_user, to_regrole(${settings.role}), 'MEMBER') then set_config('role', ${settings.role}, true) end`;
+}
+
+const RESET_SQL = sql.raw(
+  `select set_config('app.org_id', '', true), set_config('app.bypass_rls', 'off', true), set_config('role', 'none', true)`,
+);
+
+/**
+ * Run `work` inside the caller's transaction `tx` under `context`.
+ *
+ * Same context, or a platform transaction (which may write anything): runs
+ * directly. Otherwise a savepoint applies `context`, and afterwards the
+ * caller's context is restored (or cleared for a raw-pool transaction),
+ * because `SET LOCAL` from a released savepoint sticks to the transaction.
+ */
+export async function withRlsContextOn<T>(
+  tx: DbTransaction,
+  context: RlsContext,
+  work: (tx: DbTransaction) => Promise<T>,
+): Promise<T> {
+  const current = transactionRlsContext(tx);
+  if (current && (current.kind === 'platform' || sameRlsContext(current, context))) {
+    return work(tx);
+  }
+  try {
+    return await tx.transaction(async (savepoint) => {
+      await savepoint.execute(settingsSql(context));
+      const connection = connectionOf(savepoint);
+      if (connection) transactionContexts.set(connection, context);
+      return work(savepoint);
+    });
+  } finally {
+    await tx.execute(current ? settingsSql(current) : RESET_SQL).catch(() => undefined);
+  }
 }

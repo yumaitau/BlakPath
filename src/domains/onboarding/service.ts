@@ -1,8 +1,9 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
-
-import { db } from '@/db/client';
+import type { Database } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
+import { currentScope } from '@/db/tenant-db';
 import {
   membershipInvitations,
   organisationSettings,
@@ -100,9 +101,10 @@ function effectsFor(chain: AuditChain): OnboardingEffects {
 }
 
 async function pendingAdminInvitation(
+  database: Database,
   organisationId: string,
 ): Promise<StoredOrganisation['pendingInvitation']> {
-  const [invite] = await db
+  const [invite] = await database
     .select({
       id: membershipInvitations.id,
       email: membershipInvitations.email,
@@ -122,9 +124,10 @@ async function pendingAdminInvitation(
 }
 
 async function loadOrganisation(
+  database: Database,
   where: { slug: string } | { id: string },
 ): Promise<StoredOrganisation | null> {
-  const [org] = await db
+  const [org] = await database
     .select({
       id: organisations.id,
       slug: organisations.slug,
@@ -147,8 +150,8 @@ async function loadOrganisation(
     .limit(1);
   if (!org) return null;
   const [pendingInvitation, key] = await Promise.all([
-    pendingAdminInvitation(org.id),
-    getOrganisationKey(org.id),
+    pendingAdminInvitation(database, org.id),
+    getOrganisationKey(org.id, database),
   ]);
   return {
     ...org,
@@ -157,12 +160,23 @@ async function loadOrganisation(
   };
 }
 
+/**
+ * Operator provisioning works across organisations and writes the platform
+ * audit chain, so it uses the explicit RLS bypass. The tenant path (an
+ * organisation administrator finishing onboarding) stays inside its own
+ * organisation's scope.
+ */
+function storeDatabase(chain: AuditChain): Database {
+  return chain === 'platform' ? platformDb : currentScope().db;
+}
+
 function createStore(chain: AuditChain): OnboardingStore {
+  const database = storeDatabase(chain);
   return {
-    findBySlug: (slug) => loadOrganisation({ slug }),
-    findById: (id) => loadOrganisation({ id }),
+    findBySlug: (slug) => loadOrganisation(database, { slug }),
+    findById: (id) => loadOrganisation(database, { id }),
     async findPlatformOperator(email) {
-      const [operator] = await db
+      const [operator] = await database
         .select({ id: users.id })
         .from(users)
         .where(and(eq(users.email, email), eq(users.isPlatformOperator, true)))
@@ -170,7 +184,7 @@ function createStore(chain: AuditChain): OnboardingStore {
       return operator ?? null;
     },
     async loadSystemRoleTemplates(): Promise<readonly SystemRoleTemplateRow[]> {
-      const roleRows = await db
+      const roleRows = await database
         .select({
           id: roles.id,
           slug: roles.slug,
@@ -180,7 +194,7 @@ function createStore(chain: AuditChain): OnboardingStore {
         .from(roles)
         .where(isNull(roles.organisationId));
       if (roleRows.length === 0) return [];
-      const grants = await db
+      const grants = await database
         .select({
           roleId: rolePermissions.roleId,
           permissionKey: rolePermissions.permissionKey,
@@ -202,11 +216,11 @@ function createStore(chain: AuditChain): OnboardingStore {
       }));
     },
     async permissionCatalogueKeys() {
-      const rows = await db.select({ key: permissions.key }).from(permissions);
+      const rows = await database.select({ key: permissions.key }).from(permissions);
       return new Set(rows.map((row) => row.key));
     },
     async saveNew(record: NewOrganisationRecord, audit) {
-      await db.transaction(async (tx) => {
+      await database.transaction(async (tx) => {
         await tx.insert(organisations).values({
           id: record.id,
           legalName: record.legalName,
@@ -256,7 +270,7 @@ function createStore(chain: AuditChain): OnboardingStore {
       });
     },
     async saveChecklist(organisationId, checklist, audit) {
-      await db.transaction(async (tx) => {
+      await database.transaction(async (tx) => {
         await tx
           .update(organisationSettings)
           .set({ readinessChecklist: checklist })
@@ -265,7 +279,7 @@ function createStore(chain: AuditChain): OnboardingStore {
       });
     },
     async saveAgreement(organisationId, agreement, audit) {
-      await db.transaction(async (tx) => {
+      await database.transaction(async (tx) => {
         await tx
           .update(organisationSettings)
           .set({
@@ -277,7 +291,7 @@ function createStore(chain: AuditChain): OnboardingStore {
       });
     },
     async setStatusOnboardingToActive(organisationId, audit) {
-      return db.transaction(async (tx) => {
+      return database.transaction(async (tx) => {
         const updated = await tx
           .update(organisations)
           .set({ status: 'active' })
@@ -294,7 +308,7 @@ function createStore(chain: AuditChain): OnboardingStore {
       });
     },
     async rotatePendingInvitation(invitation, audit) {
-      return db.transaction(async (tx) => {
+      return database.transaction(async (tx) => {
         const updated = await tx
           .update(membershipInvitations)
           .set({

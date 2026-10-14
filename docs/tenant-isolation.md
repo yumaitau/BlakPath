@@ -92,7 +92,8 @@ predicate is applied **centrally** and cannot be forgotten at a call site:
   hot paths and tests.
 
 The raw `db` client (`src/db/client.ts`) is reserved for auth, platform-level
-tables, migrations and infrastructure — **not** for tenant-owned data.
+tables, migrations and infrastructure — **not** for tenant-owned data. Code
+that must see more than one tenant uses `platformDb` (layer 7).
 
 ### 6. Database constraints & indexes
 
@@ -111,33 +112,83 @@ tables, migrations and infrastructure — **not** for tenant-owned data.
 
 ### 7. Row-Level Security (defence in depth)
 
-Every table with `organisation_id` has `ENABLE` and `FORCE ROW LEVEL SECURITY`.
-Policy `tenant_isolation` (`src/db/schema/_rls.ts`) is `FOR ALL`:
+Every table with an `organisation_id` column (60 tables) has `ENABLE` and
+`FORCE ROW LEVEL SECURITY` and the policy `tenant_isolation`
+(`src/db/schema/_rls.ts`, migration `0043_tenant_rls.sql`), `FOR ALL`:
 
 ```sql
-USING (organisation_id = current_setting('app.org_id')::uuid)
-WITH CHECK (organisation_id = current_setting('app.org_id')::uuid)
+USING (blakpath_rls_allows(organisation_id))
+WITH CHECK (blakpath_rls_allows(organisation_id))
 ```
+
+`blakpath_rls_allows` is an inlined `STABLE` SQL function over two
+transaction-local settings:
+
+| Setting                 | Set by                                              | Rows allowed                                                                 |
+| ----------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `app.bypass_rls = 'on'` | `platformDb` (`src/db/platform-db.ts`)              | all                                                                          |
+| `app.org_id = <uuid>`   | `scopeFor` / `currentScope` (`src/db/tenant-db.ts`) | that organisation only, for reads and for the new row of an insert or update |
+| neither                 | release N-1, raw `db`                               | all, until phase 2 (below)                                                   |
 
 `roles` and `feature_flags` also have `tenant_shared_read`, so a tenant can
 `SELECT` platform defaults (`organisation_id IS NULL`). That policy is not on
 `audit_events` or `audit_integrity_checkpoints`: a null organisation there is
-the platform chain and stays invisible to tenants.
+the platform chain and stays invisible to tenants, and a tenant cannot insert
+into it.
 
-Tenant queries run in a transaction as `blakpath_app` (`NOBYPASSRLS`) after
-`SET LOCAL app.org_id`. `TenantScope.db` (`src/db/bound-db.ts`) opens that
-transaction, so a forgotten `eq(organisationId)` is still filtered. An unset
-`app.org_id` makes the cast fail closed.
+**How the settings are applied.** `scope.db` and `platformDb` are real Drizzle
+handles whose client (`src/db/bound-db.ts`) runs each statement inside a
+transaction that first calls `set_config(..., true)` (`SET LOCAL`) for
+`app.org_id`, `app.bypass_rls`, and `role`. Nothing survives the transaction,
+so pooled connections cannot leak a tenant. Inside `scope.db.transaction(...)`
+every bound handle with the same context reuses that transaction, and a
+different context (for example `platformDb` inside a tenant transaction) runs
+in a savepoint after which the outer context is restored. Do not run two
+contexts concurrently (`Promise.all`) inside one transaction: they share one
+connection.
 
-`blakpath_platform` is `BYPASSRLS` and is only for vetted pre-tenant paths
-(membership resolution, token lookup, public verification). `src/db/migrate.ts`
-creates both roles before the SQL migrations, because `CREATE ROLE` cannot run
-inside the transaction drizzle wraps a migration in. The migrator needs to be a
-superuser or have `CREATEROLE`. `0020_rls-force-and-roles.sql` grants the roles
-to the migrator and forces RLS. Table owners are subject to the policies
-because RLS is forced. Superusers still bypass them, which is why application
-work must `SET ROLE` to `blakpath_app`. If the runtime role is not the
-migrator, grant both roles to that runtime role as well.
+**Roles.** Production connects as `blakpath_app` (non-owner, no
+`BYPASSRLS`). The role switch is a no-op there. Local and CI connect as a
+superuser, which bypasses RLS even when forced, so a bound transaction does
+`SET LOCAL ROLE blakpath_app` (`AUDIT_DB_APP_ROLE`) when the session may assume
+it. `pnpm db:migrate` creates that role `NOLOGIN` outside production. This makes
+every integration test that goes through `scope.db` or `platformDb` run under
+the policies with production grants. `tests/integration/tenant-rls.test.ts`
+also logs in as a separate non-owner role to prove refusals without any role
+switch. No migration creates roles or needs `BYPASSRLS`/`CREATEROLE`.
+
+**Bypass.** `platformDb` is the only bypass. ESLint
+(`no-restricted-imports`) limits who may import it and who may import the raw
+client, and `tests/unit/tenant-db-import-guard.test.ts` pins both lists; adding a
+caller means editing that test, which is the review point. Every bypass caller
+is listed there with its reason.
+
+**Rollout (expand, then contract).** Release N-1 sets no context and must keep
+working on schema N, so phase 1 (this release) lets an unset context through.
+Bound handles always set one, so every scoped and platform query is already
+enforced. Phase 2, a migration in a later release once N-1 is gone, replaces
+the unset branch with `false`:
+
+```sql
+CREATE OR REPLACE FUNCTION blakpath_rls_allows(row_org uuid) RETURNS boolean
+LANGUAGE sql STABLE PARALLEL SAFE AS $rls$
+  SELECT CASE
+    WHEN pg_catalog.current_setting('app.bypass_rls', true) = 'on' THEN true
+    WHEN COALESCE(pg_catalog.current_setting('app.org_id', true), '') = '' THEN false
+    ELSE row_org = pg_catalog.current_setting('app.org_id', true)::uuid
+  END
+$rls$;
+```
+
+After phase 2 a raw-`db` query on a tenant table, and a data migration run as
+the owner (RLS is forced), sees no rows unless it sets
+`app.bypass_rls`. Data migrations must start with
+`SELECT set_config('app.bypass_rls', 'on', true);`.
+
+**Operational cost.** Each bound statement outside a caller transaction is
+`BEGIN`, one `set_config` select, the statement, `COMMIT`. `set_config` pins an
+RDS Proxy session for its lifetime (as do the audit chain's advisory locks),
+so the proxy multiplexes less.
 
 ### 8. Object-storage namespace
 
@@ -196,11 +247,14 @@ not merge.
    `organisation_id` for a tenant the user is not a member of is refused; the
    context is built only from the DB-verified membership.
    Test: `tests/unit/tenancy-resolve.test.ts` — `rejects a user with no active membership of the supplied org`.
-7. **RLS backstop blocks a predicate-less query.** With org A set on
-   `blakpath_app`, a query with no tenant predicate returns none of org B.
-   Test: `tests/integration/tenant-rls.test.ts` — `predicate-less query as the app role returns none of org B`.
-   `tests/unit/tenant-rls-migration.test.ts` asserts `ENABLE`, `FORCE`, and
-   `tenant_isolation` in the migration SQL for every tenant table.
+7. **RLS backstop blocks cross-tenant reads and writes.** Logged in as a
+   non-owner, non-superuser role with org A set, a query with no tenant
+   predicate returns none of org B on every tenant table; updates and deletes
+   of B's rows affect nothing; moving or inserting a row into B, or into the
+   platform chain, is refused by the policy.
+   Test: `tests/integration/tenant-rls.test.ts`. The catalog check there and
+   `tests/unit/tenant-rls-migration.test.ts` fail if any table with an
+   `organisation_id` column lacks forced RLS or `tenant_isolation`.
 8. **Object-key namespace enforced.** Presigning or reading an object key outside
    the caller's `{organisation_id}/` prefix is refused.
    Test: `tests/unit/tenant-isolation-gates.test.ts` — `presignUpload refuses a foreign object key`.
@@ -217,9 +271,10 @@ not merge.
 11. **Audit reads are tenant-scoped.** As the app role for tenant A, a
     predicate-less read of `audit_events` returns none of tenant B's events and
     none of the platform (null-org) chain.
-    Test: `tests/integration/tenant-rls.test.ts` — `predicate-less query as the app role returns none of org B`
+    Test: `tests/integration/tenant-rls.test.ts` — `a tenant transaction reads none of another organisation, on every table`
     (the audit tables are part of that sweep).
 12. **Cascade on tenant close.** Where `organisation_id` references
     `organisations.id`, the foreign key is `ON DELETE CASCADE`. The append-only
-    audit chain is the exception: it has no organisation foreign key.
-    Test: `tests/unit/tenant-isolation-gates.test.ts` — `organisation foreign keys cascade, except the append-only audit chain`.
+    audit chain and `destruction_certificates` (proof of a crypto-shred) are
+    the exceptions: they have no organisation foreign key.
+    Test: `tests/unit/tenant-isolation-gates.test.ts` — `organisation foreign keys cascade, except records that must outlive the tenant`.

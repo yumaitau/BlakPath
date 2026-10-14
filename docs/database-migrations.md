@@ -87,6 +87,25 @@ ALTER TABLE "applications" VALIDATE CONSTRAINT "applications_client_id_fkey";
 
 `VALIDATE CONSTRAINT` and `CONCURRENTLY` run outside the migration transaction.
 
+## Row-level security
+
+Every table with an `organisation_id` column has forced RLS and the
+`tenant_isolation` policy (`docs/tenant-isolation.md`, layer 7).
+
+- A new tenant table gets `tenantIsolationPolicy()` and `.enableRLS()` in its
+  Drizzle schema, so `db:generate` emits the policy. Add
+  `ALTER TABLE "<table>" FORCE ROW LEVEL SECURITY;` to the generated file by
+  hand. `tests/unit/tenant-rls-migration.test.ts` fails without both.
+- RLS is forced, so the owner is subject to it too. A data migration that
+  reads or writes tenant rows starts with
+  `SELECT set_config('app.bypass_rls', 'on', true);` (the setting ends with
+  the statement's transaction). Today an unset context is still allowed for
+  release N-1; once the follow-up migration closes that, a backfill without
+  the bypass sees no rows.
+- No migration creates roles. Outside production `pnpm db:migrate` creates
+  `blakpath_app` `NOLOGIN` if it is missing, so local and CI transactions can
+  `SET LOCAL ROLE` to it.
+
 ## Drift and push
 
 CI runs `pnpm db:drift`: `drizzle-kit check`, then `drizzle-kit generate`.

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { platformDb as db } from '@/db/platform-db';
+import { scopeFor } from '@/db/tenant-db';
 import { sessions } from '@/db/schema/auth';
 import { resolveTenantContext } from '@/lib/tenancy/resolve';
 
@@ -50,8 +50,8 @@ export async function setActiveOrganisation(
   });
 
   // Membership confirmed — persist the advisory active organisation.
-  await db
-    .update(sessions)
+  await scopeFor(organisationId)
+    .db.update(sessions)
     .set({ activeOrganisationId: organisationId })
     .where(eq(sessions.id, sessionId));
 }

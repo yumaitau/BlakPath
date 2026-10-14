@@ -10,7 +10,7 @@ import {
 import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
-import { db } from '@/db/client';
+import { platformDb } from '@/db/platform-db';
 import {
   applications,
   evidence,
@@ -500,7 +500,7 @@ export interface CaseFormResponse {
 async function resolveUsableInvitation(
   token: string,
 ): Promise<{ invitation: FormInvitationRow; form: FormRow }> {
-  const rows = await db
+  const rows = await platformDb
     .select()
     .from(formInvitations)
     .where(eq(formInvitations.tokenHash, hashToken(token)))
@@ -515,8 +515,8 @@ async function resolveUsableInvitation(
     throw new FormTokenError();
   }
 
-  const formRows = await db
-    .select()
+  const formRows = await scopeFor(invitation.organisationId)
+    .db.select()
     .from(forms)
     .where(
       and(
@@ -545,7 +545,7 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
   const { invitation, form } = await resolveUsableInvitation(token);
 
   if (invitation.status === 'pending') {
-    await db.transaction(async (tx) => {
+    await scopeFor(invitation.organisationId).db.transaction(async (tx) => {
       // Status predicate stops a late "opened" write from clobbering `completed`.
       const opened = await tx
         .update(formInvitations)
@@ -612,7 +612,7 @@ export async function savePublicDraft(
     parsed.data,
   );
 
-  await db.transaction(async (tx) => {
+  await scopeFor(invitation.organisationId).db.transaction(async (tx) => {
     const updated = await tx
       .update(formInvitations)
       .set({ draftAnswers, draftSavedAt: new Date(), draftExpiresAt: expiresAt })
@@ -929,8 +929,8 @@ async function applicationInOrg(
   organisationId: string,
 ): Promise<string | null> {
   if (!applicationId) return null;
-  const rows = await db
-    .select({ id: applications.id })
+  const rows = await scopeFor(organisationId)
+    .db.select({ id: applications.id })
     .from(applications)
     .where(
       and(
@@ -956,8 +956,8 @@ async function assertFileAnswers(
     if (typeof value !== 'string') {
       throw new AuthorizationError('POLICY_DENIED', 'Some answers are invalid.');
     }
-    const rows = await db
-      .select({ id: evidence.id, status: evidence.status })
+    const rows = await scopeFor(organisationId)
+      .db.select({ id: evidence.id, status: evidence.status })
       .from(evidence)
       .where(
         and(

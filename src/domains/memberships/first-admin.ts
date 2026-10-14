@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { uuidv7 } from 'uuidv7';
 import { z } from 'zod';
 
-import { db } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import { membershipInvitations, organisations, roles } from '@/db/schema';
 import { recordAudit } from '@/domains/audit/service';
 import { firstAdminInvitationMessage } from '@/domains/memberships/first-admin-message';
@@ -77,7 +77,7 @@ export async function inviteFirstAdministrator(
   const invitationId = uuidv7();
 
   // The invitation and its audit commit together, before the email goes out.
-  await db.transaction(async (tx) => {
+  await scopeFor(organisationId).db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${FIRST_ADMIN_LOCK})`);
     const existing = await tx
       .select({ id: organisations.id })
@@ -150,7 +150,9 @@ export async function inviteFirstAdministrator(
   } catch (error) {
     logger.error({ err: error, organisationId }, 'first-admin invitation email failed');
     try {
-      await db.delete(organisations).where(eq(organisations.id, organisationId));
+      await scopeFor(organisationId)
+        .db.delete(organisations)
+        .where(eq(organisations.id, organisationId));
     } catch (rollbackError) {
       logger.error(
         { err: rollbackError, organisationId },

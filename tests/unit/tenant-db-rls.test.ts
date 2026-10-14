@@ -1,75 +1,61 @@
-import { describe, expect, it, vi } from 'vitest';
-import { applyRlsRole, APP_ROLE } from '@/db/rls';
+import { describe, expect, it } from 'vitest';
+import {
+  APPLY_RLS_SQL,
+  applyRlsContext,
+  PLATFORM_CONTEXT,
+  rlsSettings,
+  sameRlsContext,
+  tenantContext,
+} from '@/db/rls';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
+const OTHER = '22222222-2222-4222-8222-222222222222';
 
-const state = vi.hoisted(() => ({
-  executed: 0,
-  queries: [] as string[],
-}));
-
-vi.mock('@/db/client', () => {
-  function chain() {
-    const builder: Record<string, unknown> = {};
-    const passthrough = () => builder;
-    for (const method of ['from', 'where', 'limit', 'orderBy']) {
-      builder[method] = passthrough;
-    }
-    builder.then = (resolve: (value: unknown) => unknown) =>
-      Promise.resolve([{ ok: true }]).then(resolve);
-    return builder;
-  }
-  const tx = {
-    execute: async () => {
-      state.executed += 1;
-      return [];
-    },
-    select: () => {
-      state.queries.push('select');
-      return chain();
-    },
-  };
-  return {
-    db: {
-      transaction: async (fn: (inner: typeof tx) => Promise<unknown>) => fn(tx),
-    },
-  };
-});
-
-describe('tenant database role', () => {
-  it('refuses an unknown role and an app role without an organisation', async () => {
-    const tx = { execute: async () => undefined };
-    await expect(applyRlsRole(tx, 'postgres', ORG)).rejects.toThrow(
-      /unknown database role/,
-    );
-    await expect(applyRlsRole(tx, APP_ROLE, null)).rejects.toThrow(/organisation id/);
+describe('row-level security context', () => {
+  it('refuses a tenant context without an organisation uuid', () => {
+    expect(() => tenantContext('')).toThrow(/organisation uuid/);
+    expect(() => tenantContext("x' or true --")).toThrow(/organisation uuid/);
+    expect(tenantContext(ORG)).toEqual({ kind: 'tenant', organisationId: ORG });
   });
 
-  it('sets the role and the org GUC', async () => {
-    const queries: string[] = [];
-    await applyRlsRole(
+  it('tenant settings name the organisation and keep the bypass off', () => {
+    expect(rlsSettings(tenantContext(ORG))).toEqual({
+      role: 'blakpath_app',
+      organisationId: ORG,
+      bypass: 'off',
+    });
+  });
+
+  it('platform settings clear the organisation and turn the bypass on', () => {
+    expect(rlsSettings(PLATFORM_CONTEXT)).toEqual({
+      role: 'blakpath_app',
+      organisationId: '',
+      bypass: 'on',
+    });
+  });
+
+  it('compares contexts by kind and organisation', () => {
+    expect(sameRlsContext(tenantContext(ORG), tenantContext(ORG))).toBe(true);
+    expect(sameRlsContext(tenantContext(ORG), tenantContext(OTHER))).toBe(false);
+    expect(sameRlsContext(tenantContext(ORG), PLATFORM_CONTEXT)).toBe(false);
+    expect(sameRlsContext(PLATFORM_CONTEXT, PLATFORM_CONTEXT)).toBe(true);
+  });
+
+  it('applies all three settings transaction-locally in one parameterised call', async () => {
+    const calls: Array<{ query: string; parameters: string[] }> = [];
+    await applyRlsContext(
       {
-        execute: async (query) => {
-          queries.push(JSON.stringify(query));
+        unsafe: async (query, parameters) => {
+          calls.push({ query, parameters });
         },
       },
-      APP_ROLE,
-      ORG,
+      tenantContext(ORG),
     );
-    expect(queries).toHaveLength(2);
-    expect(queries[0]).toContain(APP_ROLE);
-    expect(queries[1]).toContain('app.org_id');
-    expect(queries[1]).toContain(ORG);
-  });
-
-  it('replays scope.db.select inside the role transaction', async () => {
-    state.executed = 0;
-    state.queries = [];
-    const { tenantBoundDb } = await import('@/db/bound-db');
-    const bound = tenantBoundDb(ORG);
-    const rows = await bound.select().from({} as never);
-    expect(rows).toEqual([{ ok: true }]);
-    expect(state.queries).toEqual(['select']);
-    expect(state.executed).toBe(2);
+    expect(calls).toEqual([
+      { query: APPLY_RLS_SQL, parameters: ['blakpath_app', ORG, 'off'] },
+    ]);
+    // `true` = SET LOCAL. A session-level setting would leak through the pool.
+    expect(APPLY_RLS_SQL.match(/, true\)/g)).toHaveLength(3);
+    expect(APPLY_RLS_SQL).not.toContain(ORG);
   });
 });

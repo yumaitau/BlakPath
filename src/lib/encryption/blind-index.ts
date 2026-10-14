@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
-import { db } from '@/db/client';
+import { scopeFor } from '@/db/tenant-db';
 import { organisationKeys } from '@/db/schema';
 import {
   getOrganisationKey,
@@ -124,8 +124,8 @@ async function hmacKey(
   const plaintext = Buffer.from(generated.plaintext);
   generated.plaintext.fill(0);
   const wrapped = generated.ciphertextBlob.toString('base64');
-  const claimed = await db
-    .update(organisationKeys)
+  const claimed = await scopeFor(organisationId)
+    .db.update(organisationKeys)
     .set({ blindIndexWrappedDek: wrapped })
     .where(
       and(

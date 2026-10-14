@@ -155,6 +155,14 @@ async function permissionKey(sql: Sql): Promise<string> {
   return created;
 }
 
+/**
+ * Values that satisfy CHECK constraints the generic generator cannot guess.
+ * Keyed `table.column`; applied whether or not the column has a default.
+ */
+const COLUMN_OVERRIDES: Readonly<Record<string, (marker: string) => unknown>> = {
+  'webhook_endpoints.secret': (marker) => JSON.stringify({ v: 1, probe: marker }),
+};
+
 interface InsertPlan {
   readonly columns: string[];
   readonly values: unknown[];
@@ -184,7 +192,11 @@ async function planInsert(
     let value: unknown;
     let include = false;
 
-    if (column.name === 'id' && column.dataType === 'uuid') {
+    const override = COLUMN_OVERRIDES[`${table}.${column.name}`];
+    if (override) {
+      value = override(options.marker ? TENANT_MARKER : 'fixture');
+      include = true;
+    } else if (column.name === 'id' && column.dataType === 'uuid') {
       value = randomUUID();
       include = true;
     } else if (column.name === 'organisation_id') {
@@ -389,7 +401,14 @@ export async function seedTenantRows(sql: Sql, ids: IsolationIds): Promise<SeedR
     // System roles are the null-org catalogue. The development seed owns that
     // set, and seed.test.ts asserts it exactly. Those rows already satisfy the
     // shared-read check, so this fixture must not add another null role.
-    if (orgColumn?.nullable && table !== 'roles') {
+    // The platform audit chain is append-only and shared by every test; a
+    // fixture row there would break platform chain verification.
+    if (
+      orgColumn?.nullable &&
+      table !== 'roles' &&
+      table !== 'audit_events' &&
+      table !== 'audit_integrity_checkpoints'
+    ) {
       await insertLabeled(sql, `${table} (null org)`, table, meta, {
         organisationId: null,
         userId: ids.userId,
