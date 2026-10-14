@@ -6,6 +6,7 @@ import type { EncryptedFieldV2, FieldBinding } from './envelope';
 import {
   openJson,
   openText,
+  parseStoredEnvelope,
   resaveJson,
   resaveText,
   sealJson,
@@ -322,11 +323,13 @@ export async function sealWebhookSecret(
   return sealed;
 }
 
+/** Refuses anything that is not an envelope; a signing secret is never plaintext. */
 export async function openWebhookSecret(
   organisationId: string,
   rowId: string,
   stored: string,
 ): Promise<string> {
+  if (!parseStoredEnvelope(stored)) throw new Error('Webhook secret is not ciphertext');
   const scope = await scopeFor(organisationId);
   const secret = await openText(
     scope,
@@ -347,6 +350,32 @@ export async function openWebhookRows<T extends { id: string; secret: string }>(
       (await openText(scope, bind('webhook_endpoints', 'secret', row.id), row.secret)) ??
       '',
   }));
+}
+
+export type InvitationTable = 'membership_invitations' | 'form_invitations';
+
+/** JSONB `token_seal`: the envelope object, bound to the invitation row. */
+export async function sealInvitationToken(
+  organisationId: string,
+  table: InvitationTable,
+  rowId: string,
+  token: string,
+): Promise<EncryptedFieldV2> {
+  const scope = await scopeFor(organisationId);
+  return scope.encrypt(token, bind(table, 'token_seal', rowId));
+}
+
+/** Opens version 2, or version 1 until the backfill has run. */
+export async function openInvitationToken(
+  organisationId: string,
+  table: InvitationTable,
+  rowId: string,
+  stored: unknown,
+): Promise<string> {
+  const parsed = parseStoredEnvelope(stored);
+  if (!parsed) throw new Error('Invitation seal is not ciphertext');
+  const scope = await scopeFor(organisationId);
+  return scope.decrypt(parsed, bind(table, 'token_seal', rowId));
 }
 
 export async function sealWordingSnapshot(

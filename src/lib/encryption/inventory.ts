@@ -31,6 +31,8 @@ export const ENCRYPTED_COLUMNS: readonly InventoryColumn[] = [
   { table: 'correspondence_messages', column: 'text_body', kind: 'text' },
   { table: 'correspondence_messages', column: 'html_body', kind: 'text' },
   { table: 'consent_records', column: 'wording_snapshot', kind: 'text' },
+  { table: 'membership_invitations', column: 'token_seal', kind: 'jsonb' },
+  { table: 'form_invitations', column: 'token_seal', kind: 'jsonb' },
 ];
 
 /** Object keys that must never appear in operational logs. */
