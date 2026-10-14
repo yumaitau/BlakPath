@@ -23,6 +23,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import {
   BOARD_COLUMNS,
   type BoardColumn,
@@ -202,6 +203,7 @@ export function TaskBoard({ initialTasks }: { initialTasks: BoardTask[] }) {
   const [adding, setAdding] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [creating, setCreating] = useState(false);
+  const hydrated = useHydrated();
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -402,7 +404,12 @@ export function TaskBoard({ initialTasks }: { initialTasks: BoardTask[] }) {
           </p>
         </div>
         {!adding ? (
-          <Button type="button" size="sm" onClick={() => setAdding(true)}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!hydrated}
+            onClick={() => setAdding(true)}
+          >
             Add task
           </Button>
         ) : null}

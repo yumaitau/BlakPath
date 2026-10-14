@@ -10,6 +10,7 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import { readConflictMessage } from '@/lib/http/conflict-message';
 import { cn } from '@/lib/utils';
 
@@ -117,6 +118,7 @@ type SubmitState =
 
 export function PublicFormRenderer({ token, form }: { token: string; form: PublicForm }) {
   const baseId = useId();
+  const hydrated = useHydrated();
   const [values, setValues] = useState<Record<string, AnswerValue>>(() =>
     buildInitialState(form.fields),
   );
@@ -284,7 +286,7 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
           ) : null}
 
           <div>
-            <Button type="submit" disabled={isSubmitting}>
+            <Button type="submit" disabled={!hydrated || isSubmitting}>
               {isSubmitting ? 'Submitting…' : 'Submit'}
             </Button>
           </div>

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 export interface RegisterApplication {
   id: string;
@@ -46,6 +47,7 @@ export function ApplicationRegister({
   const [priority, setPriority] = useState('normal');
   const [applicantUserId, setApplicantUserId] = useState('');
   const [busy, setBusy] = useState(false);
+  const hydrated = useHydrated();
   const [error, setError] = useState<string | null>(null);
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
@@ -144,7 +146,7 @@ export function ApplicationRegister({
                     <option value="low">Low</option>
                   </select>
                 </div>
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" disabled={!hydrated || busy}>
                   {busy ? 'Starting…' : 'Start application'}
                 </Button>
               </form>

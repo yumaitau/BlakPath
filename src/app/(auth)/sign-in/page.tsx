@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { authClient, signIn } from '@/lib/auth/client';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /**
  * Email + password sign-in.
@@ -57,6 +58,7 @@ export default function SignInPage() {
   const [pending, setPending] = useState(false);
   const [passkeyPending, setPasskeyPending] = useState(false);
   const [ssoPending, setSsoPending] = useState(false);
+  const hydrated = useHydrated();
 
   const emailRef = useRef<HTMLInputElement>(null);
 
@@ -184,7 +186,7 @@ export default function SignInPage() {
           </Link>
         </div>
 
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={!hydrated || pending}>
           {pending ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>
@@ -199,12 +201,17 @@ export default function SignInPage() {
         type="button"
         variant="outline"
         onClick={handlePasskey}
-        disabled={passkeyPending}
+        disabled={!hydrated || passkeyPending}
       >
         {passkeyPending ? 'Waiting for passkey…' : 'Sign in with a passkey'}
       </Button>
 
-      <Button type="button" variant="outline" onClick={handleSso} disabled={ssoPending}>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={handleSso}
+        disabled={!hydrated || ssoPending}
+      >
         {ssoPending ? 'Redirecting…' : 'Sign in with organisation SSO'}
       </Button>
 
