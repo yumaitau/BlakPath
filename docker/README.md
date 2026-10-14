@@ -100,8 +100,8 @@ not positively passed. There is no operational bypass — do not add one.
 
 ```bash
 # Build production images
-docker build --target runner -t blakpath:latest .
-docker build --target worker -t blakpath-worker:latest .
+docker build --target runner -t blakpath:0.1.0 .
+docker build --target worker -t blakpath-worker:0.1.0 .
 ```
 
 ---
