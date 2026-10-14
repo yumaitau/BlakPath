@@ -114,6 +114,7 @@ export function MemberManagement({
     try {
       const response = await fetch(`/api/membership-invitations/${id}/resend`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!response.ok) {
         setFeedback({
@@ -145,6 +146,7 @@ export function MemberManagement({
     try {
       const response = await fetch(`/api/membership-invitations/${id}`, {
         method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!response.ok) {
         setFeedback({

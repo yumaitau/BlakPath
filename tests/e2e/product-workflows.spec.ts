@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { ADMIN_PASSWORD, signInAndSelectOrganisation } from './helpers/auth';
 
@@ -176,7 +177,8 @@ test('account security fails safely and sign-out ends the session', async ({ pag
   await signInAndSelectOrganisation(page);
   await page.goto('/settings/security');
   await expect(page.getByRole('heading', { name: 'Account security' })).toBeVisible();
-  await expect(page.getByText('You don’t have any passkeys yet.')).toBeVisible();
+  // The seed enrols a bootstrap passkey so the administrator meets staff MFA.
+  await expect(page.getByText('Development bootstrap passkey')).toBeVisible();
 
   await page
     .getByLabel('Confirm your password to continue')
