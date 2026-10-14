@@ -11,6 +11,7 @@ import { currentScope } from '@/db/tenant-db';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import { createNotification } from '@/domains/notifications';
+import { sanitiseError } from '@/lib/http/error-response';
 import { logger } from '@/lib/observability/logger';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -295,7 +296,7 @@ export async function requestBreakGlass(params: {
     });
   } catch (error) {
     logger.error(
-      { err: error, requestId: row.id },
+      { err: sanitiseError(error), requestId: row.id },
       'break-glass request notification failed',
     );
     if (error instanceof BreakGlassNotifyError) throw error;
@@ -366,7 +367,7 @@ export async function activateBreakGlass(params: {
         ),
       );
     logger.error(
-      { err: error, requestId: activated.id },
+      { err: sanitiseError(error), requestId: activated.id },
       'break-glass activation notification failed',
     );
     if (error instanceof BreakGlassNotifyError) throw error;
