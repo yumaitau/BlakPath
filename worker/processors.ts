@@ -9,6 +9,10 @@ import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
 import { scopeFor } from '@/db/tenant-db';
 import { notifications, users } from '@/db/schema';
+import {
+  deliverInvitationEmail,
+  invitationKindFromJobName,
+} from '@/lib/email/invitation-delivery';
 import { sendEmail } from '@/lib/email/mailer';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
 import { createCheckpoint, verifyChain } from '@/domains/audit';
@@ -66,31 +70,24 @@ const malwareScanProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Email processor. Delivers a tenant email (invitation, notification copy) via
- * SMTP. The body may contain a bearer link (e.g. a form completion URL), so it
- * is NEVER logged — `sendEmail` logs only a redacted recipient and the subject.
+ * Email processor. Loads the invitation by id and sends the message composed
+ * from that row. The job payload is only the id — a bearer link is never
+ * read from Redis, and `sendEmail` logs only a redacted recipient.
  */
 const emailProcessor: ProcessorFn = async (job, logger) => {
-  const data = job.data as {
-    to?: unknown;
-    subject?: unknown;
-    text?: unknown;
-    html?: unknown;
-  };
-  if (
-    typeof data.to !== 'string' ||
-    typeof data.subject !== 'string' ||
-    typeof data.text !== 'string'
-  ) {
+  const kind = invitationKindFromJobName(job.name);
+  const invitationId = (job.data as { invitationId?: unknown }).invitationId;
+  if (!kind || typeof invitationId !== 'string' || invitationId.length === 0) {
     // Malformed payload is a bug, not a transient fault — do not retry forever.
     logger.error({ jobId: job.id }, 'email job payload invalid — dropping');
     return;
   }
-  await sendEmail({
-    to: data.to,
-    subject: data.subject,
-    text: data.text,
-    ...(typeof data.html === 'string' ? { html: data.html } : {}),
+  await deliverInvitationEmail({
+    kind,
+    organisationId: job.data.organisationId,
+    invitationId,
+    jobId: job.id,
+    logger,
   });
 };
 

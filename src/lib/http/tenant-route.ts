@@ -90,7 +90,11 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof NoActiveOrganisationError) {
     return NextResponse.json({ error: 'No active organisation' }, { status: 409 });
   }
-  if (error instanceof ZodError || error instanceof WebhookDestinationError) {
+  if (
+    error instanceof ZodError ||
+    error instanceof WebhookDestinationError ||
+    error instanceof SyntaxError
+  ) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
   if (error instanceof ApplicationWorkflowError) {
