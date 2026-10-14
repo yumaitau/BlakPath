@@ -1,16 +1,10 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import {
-  OrganisationNotFoundError,
-  setOrganisationStatus,
-} from '@/domains/organisations';
-import { OrganisationActivationError } from '@/domains/organisation-keys';
+import { setOrganisationStatus } from '@/domains/organisations';
 import { clientIp } from '@/lib/http/client-ip';
-import {
-  breakGlassErrorResponse,
-  requirePlatformOperator,
-} from '@/lib/http/platform-route';
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
+import { requirePlatformOperator } from '@/lib/http/platform-route';
 import { ORGANISATION_STATUSES } from '@/lib/tenancy/organisation-status';
 
 /**
@@ -26,44 +20,31 @@ const bodySchema = z.object({
   reason: z.string().trim().min(1).max(500).optional(),
 });
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { userId, sessionId } = await requirePlatformOperator();
-    const { id } = await params;
-    if (!z.uuid().safeParse(id).success) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    }
-
-    const parsed = bodySchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-    }
-
-    const organisation = await setOrganisationStatus({
-      organisationId: id,
-      status: parsed.data.status,
-      actorUserId: userId,
-      sessionId,
-      correlationId: globalThis.crypto.randomUUID(),
-      requestId: globalThis.crypto.randomUUID(),
-      reason: parsed.data.reason,
-      ipAddress: clientIp(request) ?? undefined,
-      userAgent: request.headers.get('user-agent') ?? undefined,
-    });
-    return NextResponse.json(organisation);
-  } catch (error) {
-    if (error instanceof OrganisationNotFoundError) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    }
-    if (error instanceof OrganisationActivationError) {
-      return NextResponse.json(
-        { error: 'Organisation cannot become active' },
-        { status: 409 },
-      );
-    }
-    return breakGlassErrorResponse(error);
+  const { userId, sessionId } = await requirePlatformOperator();
+  const { id } = await params;
+  if (!z.uuid().safeParse(id).success) {
+    throw new ClientSafeError(404, 'NOT_FOUND', 'Not found');
   }
-}
+
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Invalid request');
+  }
+
+  const organisation = await setOrganisationStatus({
+    organisationId: id,
+    status: parsed.data.status,
+    actorUserId: userId,
+    sessionId,
+    correlationId: globalThis.crypto.randomUUID(),
+    requestId: globalThis.crypto.randomUUID(),
+    reason: parsed.data.reason,
+    ipAddress: clientIp(request) ?? undefined,
+    userAgent: request.headers.get('user-agent') ?? undefined,
+  });
+  return NextResponse.json(organisation);
+});

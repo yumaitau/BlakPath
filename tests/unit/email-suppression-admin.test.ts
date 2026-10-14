@@ -4,14 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const requirePlatformOperator = vi.hoisted(() => vi.fn());
 const clearSuppression = vi.hoisted(() => vi.fn());
 
-vi.mock('@/lib/http/platform-route', () => ({
-  requirePlatformOperator,
-  breakGlassErrorResponse: () =>
-    new Response(JSON.stringify({ error: 'Forbidden' }), {
-      status: 403,
-      headers: { 'content-type': 'application/json' },
-    }),
-}));
+vi.mock('@/lib/http/platform-route', () => ({ requirePlatformOperator }));
 
 vi.mock('@/domains/email', () => ({ clearSuppression }));
 

@@ -1,12 +1,12 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-import { FormTokenError, submitPublicResponse } from '@/domains/forms';
-import { ConcurrencyConflictError } from '@/lib/concurrency/error';
+import { submitPublicResponse } from '@/domains/forms';
+import { isTenantKeyUnavailable } from '@/lib/encryption/errors';
 import { UNKNOWN_CLIENT_IP, clientIpForLimits } from '@/lib/http/client-ip';
+import { ClientSafeError, tenantHandler } from '@/lib/http/error-response';
 import { REQUEST_LIMITS, enforcePair } from '@/lib/http/request-limits';
 import { isAuthorizationError } from '@/lib/permissions/errors';
-import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
 
 /**
  * POST /api/public/forms/[token] — submit a form response, unauthenticated.
@@ -25,7 +25,7 @@ import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status'
 // Token-specific and side-effecting; never cached.
 export const dynamic = 'force-dynamic';
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
@@ -33,37 +33,24 @@ export async function POST(
   const ip = clientIpForLimits(request.headers);
   const limited = await enforcePair(REQUEST_LIMITS.publicFormPost, ip, token);
   if (limited) return limited;
-
-  let answers: unknown;
-  try {
-    const body = (await request.json()) as { answers?: unknown };
-    answers = body.answers;
-  } catch {
-    // Malformed JSON is treated as invalid answers rather than a server fault.
-    return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
-  }
-
   const ipAddress = ip === UNKNOWN_CLIENT_IP ? undefined : ip;
 
+  // FormTokenError (404) and OrganisationUnavailableError (403) map in the
+  // shared mapper with the same status and message as before.
   try {
-    await submitPublicResponse(token, answers, ipAddress);
+    const body = (await request.json()) as { answers?: unknown };
+    await submitPublicResponse(token, body.answers, ipAddress);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    if (error instanceof ConcurrencyConflictError) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
+    // Malformed JSON and answer-policy failures share one message so the
+    // response does not reveal whether the token was usable.
+    if (error instanceof SyntaxError || isAuthorizationError(error)) {
+      throw new ClientSafeError(400, 'VALIDATION_ERROR', 'Some answers are invalid.');
     }
-    if (error instanceof OrganisationUnavailableError) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    // The staff key-lock message is not for the public. Keep the old opaque 500.
+    if (isTenantKeyUnavailable(error)) {
+      throw new ClientSafeError(500, 'INTERNAL_ERROR', 'Internal error');
     }
-    if (error instanceof FormTokenError) {
-      return NextResponse.json(
-        { error: 'This form link is invalid or has expired.' },
-        { status: 404 },
-      );
-    }
-    if (isAuthorizationError(error)) {
-      return NextResponse.json({ error: 'Some answers are invalid.' }, { status: 400 });
-    }
-    return NextResponse.json({ error: 'Something went wrong.' }, { status: 500 });
+    throw error;
   }
-}
+});

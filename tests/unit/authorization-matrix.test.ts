@@ -34,8 +34,9 @@ function discoverHandlers(): string[] {
       if (entry.name !== 'route.ts') continue;
       const text = readFileSync(full, 'utf8');
       const methods = new Set<string>();
+      // `export async function GET` or `export const GET = tenantHandler(...)`.
       for (const match of text.matchAll(
-        /export (?:async )?function (GET|POST|PUT|PATCH|DELETE)\b/g,
+        /export (?:(?:async )?function|const) (GET|POST|PUT|PATCH|DELETE)\b/g,
       )) {
         if (match[1]) methods.add(match[1]);
       }

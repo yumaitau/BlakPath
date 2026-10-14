@@ -67,7 +67,7 @@ test('protected routes reject anonymous access and sign-in errors stay generic',
   await isolateSignInClient(page);
   const apiResponse = await page.request.get('/api/applications');
   expect(apiResponse.status()).toBe(401);
-  await expect(apiResponse.json()).resolves.toEqual({ error: 'Unauthorized' });
+  await expect(apiResponse.json()).resolves.toMatchObject({ error: 'Unauthorized' });
 
   await page.goto('/dashboard');
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
@@ -119,7 +119,9 @@ test('staff can select a tenant, validate input, and start and find an applicati
     data: { applicantName: '', priority: 'urgent' },
   });
   expect(invalidResponse.status()).toBe(400);
-  await expect(invalidResponse.json()).resolves.toEqual({ error: 'Invalid request' });
+  await expect(invalidResponse.json()).resolves.toMatchObject({
+    error: 'Invalid request',
+  });
 
   await page.getByRole('link', { name: 'Applications' }).first().click();
   await expect(
@@ -254,7 +256,7 @@ test('a linked applicant uploads evidence into quarantine without download acces
     `/api/evidence/${payload.evidence.id}/download`,
   );
   expect(deniedDownload.status()).toBe(403);
-  await expect(deniedDownload.json()).resolves.toEqual({ error: 'Forbidden' });
+  await expect(deniedDownload.json()).resolves.toMatchObject({ error: 'Forbidden' });
   await expectNoSeriousAccessibilityViolations(applicantPage);
   await applicantContext.close();
 });
@@ -358,7 +360,7 @@ test('staff can progress a case through review and a human committee decision', 
     { data: { operation: 'assign_self' } },
   );
   expect(denied.status()).toBe(403);
-  await expect(denied.json()).resolves.toEqual({ error: 'Forbidden' });
+  await expect(denied.json()).resolves.toMatchObject({ error: 'Forbidden' });
 
   await expectNoSeriousAccessibilityViolations(page);
 });

@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { readConflictMessage } from '@/lib/http/conflict-message';
-import { apiErrorResponse } from '@/lib/http/api-route';
-import { toErrorResponse } from '@/lib/http/tenant-route';
+import { errorResponse } from '@/lib/http/error-response';
 
 vi.mock('@/domains/forms', () => {
   class FormTokenError extends Error {
@@ -24,13 +23,12 @@ describe('concurrency conflict responses', () => {
     const error = new ConcurrencyConflictError(
       'This application changed while you were working. Refresh and try again.',
     );
-    const response = toErrorResponse(error);
+    const response = errorResponse(error);
     expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({ error: error.message });
-
-    const api = apiErrorResponse(error);
-    expect(api.status).toBe(409);
-    await expect(api.json()).resolves.toEqual({ error: error.message });
+    await expect(response.json()).resolves.toMatchObject({
+      error: error.message,
+      code: 'CONCURRENCY_CONFLICT',
+    });
   });
 
   it('reads a 409 message for the UI and ignores other statuses', async () => {
@@ -65,7 +63,7 @@ describe('concurrency conflict responses', () => {
       { params: Promise.resolve({ token: 'token' }) },
     );
     expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({
+    await expect(response.json()).resolves.toMatchObject({
       error: 'This form was already submitted.',
     });
   });

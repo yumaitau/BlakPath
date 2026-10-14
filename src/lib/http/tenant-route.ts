@@ -1,34 +1,11 @@
 import { headers } from 'next/headers';
-import { NextResponse } from 'next/server';
-import { ZodError } from 'zod';
-import { stepUpRequiredBody } from '@/lib/auth/step-up-policy';
-import {
-  requireSession,
-  StepUpRequiredError,
-  UnauthenticatedError,
-} from '@/lib/auth/session';
-import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy';
+import { requireSession } from '@/lib/auth/session';
+import { requireStaffMfa } from '@/lib/auth/staff-policy';
 import { env } from '@/lib/env';
 import { withTenant } from '@/lib/tenancy/with-tenant';
-import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
-import { OrganisationUnavailableError } from '@/lib/tenancy/organisation-status';
+import { type TenantContext } from '@/lib/tenancy/context';
 import { clientIp } from '@/lib/http/client-ip';
-import { logger } from '@/lib/observability/logger';
-import { ApplicationWorkflowError } from '@/domains/applications/workflow';
-import { RetentionTargetError } from '@/domains/retention';
-import { RetentionError } from '@/domains/retention/errors';
-import { ConcurrencyConflictError } from '@/lib/concurrency/error';
-import { CertificateConflictError } from '@/domains/certificates/errors';
-import { DecisionWorkflowError } from '@/domains/decisions/errors';
-import { EvidenceUploadIncompleteError } from '@/domains/evidence/errors';
-import {
-  OrganisationActivationError,
-  OrganisationKeyInputError,
-} from '@/domains/organisation-keys';
-import { WebhookDestinationError } from '@/domains/webhooks/destination';
-import { tenantKeyErrorResponse } from '@/lib/http/tenant-key-response';
-import { AuthorizationError } from '@/lib/permissions/errors';
-import { RateLimitedError, rateLimitResponse } from '@/lib/http/request-limits';
+import { currentRequestIds } from '@/lib/observability/correlation';
 
 /**
  * Route-handler helper: run `fn` inside a DB-verified tenant context.
@@ -66,97 +43,17 @@ export async function withRequestTenant<T>(
   }
 
   const h = await headers();
+  const bound = currentRequestIds();
   return withTenant(
     {
       userId: session.user.id,
       sessionId: session.session.id,
       organisationId: activeOrganisationId,
-      correlationId: globalThis.crypto.randomUUID(),
-      requestId: globalThis.crypto.randomUUID(),
+      correlationId: bound?.correlationId ?? globalThis.crypto.randomUUID(),
+      requestId: bound?.requestId ?? globalThis.crypto.randomUUID(),
       ipAddress: clientIp({ headers: h }) ?? undefined,
       userAgent: h.get('user-agent') ?? undefined,
     },
     fn,
   );
-}
-
-/**
- * Map a thrown error to a non-leaking JSON response. Authorisation and tenancy
- * failures collapse to a generic 403 so a caller cannot distinguish "forbidden"
- * from "does not exist".
- */
-export function toErrorResponse(error: unknown): NextResponse {
-  const locked = tenantKeyErrorResponse(error);
-  if (locked) return locked;
-  if (error instanceof RateLimitedError) return rateLimitResponse(error.retryAfter);
-  if (error instanceof UnauthenticatedError) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (error instanceof StaffMfaRequiredError) {
-    return NextResponse.json(
-      { error: 'A verified second factor is required', code: error.code },
-      { status: error.status },
-    );
-  }
-  if (error instanceof StepUpRequiredError) {
-    return NextResponse.json(stepUpRequiredBody(), { status: 401 });
-  }
-  if (error instanceof NoActiveOrganisationError) {
-    return NextResponse.json({ error: 'No active organisation' }, { status: 409 });
-  }
-  if (
-    error instanceof ZodError ||
-    error instanceof WebhookDestinationError ||
-    error instanceof OrganisationKeyInputError ||
-    error instanceof SyntaxError
-  ) {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
-  if (error instanceof OrganisationActivationError) {
-    return NextResponse.json(
-      { error: 'Organisation cannot become active' },
-      { status: 409 },
-    );
-  }
-  if (error instanceof ApplicationWorkflowError) {
-    return NextResponse.json({ error: 'Invalid transition' }, { status: 409 });
-  }
-  if (error instanceof RetentionError) {
-    return NextResponse.json({ error: error.message }, { status: 409 });
-  }
-  if (error instanceof RetentionTargetError) {
-    return NextResponse.json(
-      { error: 'Legal hold target does not exist' },
-      { status: 404 },
-    );
-  }
-  if (error instanceof EvidenceUploadIncompleteError) {
-    // The row is still pending. Say so without echoing object keys or sizes.
-    return NextResponse.json({ error: 'Upload incomplete' }, { status: 409 });
-  }
-  if (error instanceof ConcurrencyConflictError) {
-    return NextResponse.json({ error: error.message }, { status: 409 });
-  }
-  if (error instanceof DecisionWorkflowError) {
-    return NextResponse.json(
-      { error: 'Case is not ready for a committee decision' },
-      { status: 409 },
-    );
-  }
-  if (error instanceof CertificateConflictError) {
-    return NextResponse.json(
-      { error: 'A live certificate already exists for this decision' },
-      { status: 409 },
-    );
-  }
-  if (
-    error instanceof AuthorizationError ||
-    error instanceof TenantContextError ||
-    error instanceof OrganisationUnavailableError
-  ) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  // Unknown error: log server-side for diagnosis, return nothing sensitive.
-  logger.error({ err: error }, 'unhandled route error');
-  return NextResponse.json({ error: 'Internal error' }, { status: 500 });
 }
