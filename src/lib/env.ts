@@ -92,9 +92,15 @@ const serverSchema = z
     // PaperBoy replaces direct SES SMTP.
     PAPERBOY_URL: z.string().url().optional(),
     PAPERBOY_API_KEY: z.string().min(1).optional(),
-    // Shared secret gating the SES SNS event webhook (bounce/complaint).
-    // Unset locally; required in production where SES events are wired.
+    // Shared secret for POST /api/email/events. Header
+    // `x-email-webhook-secret` only. Unset locally; required in production.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),
+    // SNS topic that SES bounce/complaint events must come from. The events
+    // route rejects any other TopicArn. Unset locally; required in production.
+    EMAIL_SNS_TOPIC_ARN: z
+      .string()
+      .regex(/^arn:aws:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]+$/)
+      .optional(),
     // Retired. Must be unset. A value fails production boot and the release gate.
     PILOT_BOOTSTRAP_TOKEN: z.string().min(32).optional(),
     // Local seed opt-in. Developer accounts also require a loopback database host.

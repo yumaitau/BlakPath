@@ -23,6 +23,8 @@ const valid = {
   BETTER_AUTH_SECRET: 'a-secure-runtime-value-that-is-long-enough',
   ENCRYPTION_MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
   ORIGIN_VERIFY_SECRET: 'a-different-runtime-value-that-is-long-enough',
+  EMAIL_WEBHOOK_SECRET: 'email-webhook-secret-value',
+  EMAIL_SNS_TOPIC_ARN: 'arn:aws:sns:ap-southeast-2:123456789012:blakpath-email-events',
 } as const;
 
 describe('production readiness configuration', () => {
@@ -99,5 +101,16 @@ describe('production readiness configuration', () => {
       SMTP_PASSWORD: 'mail-secret',
     });
     expect(issues.map(({ key }) => key)).toContain('SMTP_USER');
+  });
+
+  it('requires a pinned SES topic and a webhook secret', () => {
+    const issues = validateProductionReadiness({
+      ...valid,
+      EMAIL_WEBHOOK_SECRET: 'replace-me',
+      EMAIL_SNS_TOPIC_ARN: 'arn:aws:sns:us-east-1:123456789012:topic',
+    });
+    expect(issues.map(({ key }) => key)).toEqual(
+      expect.arrayContaining(['EMAIL_WEBHOOK_SECRET', 'EMAIL_SNS_TOPIC_ARN']),
+    );
   });
 });

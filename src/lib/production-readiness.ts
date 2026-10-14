@@ -189,5 +189,23 @@ export function validateProductionReadiness(
     });
   }
 
+  const webhookSecret = environment.EMAIL_WEBHOOK_SECRET;
+  if (!webhookSecret || webhookSecret.length < 16 || PLACEHOLDER.test(webhookSecret)) {
+    issues.push({
+      key: 'EMAIL_WEBHOOK_SECRET',
+      message: 'must be a non-placeholder secret of at least 16 characters',
+    });
+  }
+  if (
+    !/^arn:aws:sns:ap-southeast-2:\d{12}:[A-Za-z0-9_-]+$/.test(
+      environment.EMAIL_SNS_TOPIC_ARN ?? '',
+    )
+  ) {
+    issues.push({
+      key: 'EMAIL_SNS_TOPIC_ARN',
+      message: 'must be an ap-southeast-2 SNS topic ARN',
+    });
+  }
+
   return issues;
 }
