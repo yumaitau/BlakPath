@@ -329,7 +329,7 @@ export async function finaliseDecision(
     resourceType: 'decision',
     resourceId: decisionId,
     result: 'success',
-    reason: input.note ?? null,
+    reason: input.note ? 'decision.finalise_note' : null,
     after: { data: { outcome: input.outcome }, allow: ['outcome'] },
   });
 

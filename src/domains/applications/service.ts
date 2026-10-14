@@ -22,6 +22,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -31,6 +32,7 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { applicationIntakeAuditMeta } from './audit-meta';
 import { applicationSearchMac } from '@/lib/encryption/blind-index';
 import {
   openApplicationRows,
@@ -94,6 +96,8 @@ export interface AppliedApplicationTransition {
   readonly from: ApplicationStatus;
   readonly to: ApplicationStatus;
   readonly note: string | null;
+  /** The status-history row holding `note`; the audit reason points at it. */
+  readonly statusHistoryId: string | null;
 }
 
 /** An application together with its active assignee ids (for read policy). */
@@ -237,7 +241,7 @@ export async function getApplication(id: string): Promise<ApplicationDetail> {
       resourceType: 'application',
       resourceId: id,
       result: 'denied',
-      reason: 'not readable by actor or not found',
+      reason: 'application.not_readable',
     });
     // Same error whether missing or forbidden — never reveal which.
     throw new AuthorizationError('POLICY_DENIED');
@@ -454,25 +458,31 @@ export async function updateIntake(
   const [row] = await openApplicationRows(scope.organisationId, [stored]);
   const opened = must(row, 'application');
 
+  const changed: string[] = [];
+  if (
+    input.applicantName !== undefined &&
+    input.applicantName !== existing.applicantName
+  ) {
+    changed.push('applicantName');
+  }
+  if (input.priority !== undefined && input.priority !== existing.priority) {
+    changed.push('priority');
+  }
+  if (input.intake !== undefined) changed.push('intake');
+
+  const intakeAudit = applicationIntakeAuditMeta({
+    beforePriority: existing.priority,
+    afterPriority: opened.priority,
+    changed,
+  });
+
   await recordAudit({
     action: 'application.updated',
     resourceType: 'application',
     resourceId: id,
     result: 'success',
-    before: {
-      data: {
-        nameUpdated: input.applicantName !== undefined,
-        priority: existing.priority,
-      },
-      allow: ['nameUpdated', 'priority'],
-    },
-    after: {
-      data: {
-        nameUpdated: input.applicantName !== undefined,
-        priority: opened.priority,
-      },
-      allow: ['nameUpdated', 'priority'],
-    },
+    before: intakeAudit.before,
+    after: intakeAudit.after,
   });
 
   return opened;
@@ -607,18 +617,22 @@ export async function applyApplicationTransition(
     );
   }
 
-  await executor.insert(applicationStatusHistory).values(
-    scope.insertValues({
-      applicationId: id,
-      fromStatus: from,
-      toStatus: to,
-      action,
-      actorUserId: ctx.userId,
-      note,
-    }),
-  );
+  const history = await executor
+    .insert(applicationStatusHistory)
+    .values(
+      scope.insertValues({
+        applicationId: id,
+        fromStatus: from,
+        toStatus: to,
+        action,
+        actorUserId: ctx.userId,
+        note,
+      }),
+    )
+    .returning({ id: applicationStatusHistory.id });
+  const statusHistoryId = history[0]?.id ?? null;
 
-  return { row: must(updated[0], 'application'), from, to, note };
+  return { row: must(updated[0], 'application'), from, to, note, statusHistoryId };
 }
 
 /** Audit a transition that has already committed. */
@@ -626,14 +640,28 @@ export async function recordApplicationTransitionAudit(
   action: ApplicationAction,
   applied: AppliedApplicationTransition,
 ): Promise<void> {
+  // The note text stays on application_status_history (mutable). The trail
+  // records the code and, when a note was written, that row's id.
+  const reason =
+    applied.note && applied.statusHistoryId
+      ? auditReason('application.transition_note', applied.statusHistoryId)
+      : null;
+
   await recordAudit({
     action: TRANSITIONS[action].audit,
     resourceType: 'application',
     resourceId: applied.row.id,
     result: 'success',
-    reason: applied.note,
+    reason,
     before: { data: { status: applied.from }, allow: ['status'] },
-    after: { data: { status: applied.to, action }, allow: ['status', 'action'] },
+    after: {
+      data: {
+        status: applied.to,
+        action,
+        ...(applied.statusHistoryId ? { statusHistoryId: applied.statusHistoryId } : {}),
+      },
+      allow: ['status', 'action', 'statusHistoryId'],
+    },
   });
 }
 

@@ -257,13 +257,17 @@ describe('escrow opt-in', () => {
       escrowConsentReference: 'ESCROW-2026-0007',
     });
     const { withdrawEscrow } = await import('@/domains/organisation-keys');
-    await withdrawEscrow(row.organisationId, optIn.recordedByUserId, 'client request');
+    await withdrawEscrow(
+      row.organisationId,
+      optIn.recordedByUserId,
+      'escrow.client_notice',
+    );
 
     expect(set).toHaveBeenCalledWith({ escrow: false, escrowPackageDigest: null });
     expect(recordPlatformAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'key.escrow_withdrawn',
-        reason: 'client request',
+        reason: 'escrow.client_notice',
         actorUserId: optIn.recordedByUserId,
       }),
     );

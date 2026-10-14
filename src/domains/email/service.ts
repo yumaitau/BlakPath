@@ -94,7 +94,7 @@ export async function clearSuppression(raw: {
   const input = clearSchema.parse(raw);
   const updated = await db
     .update(emailSuppressions)
-    .set({ clearedAt: new Date() })
+    .set({ clearedAt: new Date(), clearedReason: input.reason ?? null })
     .where(
       and(
         eq(emailSuppressions.addressHash, hashAddress(input.address)),
@@ -110,7 +110,8 @@ export async function clearSuppression(raw: {
       resourceId: row.id,
       result: 'success',
       actorUserId: input.actorUserId,
-      reason: input.reason ?? null,
+      // Free text stays on the suppression row; the trail records the code.
+      reason: input.reason ? 'email.suppression_note' : null,
     });
   }
   return { cleared: true };

@@ -376,7 +376,7 @@ export async function importMeetingsFromIcs(
       resourceType: 'meeting',
       resourceId: row.id,
       result: 'success',
-      reason: 'imported from .ics',
+      reason: 'meeting.imported',
       after: { data: { title: row.title }, allow: ['title'] },
     });
   }

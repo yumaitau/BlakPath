@@ -559,9 +559,12 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
     resourceType: 'certificate',
     resourceId: id,
     result: 'success',
-    reason: `sealed with ${seal.algorithm}`,
+    reason: 'certificate.sealed',
     before: { data: { status: 'draft' }, allow: ['status'] },
-    after: { data: { status: 'signed' }, allow: ['status'] },
+    after: {
+      data: { status: 'signed', algorithm: seal.algorithm },
+      allow: ['status', 'algorithm'],
+    },
   });
 
   await emitWebhookEventSafe({
@@ -628,7 +631,7 @@ export async function revokeCertificate(
     resourceType: 'certificate',
     resourceId: id,
     result: 'success',
-    reason: input.reason,
+    reason: 'certificate.revocation_reason',
   });
   return row;
 }
