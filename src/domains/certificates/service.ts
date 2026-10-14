@@ -15,15 +15,18 @@ import {
   applications,
   certificates,
   decisions,
+  meetings,
   organisations,
   organisationSettings,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
+  requireAll,
   requireAny,
   requirePermission,
   subjectFromContext,
@@ -33,6 +36,7 @@ import { env } from '@/lib/env';
 import { openApplicantName } from '@/lib/encryption/tenant-fields';
 import {
   EVIDENCE_BUCKET,
+  getObjectBytes,
   objectKey,
   presignDownload,
   putObjectBytes,
@@ -52,15 +56,20 @@ import {
 import { allowCertificateLookup, allowHolderCheck } from './verify-limit';
 import { renderCertificatePdf } from './render';
 import { loadSigningKey, recordSigningKey } from './signing-keys';
-import { CertificateConflictError } from './errors';
+import { CertificateConflictError, CertificateTemplateRequiredError } from './errors';
+import { loadCurrentCertificateTemplate } from './templates';
+import { supersededRevokeReason } from './template';
 import {
+  canReissue,
   canRevoke,
   canSign,
   caseDecidedForCertificate,
   eligibleDecision,
   isValid,
   makeCertificateReference,
+  toPublicCertificateView,
   type CertificateStatus,
+  type PublicCertificateView,
 } from './status';
 
 /**
@@ -151,6 +160,106 @@ async function loadCertificateClaim(
 }
 
 /**
+ * Render a draft PDF from the organisation's current template and store it
+ * under the tenant key. These are the bytes staff preview before anyone
+ * signs, and the bytes a version-2 seal binds by SHA-256.
+ */
+async function renderDraftPdf(input: {
+  certificateId: string;
+  applicantName: string;
+  reference: string;
+  verificationCode: string;
+  issuedOn: string;
+  meetingId: string | null;
+  finalisedAt: Date | null;
+}): Promise<{ key: string; sha256: string; templateId: string }> {
+  const scope = currentScope();
+  const template = await loadCurrentCertificateTemplate();
+  if (!template) throw new CertificateTemplateRequiredError();
+
+  const orgRows = await db
+    .select({
+      legalName: organisations.legalName,
+      tradingName: organisations.tradingName,
+      abn: organisations.abn,
+    })
+    .from(organisations)
+    .where(eq(organisations.id, scope.organisationId))
+    .limit(1);
+  const org = must(orgRows[0], 'organisation');
+
+  // Optional brand colour for the certificate heading (organisation-authored).
+  const settingsRows = await scope.db
+    .select({ branding: organisationSettings.branding })
+    .from(organisationSettings)
+    .where(eq(organisationSettings.organisationId, scope.organisationId))
+    .limit(1);
+  const brandColor =
+    (settingsRows[0]?.branding as { primaryColor?: string } | null)?.primaryColor ?? null;
+
+  let meetingOn: string | null = null;
+  if (input.meetingId) {
+    const meetingRows = await scope.db
+      .select({ scheduledStart: meetings.scheduledStart })
+      .from(meetings)
+      .where(
+        scope.where(
+          meetings.organisationId,
+          eq(meetings.id, input.meetingId),
+          isNull(meetings.deletedAt),
+        ),
+      )
+      .limit(1);
+    const start = meetingRows[0]?.scheduledStart;
+    meetingOn = start ? start.toISOString().slice(0, 10) : null;
+  }
+
+  let logoPng: Uint8Array | null = null;
+  let logoJpeg: Uint8Array | null = null;
+  if (template.logoObjectKey && template.logoContentType) {
+    const bytes = await getObjectBytes({
+      bucket: EVIDENCE_BUCKET,
+      key: template.logoObjectKey,
+      organisationId: scope.organisationId,
+    });
+    if (template.logoContentType === 'image/png') logoPng = bytes;
+    if (template.logoContentType === 'image/jpeg') logoJpeg = bytes;
+  }
+
+  const pdf = await renderCertificatePdf({
+    organisationName: org.tradingName ?? org.legalName,
+    abn: org.abn,
+    applicantName: input.applicantName,
+    reference: input.reference,
+    verificationCode: input.verificationCode,
+    issuedOn: input.issuedOn,
+    verifyUrl: `${env.APP_URL}/verify/${input.verificationCode}`,
+    brandColor,
+    wording: template.wording,
+    signatoryName: template.signatoryName,
+    signatoryRole: template.signatoryRole,
+    meetingOn,
+    resolutionOn: input.finalisedAt ? input.finalisedAt.toISOString().slice(0, 10) : null,
+    logoPng,
+    logoJpeg,
+  });
+  const key = objectKey(
+    scope.organisationId,
+    'certificates',
+    `${input.certificateId}.pdf`,
+  );
+  await putObjectBytes({
+    bucket: EVIDENCE_BUCKET,
+    key,
+    body: pdf,
+    contentType: 'application/pdf',
+    organisationId: scope.organisationId,
+  });
+  const sha256 = createHash('sha256').update(pdf).digest('hex');
+  return { key, sha256, templateId: template.id };
+}
+
+/**
  * Generate a draft certificate from a finalised, confirmed decision on a
  * decided case, rendering the PDF to tenant-namespaced storage. Requires
  * `certificate:generate`. One live certificate per decision.
@@ -232,48 +341,19 @@ export async function generateCertificate(
     dateOfBirth: dateOfBirthFromIntake(application.intake),
   });
 
-  const orgRows = await db
-    .select({
-      legalName: organisations.legalName,
-      tradingName: organisations.tradingName,
-    })
-    .from(organisations)
-    .where(eq(organisations.id, scope.organisationId))
-    .limit(1);
-  const org = must(orgRows[0], 'organisation');
-
-  // Optional brand colour for the certificate heading (organisation-authored).
-  const settingsRows = await scope.db
-    .select({ branding: organisationSettings.branding })
-    .from(organisationSettings)
-    .where(eq(organisationSettings.organisationId, scope.organisationId))
-    .limit(1);
-  const brandColor =
-    (settingsRows[0]?.branding as { primaryColor?: string } | null)?.primaryColor ?? null;
-
   const id = uuidv7();
   const now = new Date();
   const reference = makeCertificateReference(id, now.getUTCFullYear());
   const verificationCode = codeGen();
-  const key = objectKey(scope.organisationId, 'certificates', `${id}.pdf`);
-
-  const pdf = await renderCertificatePdf({
-    organisationName: org.tradingName ?? org.legalName,
+  const rendered = await renderDraftPdf({
+    certificateId: id,
     applicantName,
     reference,
     verificationCode,
     issuedOn: now.toISOString().slice(0, 10),
-    verifyUrl: `${env.APP_URL}/verify/${verificationCode}`,
-    brandColor,
+    meetingId: decision.meetingId,
+    finalisedAt: decision.finalisedAt,
   });
-  await putObjectBytes({
-    bucket: EVIDENCE_BUCKET,
-    key,
-    body: pdf,
-    contentType: 'application/pdf',
-    organisationId: scope.organisationId,
-  });
-  const sha256 = createHash('sha256').update(pdf).digest('hex');
 
   try {
     return await scope.db.transaction(async (tx) => {
@@ -284,11 +364,12 @@ export async function generateCertificate(
             id,
             applicationId: decision.applicationId,
             decisionId: decision.id,
+            templateId: rendered.templateId,
             reference,
             verificationCode,
             status: 'draft',
-            pdfObjectKey: key,
-            sha256,
+            pdfObjectKey: rendered.key,
+            sha256: rendered.sha256,
             holderBindingSalt: holder.salt,
             holderNameHash: holder.nameHash,
             holderDobHash: holder.dobHash,
@@ -304,8 +385,8 @@ export async function generateCertificate(
           resourceId: id,
           result: 'success',
           after: {
-            data: { reference, decisionId: decision.id },
-            allow: ['reference', 'decisionId'],
+            data: { reference, decisionId: decision.id, templateId: rendered.templateId },
+            allow: ['reference', 'decisionId', 'templateId'],
           },
         },
         tx,
@@ -590,6 +671,219 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
   return row;
 }
 
+/**
+ * Re-issue a signed certificate.
+ *
+ * Requires both `certificate:generate` and `certificate:revoke`; the calling
+ * route must also enforce step-up. In one transaction the old certificate is
+ * conditionally revoked (status and row version must still match) and a
+ * replacement draft is inserted, each row storing the other's id, so exactly
+ * one live certificate per decision exists at every commit. The new PDF uses
+ * the current applicant name and template; staff preview it before anyone
+ * signs. `certificate.revoked` fires only after the commit. The old seal
+ * stays verifiable and public `/verify` shows it as superseded.
+ */
+export async function reissueCertificate(id: string): Promise<CertificateRow> {
+  const ctx = requireTenantContext();
+  requireAll(subjectFromContext(ctx), ['certificate:generate', 'certificate:revoke']);
+
+  const loaded = await loadCertificateClaim(id);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const existing = loaded.row;
+  if (!canReissue(existing.status as CertificateStatus)) {
+    throw new AuthorizationError(
+      'POLICY_DENIED',
+      'Only a signed certificate can be re-issued.',
+    );
+  }
+
+  const scope = currentScope();
+  const decisionRows = await scope.db
+    .select()
+    .from(decisions)
+    .where(
+      scope.where(
+        decisions.organisationId,
+        eq(decisions.id, existing.decisionId),
+        isNull(decisions.deletedAt),
+      ),
+    )
+    .limit(1);
+  const decision = decisionRows[0];
+  if (!decision) throw new AuthorizationError('POLICY_DENIED');
+  if (
+    !eligibleDecision({ status: decision.status, finalOutcome: decision.finalOutcome })
+  ) {
+    throw new AuthorizationError(
+      'POLICY_DENIED',
+      'A certificate can only be generated from a finalised, confirmed decision.',
+    );
+  }
+
+  const appRows = await scope.db
+    .select({
+      applicantName: applications.applicantName,
+      intake: applications.intake,
+    })
+    .from(applications)
+    .where(
+      scope.where(
+        applications.organisationId,
+        eq(applications.id, existing.applicationId),
+        isNull(applications.deletedAt),
+      ),
+    )
+    .limit(1);
+  const application = appRows[0];
+  if (!application) throw new AuthorizationError('POLICY_DENIED');
+  const applicantName = await openApplicantName(
+    scope.organisationId,
+    existing.applicationId,
+    application.applicantName,
+  );
+  const holder = createHolderBinding({
+    name: applicantName,
+    dateOfBirth: dateOfBirthFromIntake(application.intake),
+  });
+
+  const newId = uuidv7();
+  const now = new Date();
+  const reference = makeCertificateReference(newId, now.getUTCFullYear());
+  const verificationCode = codeGen();
+  const rendered = await renderDraftPdf({
+    certificateId: newId,
+    applicantName,
+    reference,
+    verificationCode,
+    issuedOn: now.toISOString().slice(0, 10),
+    meetingId: decision.meetingId,
+    finalisedAt: decision.finalisedAt,
+  });
+
+  await beforeConditionalWrite();
+  let result: { revoked: CertificateRow; replacement: CertificateRow };
+  try {
+    result = await scope.db.transaction(async (tx) => {
+      // Revoke first: the live-per-decision index is checked per statement.
+      const updated = await tx
+        .update(certificates)
+        .set({
+          status: 'revoked',
+          revokedByUserId: ctx.userId,
+          revokedAt: now,
+          revokedReason: supersededRevokeReason(reference),
+          supersededByCertificateId: newId,
+          version: nextRowVersion(),
+        })
+        .where(
+          scope.where(
+            certificates.organisationId,
+            eq(certificates.id, existing.id),
+            eq(certificates.status, 'signed'),
+            isNull(certificates.deletedAt),
+            versionMatches(certificates.version, loaded.versionText),
+          ),
+        )
+        .returning();
+      if (updated.length === 0) {
+        throw new ConcurrencyConflictError(
+          'This certificate was already revoked or changed. Refresh and try again.',
+        );
+      }
+      const revoked = must(updated[0], 'certificate');
+
+      const inserted = await tx
+        .insert(certificates)
+        .values(
+          scope.insertValues({
+            id: newId,
+            applicationId: existing.applicationId,
+            decisionId: existing.decisionId,
+            templateId: rendered.templateId,
+            supersedesCertificateId: existing.id,
+            reference,
+            verificationCode,
+            status: 'draft',
+            pdfObjectKey: rendered.key,
+            sha256: rendered.sha256,
+            holderBindingSalt: holder.salt,
+            holderNameHash: holder.nameHash,
+            holderDobHash: holder.dobHash,
+          }),
+        )
+        .returning();
+      const replacement = must(inserted[0], 'certificate');
+
+      await recordAudit(
+        {
+          action: 'certificate.revoked',
+          resourceType: 'certificate',
+          resourceId: existing.id,
+          result: 'success',
+          reason: auditReason('certificate.superseded', newId),
+        },
+        tx,
+      );
+      await recordAudit(
+        {
+          action: 'certificate.generated',
+          resourceType: 'certificate',
+          resourceId: newId,
+          result: 'success',
+          after: {
+            data: {
+              reference,
+              decisionId: existing.decisionId,
+              templateId: rendered.templateId,
+              supersedes: existing.id,
+            },
+            allow: ['reference', 'decisionId', 'templateId', 'supersedes'],
+          },
+        },
+        tx,
+      );
+      await recordAudit(
+        {
+          action: 'certificate.reissued',
+          resourceType: 'certificate',
+          resourceId: existing.id,
+          result: 'success',
+          reason: auditReason('certificate.reissued', newId),
+          before: { data: { status: 'signed' }, allow: ['status'] },
+          after: {
+            data: { status: 'revoked', supersededBy: newId, newReference: reference },
+            allow: ['status', 'supersededBy', 'newReference'],
+          },
+        },
+        tx,
+      );
+      return { revoked, replacement };
+    });
+  } catch (error) {
+    const pg = postgresError(error);
+    if (pg.code === '23505' && pg.constraint === 'certificates_live_decision_unique') {
+      throw new CertificateConflictError();
+    }
+    throw error;
+  }
+
+  // The old credential is no longer valid. Fires only after the commit; ids
+  // and the timestamp only, never the stored reason.
+  await emitWebhookEventSafe({
+    organisationId: ctx.organisationId,
+    event: 'certificate.revoked',
+    payload: {
+      certificateId: existing.id,
+      reference: result.revoked.reference,
+      applicationId: result.revoked.applicationId,
+      revokedAt: result.revoked.revokedAt?.toISOString() ?? null,
+      supersededByCertificateId: newId,
+    },
+    correlationId: ctx.correlationId,
+  });
+  return result.replacement;
+}
+
 /** Revoke a signed certificate. Requires `certificate:revoke`. */
 export async function revokeCertificate(
   id: string,
@@ -665,6 +959,38 @@ export async function revokeCertificate(
     correlationId: ctx.correlationId,
   });
   return row;
+}
+
+/**
+ * Short-lived inline URL for a draft PDF, so staff can read the organisation's
+ * wording, logo and signatory before anyone signs. Signed certificates use
+ * {@link getDownloadUrl}.
+ */
+export async function getPreviewUrl(
+  id: string,
+): Promise<{ url: string; expiresIn: number }> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), CERTIFICATE_READ);
+
+  const row = await loadCertificate(id);
+  if (!row || row.status !== 'draft' || !row.pdfObjectKey) {
+    throw new AuthorizationError('POLICY_DENIED');
+  }
+
+  const signed = await presignDownload({
+    organisationId: ctx.organisationId,
+    key: row.pdfObjectKey,
+    fileName: `${row.reference}-preview.pdf`,
+    disposition: 'inline',
+  });
+  await recordAudit({
+    action: 'certificate.viewed',
+    resourceType: 'certificate',
+    resourceId: id,
+    result: 'success',
+    reason: 'certificate.draft_preview',
+  });
+  return signed;
 }
 
 /** Mint a short-lived download URL for a signed, non-revoked certificate. */
@@ -775,20 +1101,12 @@ export async function rebuildCanonicalPayload(
   });
 }
 
-/** Public, non-personal authenticity check by verification code. Unauthenticated. */
-export interface CertificateVerification {
-  valid: boolean;
-  reference: string;
-  organisationName: string;
-  status: CertificateStatus;
-  signedOn: string | null;
-  /** Cryptographic seal check: signature matches the recorded payload. */
-  signatureValid: boolean;
-  /** Stored payload hash still matches the rebuilt canonical bytes. */
-  payloadIntact: boolean;
-  /** Version 2 seals a holder-name hash. The name itself is not returned. */
-  holderBound: boolean;
-}
+/**
+ * Public, non-personal authenticity check by verification code. Unauthenticated.
+ * `status` is `superseded` when the certificate was revoked by re-issue.
+ * Applicant name, revoke reason and the replacement code are never included.
+ */
+export type CertificateVerification = PublicCertificateView;
 
 export interface CertificateLookupContext {
   ipAddress?: string | null;
@@ -818,6 +1136,7 @@ interface CertificateByCode {
   holderBindingSalt: string | null;
   holderNameHash: string | null;
   holderDobHash: string | null;
+  supersededByCertificateId: string | null;
 }
 
 async function findCertificateByCode(code: string): Promise<CertificateByCode | null> {
@@ -840,6 +1159,7 @@ async function findCertificateByCode(code: string): Promise<CertificateByCode | 
       holderBindingSalt: certificates.holderBindingSalt,
       holderNameHash: certificates.holderNameHash,
       holderDobHash: certificates.holderDobHash,
+      supersededByCertificateId: certificates.supersededByCertificateId,
     })
     .from(certificates)
     .where(and(eq(certificates.verificationCode, code), isNull(certificates.deletedAt)))
@@ -971,17 +1291,19 @@ export async function verifyCertificate(
 
   return {
     status: 'ok',
-    verification: {
-      // A revoked certificate keeps a valid seal but is NOT a valid credential.
+    verification: toPublicCertificateView({
+      // A revoked or superseded certificate keeps a valid seal but is NOT a
+      // valid credential.
       valid: statusValid && seal.payloadIntact && seal.signatureValid,
       reference: cert.reference,
       organisationName: org?.tradingName ?? org?.legalName ?? 'Unknown organisation',
       status: cert.status,
+      superseded: cert.status === 'revoked' && cert.supersededByCertificateId != null,
       signedOn: cert.signedAt ? cert.signedAt.toISOString().slice(0, 10) : null,
       signatureValid: seal.signatureValid,
       payloadIntact: seal.payloadIntact,
       holderBound: cert.payloadVersion === '2',
-    },
+    }),
   };
 }
 

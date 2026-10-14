@@ -63,6 +63,16 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
   expect(finalise.status()).toBe(200);
   // Finalising drives record_decision internally; the matter is now decided.
 
+  const template = await api.post('/api/settings/certificate-template', {
+    data: {
+      wording:
+        'This organisation has recorded a confirmation decision made by its authorised people for the person named on this certificate.',
+      signatoryName: 'E2E Signatory',
+      signatoryRole: 'Chair',
+    },
+  });
+  expect(template.ok()).toBeTruthy();
+
   const cert = (await (
     await api.post('/api/certificates', {
       data: { decisionId },

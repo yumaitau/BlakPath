@@ -359,6 +359,10 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   }),
   route('POST', '/api/certificates', anyOf(['certificate:generate'])),
   route('GET', '/api/certificates/[id]/download', anyOf(CERTIFICATE_READ)),
+  route('GET', '/api/certificates/[id]/preview', anyOf(CERTIFICATE_READ)),
+  // The service also requires `certificate:generate`; every system role that
+  // holds `certificate:revoke` holds it too.
+  route('POST', '/api/certificates/[id]/reissue', anyOf(['certificate:revoke'])),
   route('POST', '/api/certificates/[id]/revoke', anyOf(['certificate:revoke'])),
   route('POST', '/api/certificates/[id]/sign', anyOf(['certificate:sign'])),
   route('GET', '/api/correspondence/[id]/letter', anyOf(CORRESPONDENCE_CASE_READ)),
@@ -771,6 +775,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
   }),
   route('POST', '/api/settings/ai-features', anyOf(['tenant:configure'])),
+  route('GET', '/api/settings/certificate-template', anyOf(['tenant:configure']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('POST', '/api/settings/certificate-template', anyOf(['tenant:configure'])),
   route('GET', '/api/sso/providers', anyOf(['tenant:configure']), {
     allowRole: 'organisation-admin',
     allowProbe: true,

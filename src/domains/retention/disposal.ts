@@ -188,6 +188,8 @@ export const DISPOSAL_CLASS_BY_RESOURCE = {
   vote: 'governance_record',
   decision: 'official_outcome',
   certificate: 'official_outcome',
+  // Issued certificates keep a restrict FK to the version they were rendered from.
+  certificate_template: 'official_outcome',
   export: 'export_artifact',
   import: 'export_artifact',
   retention_policy: 'retention_control',

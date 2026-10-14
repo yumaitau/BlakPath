@@ -35,6 +35,9 @@ export default function SecuritySettingsPage() {
         <Button asChild variant="outline" size="sm">
           <Link href="/settings/correspondence">Letter templates</Link>
         </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/settings/certificate">Certificate template</Link>
+        </Button>
       </div>
       <div className="mt-8">
         <SecuritySettings />

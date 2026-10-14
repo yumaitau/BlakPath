@@ -63,9 +63,11 @@ export default async function VerifyCertificatePage({
         ? 'Verification unavailable'
         : result?.valid
           ? 'Valid certificate'
-          : result
-            ? 'This certificate is not valid'
-            : 'Certificate not found';
+          : result?.status === 'superseded'
+            ? 'This certificate has been superseded'
+            : result
+              ? 'This certificate is not valid'
+              : 'Certificate not found';
 
   return (
     <main
@@ -89,6 +91,12 @@ export default async function VerifyCertificatePage({
             </p>
           ) : result ? (
             <>
+              {result.status === 'superseded' ? (
+                <p className="text-muted-foreground mb-4 text-sm">
+                  This certificate was replaced and is no longer valid. The replacement is
+                  not identified here.
+                </p>
+              ) : null}
               <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
                 <dt className="text-muted-foreground">Reference</dt>
                 <dd className="font-medium">{result.reference}</dd>

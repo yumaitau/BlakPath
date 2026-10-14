@@ -237,23 +237,31 @@ export async function presignUpload(params: {
 }
 
 /**
- * Presign a short-lived GET from the EVIDENCE bucket. The response is forced to
- * download (`attachment`) so evidence is never rendered inline in a browser
- * tab, and the filename is sanitised to avoid header injection.
+ * Presign a short-lived GET from the EVIDENCE bucket. The default disposition
+ * is `attachment` so evidence is never rendered inline in a browser tab. A
+ * draft certificate preview may ask for `inline`. The filename is sanitised
+ * to avoid header injection.
  */
 export async function presignDownload(params: {
   organisationId: string;
   key: string;
   fileName: string;
+  /**
+   * `attachment` (default) forces a download. `inline` is only for a draft
+   * certificate preview the holder is about to read before signing.
+   */
+  disposition?: 'attachment' | 'inline';
 }): Promise<{ url: string; expiresIn: number }> {
   assertOwnedKey(params.organisationId, params.key);
   await requireActiveTenantKey(params.organisationId);
   const safeName =
     params.fileName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 200) || 'evidence';
+  const disposition = params.disposition ?? 'attachment';
   const command = new GetObjectCommand({
     Bucket: EVIDENCE_BUCKET,
     Key: params.key,
-    ResponseContentDisposition: `attachment; filename="${safeName}"`,
+    ResponseContentDisposition: `${disposition}; filename="${safeName}"`,
+    ...(disposition === 'inline' ? { ResponseContentType: 'application/pdf' } : {}),
   });
   const url = await getSignedUrl(s3, command, { expiresIn: PRESIGN_TTL_SECONDS });
   return { url, expiresIn: PRESIGN_TTL_SECONDS };
