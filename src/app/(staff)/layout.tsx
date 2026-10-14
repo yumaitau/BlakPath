@@ -2,13 +2,13 @@ import type { ReactNode } from 'react';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { StaffShell } from '@/components/staff/staff-shell';
-import { getServerSession } from '@/lib/auth/session';
 import {
   membershipRequiresStaffMfa,
   requireStaffMfa,
   STAFF_MFA_ENROL_PATH,
   StaffMfaRequiredError,
 } from '@/lib/auth/staff-policy';
+import { getServerSession } from '@/lib/auth/session';
 import {
   getActiveOrganisationId,
   listMembershipsForUser,

@@ -3,6 +3,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { hash as argon2Hash } from '@node-rs/argon2';
 import { uuidv7 } from 'uuidv7';
 import { db, sqlClient } from '@/db/client';
+import { decideDevSeed } from '@/db/seeds/dev-seed-policy';
 import { env } from '@/lib/env';
 import {
   accounts,
@@ -22,12 +23,13 @@ import { SYSTEM_ROLES, SYSTEM_ROLE_SEED } from '@/lib/permissions/roles';
  * Idempotent database seed.
  *
  * Seeds the two things the application cannot run without: the permission
- * catalogue and the system role templates (with their permission grants). In
- * non-production it also creates a bootstrap organisation and administrator so a
+ * catalogue and the system role templates (with their permission grants). Local
+ * development can also create a bootstrap organisation and administrator so a
  * developer can sign in and exercise the app end to end.
  *
- * SAFETY: the developer bootstrap is refused when NODE_ENV=production. Seeding
- * is idempotent — re-running never duplicates rows.
+ * SAFETY: developer accounts require ALLOW_DEV_SEED=1 and a loopback database
+ * host. NODE_ENV=production never creates them. Any other non-local host fails
+ * the process. Seeding is idempotent — re-running never duplicates rows.
  */
 
 const ARGON2_OPTIONS = {
@@ -119,13 +121,8 @@ async function ensureDevPasskey(userId: string): Promise<void> {
   });
 }
 
-/** Non-production only: a ready-to-use organisation + admin login. */
+/** Local opt-in only: a ready-to-use organisation + admin login. */
 async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void> {
-  if (env.NODE_ENV === 'production') {
-    console.info('[seed] production — skipping developer bootstrap');
-    return;
-  }
-
   const adminEmail = 'admin@blakpath.local';
   const devPassword = 'blakpath-dev-admin-2026';
   const staffEmail = 'staff@blakpath.local';
@@ -320,10 +317,23 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
 
 async function main(): Promise<void> {
   console.info('[seed] starting…');
+  const decision = decideDevSeed({
+    nodeEnv: env.NODE_ENV,
+    databaseUrl: env.DATABASE_URL,
+    allowDevSeed: env.ALLOW_DEV_SEED,
+  });
+  if (decision.action === 'refuse') {
+    throw new Error(`[seed] ${decision.reason}`);
+  }
+
   await seedPermissions();
   const roleIdBySlug = await seedRoles();
   await seedRolePermissions(roleIdBySlug);
-  await seedDevBootstrap(roleIdBySlug);
+  if (decision.action === 'create') {
+    await seedDevBootstrap(roleIdBySlug);
+  } else {
+    console.info(`[seed] skipping developer accounts: ${decision.reason}`);
+  }
   console.info('[seed] done');
 }
 

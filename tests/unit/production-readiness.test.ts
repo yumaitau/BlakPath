@@ -23,6 +23,19 @@ describe('production readiness configuration', () => {
     expect(validateProductionReadiness(valid)).toEqual([]);
   });
 
+  it('rejects a bootstrap token in production', () => {
+    const issues = validateProductionReadiness({
+      ...valid,
+      PILOT_BOOTSTRAP_TOKEN: 'a-retired-value-that-must-not-be-set-here',
+    });
+    expect(issues).toEqual([
+      {
+        key: 'PILOT_BOOTSTRAP_TOKEN',
+        message: 'must be unset in production',
+      },
+    ]);
+  });
+
   it('rejects local services, static object credentials and missing transport security', () => {
     const issues = validateProductionReadiness({
       ...valid,

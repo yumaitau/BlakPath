@@ -1,6 +1,7 @@
 # One-shot operational jobs. NOT in kustomization.yaml — apply manually:
 #   kubectl apply -f infra/k8s/jobs/migrate.yaml
 #   kubectl apply -f infra/k8s/jobs/seed.yaml
+#   kubectl apply -f infra/k8s/jobs/invite-admin.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:

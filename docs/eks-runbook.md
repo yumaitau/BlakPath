@@ -13,8 +13,15 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 4. Set image tags and host, apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
    after replacing `ACCOUNT_ID`, `TAG`, host, role ARNs, WAF ACL ARN.
 5. Run `pnpm release:check` inside the exact web and worker images before
-   promoting. It rejects static S3 credentials; SDK uses IRSA task role chain.
-6. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
+   promoting. It rejects static S3 credentials and `PILOT_BOOTSTRAP_TOKEN`.
+   SDK uses the IRSA task role chain. Do not put `PILOT_BOOTSTRAP_TOKEN` in
+   the runtime secret.
+6. Apply the migrate job, then the seed job, then
+   `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
+   The job emails an organisation-administrator invitation and does not create
+   a password. That person enrols a passkey or authenticator before the
+   organisation tools open.
+7. Verify `/api/ready` behind ALB, sign in, select org, confirm audit chain clean.
 
 ## Secrets and keys
 

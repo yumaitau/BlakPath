@@ -7,6 +7,8 @@ import {
   StepUpRequiredError,
   UnauthenticatedError,
 } from '@/lib/auth/session';
+import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy';
+import { env } from '@/lib/env';
 import { withTenant } from '@/lib/tenancy/with-tenant';
 import { TenantContextError, type TenantContext } from '@/lib/tenancy/context';
 import { logger } from '@/lib/observability/logger';
@@ -44,6 +46,9 @@ export async function withRequestTenant<T>(
   if (!activeOrganisationId) {
     throw new NoActiveOrganisationError();
   }
+  if (env.NODE_ENV === 'production') {
+    await requireStaffMfa(session.user.id);
+  }
 
   const h = await headers();
   return withTenant(
@@ -68,6 +73,9 @@ export async function withRequestTenant<T>(
 export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof UnauthenticatedError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (error instanceof StaffMfaRequiredError) {
+    return NextResponse.json({ error: 'MFA enrolment required' }, { status: 403 });
   }
   if (error instanceof StepUpRequiredError) {
     return NextResponse.json({ error: 'Re-authentication required' }, { status: 401 });

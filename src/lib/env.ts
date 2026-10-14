@@ -73,8 +73,11 @@ const serverSchema = z
     // Shared secret gating the SES SNS event webhook (bounce/complaint).
     // Unset locally; required in production where SES events are wired.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),
-    // One-time live-bootstrap token. Unset = bootstrap route disabled.
+    // Retired. Must be unset. A value fails production boot and the release gate.
     PILOT_BOOTSTRAP_TOKEN: z.string().min(32).optional(),
+    // Local seed opt-in. Developer accounts also require a loopback database host.
+    // Ignored when NODE_ENV=production.
+    ALLOW_DEV_SEED: z.string().optional(),
     // CoA cryptographic signing. Production uses a KMS asymmetric key
     // (SIGN_VERIFY) under the workload role. Local development and CI may use
     // a PEM private key instead — refused in production.
@@ -110,6 +113,13 @@ const serverSchema = z
         code: 'custom',
         path: ['S3_ACCESS_KEY_ID'],
         message: 'S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.PILOT_BOOTSTRAP_TOKEN) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PILOT_BOOTSTRAP_TOKEN'],
+        message: 'must be unset in production',
       });
     }
   });
