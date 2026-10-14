@@ -11,7 +11,10 @@ import { scopeFor } from '@/db/tenant-db';
 import { notifications, users } from '@/db/schema';
 import { sendEmail } from '@/lib/email/mailer';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
-import { verifyChain } from '@/domains/audit';
+import { createCheckpoint, verifyChain } from '@/domains/audit';
+import { settleAuditChain } from '@/domains/audit/anchor';
+import { createS3AuditAnchorStore } from '@/domains/audit/anchor-s3';
+import { loadAnchorSigner } from '@/domains/audit/anchor-sign';
 
 /**
  * Processor registry for the BlakPath background worker.
@@ -153,14 +156,24 @@ const notificationProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Audit-verify processor. Re-walks the tenant's audit chain and reports any
- * divergence as a structured error. A clean chain is a NORMAL result and must
- * not throw (throwing would trigger pointless retries and alarm noise).
+ * Audit-verify processor. Re-walks one chain and compares it to the signed
+ * heads stored outside the database. A clean chain is a NORMAL result and must
+ * not throw (throwing would trigger pointless retries and alarm noise). A
+ * store outage still throws so the anchor write can be retried.
  */
 const auditVerifyProcessor: ProcessorFn = async (job, logger) => {
-  const { organisationId, correlationId } = job.data;
+  const data = job.data as TenantJob & { platformChain?: boolean };
+  const platformChain = data.platformChain === true;
+  const organisationId = platformChain ? null : data.organisationId;
+  const { correlationId } = data;
   const result = await verifyChain(organisationId);
-  if (!result.ok && result.divergence) {
+  const outcome = await settleAuditChain({
+    organisationId,
+    chain: result,
+    store: createS3AuditAnchorStore(),
+    signer: loadAnchorSigner(),
+  });
+  if (outcome.status === 'divergence' || outcome.status === 'anchor_mismatch') {
     // Integrity failure is a serious, actionable signal — log it loudly, but do
     // not throw: the chain will not "heal" on retry.
     logger.error(
@@ -170,17 +183,26 @@ const auditVerifyProcessor: ProcessorFn = async (job, logger) => {
         jobId: job.id,
         organisationId,
         correlationId,
-        eventId: result.divergence.eventId,
-        index: result.divergence.index,
-        reason: result.divergence.reason,
+        eventId: result.divergence?.eventId ?? null,
+        index: result.divergence?.index ?? null,
+        reason: result.divergence?.reason ?? outcome.reason,
         eventCount: result.eventCount,
+        anchorDay: outcome.day,
       },
-      'audit chain verification FAILED — divergence detected',
+      'audit chain verification FAILED',
     );
     return;
   }
+  if (outcome.status === 'anchored') {
+    await createCheckpoint({ organisationId });
+  }
   logger.info(
-    { jobId: job.id, organisationId, eventCount: result.eventCount },
+    {
+      jobId: job.id,
+      organisationId,
+      eventCount: result.eventCount,
+      anchor: outcome.status,
+    },
     'audit chain verified clean',
   );
 };

@@ -53,6 +53,8 @@ prevHash(n) = hash(n-1)      // null for the first event in the chain
 - Chains are **per scope**: a per-tenant chain (`organisation_id` set) and a
   platform chain (`organisation_id` null). Appends serialise per chain so
   `prevHash` is well-defined.
+- `UNIQUE (organisation_id, prev_hash) NULLS NOT DISTINCT` allows one successor
+  per predecessor, including one genesis row (`prev_hash` null) per chain.
 
 ```mermaid
 flowchart LR
@@ -69,32 +71,54 @@ Editing event 2 changes H2, which breaks the `prevHash` link stored on event 3 �
 the mismatch pinpoints the tampering. Deleting a row breaks the count and the
 chain link at that point.
 
-## Integrity checkpoints & periodic verification
+## Integrity checkpoints & external anchors
 
-`audit_integrity_checkpoints` anchors a contiguous run of events:
+The hash above is an unkeyed digest. Recomputing it over a rewritten chain
+still matches the stored rows, and a checkpoint row in the same database can be
+rewritten with them. Two records are kept:
 
-- Fields: `organisationId` (null = platform chain), `periodStart`, `periodEnd`,
-  `eventCount`, `startHash`, `endHash`, and `verifiedAt` / `verifiedBy`.
-- **Verification** re-walks the chain from `startHash` to `endHash`, recomputes
-  each `hash`, confirms every `prevHash` links correctly, and checks
-  `eventCount`. If everything matches, no row was inserted, edited or removed in
-  that period.
-- A **worker job** runs verification periodically (`docs/architecture.md`),
-  recording `verifiedAt`/`verifiedBy` and raising an alert on any mismatch.
-  Authorised users can also trigger verification via `audit:verify`
-  (`docs/authorization-matrix.md`).
+- `audit_integrity_checkpoints` is an in-database note of a verified period
+  (`organisationId`, `periodStart`, `periodEnd`, `eventCount`, `startHash`,
+  `endHash`, `verifiedAt` / `verifiedBy`). It is useful to operators. It is not
+  the trust root.
+- Once a day the worker writes one **signed chain-head anchor** per chain
+  (each active organisation, plus the platform chain) to the
+  `S3_BUCKET_AUDIT_ANCHORS` bucket. The object is
+  `audit-anchors/{chainId}/{yyyy-mm-dd}.json`. It commits to the head hash, the
+  event count, and the hash of the previous anchor. Production puts use S3
+  Object Lock **compliance** retention and a KMS signature
+  (`AUDIT_ANCHOR_SIGNING_KEY_ID`). Local development signs with HMAC.
+
+**Verification** re-walks the chain and then requires every stored anchor's
+head to still be the hash at that event count. A shorter chain, or a chain
+whose hashes were recomputed, fails. The worker raises `audit_integrity_failure`
+and does not publish a replacement anchor. Authorised users can also trigger
+verification via `audit:verify` (`docs/authorization-matrix.md`).
+
+The first anchor is the baseline. Take it before the organisation records
+production decisions. Later anchors must stay monotonic and must link to the
+previous day's anchor.
 
 ## Append-only guarantee
 
 - **Application layer:** there is exactly one audit-write path (append). No
   service exposes UPDATE or DELETE for `audit_events`.
-- **Database layer:** the audit role's privileges are restricted to `INSERT` and
-  `SELECT` on `audit_events` and `audit_integrity_checkpoints`; UPDATE/DELETE are
-  not granted, and a trigger rejects any attempt as a further backstop.
+- **Roles:** `pnpm db:migrate` in production connects with
+  `DATABASE_MIGRATION_URL` (the owning role, default name `blakpath_migrator`).
+  The running app and worker connect with `DATABASE_URL` as `blakpath_app`.
+  That role is granted `SELECT` and `INSERT` on `audit_events` and
+  `audit_integrity_checkpoints`, and ordinary DML on other tables. The migrate
+  job reads the owner URL from the `blakpath-migrator` secret, not from the
+  runtime secret.
+- **Triggers:** `BEFORE UPDATE`, `BEFORE DELETE` and `BEFORE TRUNCATE` triggers
+  on both audit tables raise `42501`. They are `ENABLE ALWAYS`, so they also
+  fire for the table owner. A superuser can still disable a trigger; the
+  application role must not be that superuser, and must not own the tables.
 - **Retention:** audit records are retained per policy and are **not** subject to
   ordinary record-deletion, because deleting them would defeat their purpose
   (`docs/privacy-architecture.md`). Any lawful expiry happens by whole,
-  verified, archived periods — never by editing individual rows.
+  verified, archived periods — never by editing individual rows. The anchor
+  bucket's compliance retention is the outside copy of each day's head.
 
 ## Redaction rules
 

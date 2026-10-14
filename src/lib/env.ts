@@ -24,9 +24,16 @@ const serverSchema = z
     APP_URL: z.string().url().default('http://localhost:3000'),
     APP_REGION: z.string().default('ap-southeast-2'),
 
-    // Database
+    // Database. Runtime uses DATABASE_URL (application role). Migrations in
+    // production use DATABASE_MIGRATION_URL (owning role) and refuse to share
+    // the application role. Local development may omit the migration URL.
     DATABASE_URL: z.string().url(),
+    DATABASE_MIGRATION_URL: z.string().url().optional(),
     DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
+    AUDIT_DB_APP_ROLE: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/)
+      .default('blakpath_app'),
 
     // Redis (queues, rate limiting, ephemeral state)
     REDIS_URL: z.string().url(),
@@ -52,6 +59,16 @@ const serverSchema = z
     S3_KMS_KEY_ID: z.string().min(1).optional(),
     S3_BUCKET_EVIDENCE: z.string().default('blakpath-evidence'),
     S3_BUCKET_QUARANTINE: z.string().default('blakpath-quarantine'),
+    // Daily audit chain-head anchors. Production bucket has Object Lock
+    // compliance enabled; local MinIO may store them without a lock.
+    S3_BUCKET_AUDIT_ANCHORS: z.string().default('blakpath-audit-anchors'),
+    AUDIT_ANCHOR_OBJECT_LOCK: booleanish('false'),
+    AUDIT_ANCHOR_RETENTION_DAYS: z.coerce.number().int().min(1).default(2555),
+    // KMS asymmetric key (SIGN_VERIFY) for anchor signatures. Required in
+    // production by the release gate. Local HMAC falls back to
+    // AUDIT_ANCHOR_HMAC_KEY or the envelope master key.
+    AUDIT_ANCHOR_SIGNING_KEY_ID: z.string().min(1).optional(),
+    AUDIT_ANCHOR_HMAC_KEY: z.string().min(32).optional(),
     S3_FORCE_PATH_STYLE: booleanish('true'),
 
     // ClamAV

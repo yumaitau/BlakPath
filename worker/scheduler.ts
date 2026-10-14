@@ -18,11 +18,13 @@ import { getQueue, QueueName, type TenantJob } from '@/lib/queues';
 const SCHEDULER_PREFIX = 'bp:scheduled:';
 const PAGE_SIZE = 100;
 
+type ScheduledJobData = TenantJob & { platformChain?: boolean };
+
 type ScheduledQueue = {
   upsertJobScheduler(
     id: string,
     repeat: { every: number },
-    template: { name: string; data: TenantJob },
+    template: { name: string; data: ScheduledJobData },
   ): Promise<unknown>;
   getJobSchedulers(
     start?: number,
@@ -44,6 +46,8 @@ export interface ReconcileSchedulesInput {
   retentionQueue: ScheduledQueue;
   reminderQueue?: ScheduledQueue;
   intervals: SchedulerIntervals;
+  /** Also schedule the platform (null organisation) chain. */
+  includePlatformChain?: boolean;
 }
 
 export interface ReconcileSchedulesResult {
@@ -78,10 +82,14 @@ async function reconcileQueue(
   queueName: QueueName,
   organisationIds: readonly string[],
   every: number,
+  protectedIds: readonly string[] = [],
 ): Promise<number> {
-  const wanted = new Set(
-    organisationIds.map((organisationId) => tenantSchedulerId(queueName, organisationId)),
-  );
+  const wanted = new Set([
+    ...organisationIds.map((organisationId) =>
+      tenantSchedulerId(queueName, organisationId),
+    ),
+    ...protectedIds,
+  ]);
 
   await Promise.all(
     organisationIds.map((organisationId) => {
@@ -119,12 +127,28 @@ export async function reconcileTenantSchedules(
   input: ReconcileSchedulesInput,
 ): Promise<ReconcileSchedulesResult> {
   const organisationIds = [...new Set(input.organisationIds)].filter(Boolean);
+  const platformId = tenantSchedulerId(QueueName.AuditVerify, 'platform');
+  if (input.includePlatformChain) {
+    await input.auditQueue.upsertJobScheduler(
+      platformId,
+      { every: input.intervals.auditVerifyMs },
+      {
+        name: 'verify',
+        data: {
+          organisationId: 'platform',
+          correlationId: platformId,
+          platformChain: true,
+        },
+      },
+    );
+  }
   const [auditRemoved, retentionRemoved, reminderRemoved] = await Promise.all([
     reconcileQueue(
       input.auditQueue,
       QueueName.AuditVerify,
       organisationIds,
       input.intervals.auditVerifyMs,
+      input.includePlatformChain ? [platformId] : [],
     ),
     reconcileQueue(
       input.retentionQueue,
@@ -167,6 +191,7 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
       reminderSweepMs: env.REMINDER_SWEEP_INTERVAL_MS,
     },
+    includePlatformChain: true,
   });
 }
 

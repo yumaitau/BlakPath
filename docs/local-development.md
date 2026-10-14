@@ -74,6 +74,12 @@ pnpm db:seed        # seed permission catalogue, system roles, dev org/user
 and `DATABASE_URL` points at `localhost`, `127.0.0.1`, or `::1`. Copying
 `.env.example` sets the flag. A non-local database fails the command.
 
+Local `pnpm db:migrate` uses `DATABASE_URL`. Set `DATABASE_MIGRATION_URL` only
+when you want to exercise the separate owner role. After migrate, triggers
+reject `UPDATE`, `DELETE` and `TRUNCATE` on `audit_events` and
+`audit_integrity_checkpoints`, including for the table owner. A superuser can
+disable those triggers; the application role must not be able to.
+
 The non-production seed prints two synthetic test accounts. The administrator
 combines the operational roles needed to exercise every staff screen locally.
 The spare staff account starts with no organisation membership so the Playwright

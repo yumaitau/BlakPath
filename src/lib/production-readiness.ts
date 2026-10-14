@@ -1,3 +1,5 @@
+import { migrationRoleIssue } from '@/db/migration-url';
+
 /** Pure production configuration checks used by the executable release gate. */
 
 export interface ReadinessIssue {
@@ -72,6 +74,34 @@ export function validateProductionReadiness(
   ) {
     issues.push({ key: 'DATABASE_URL', message: 'must enforce TLS with sslmode' });
   }
+  const appRole = environment.AUDIT_DB_APP_ROLE || 'blakpath_app';
+  if (database && decodeURIComponent(database.username) !== appRole) {
+    issues.push({
+      key: 'DATABASE_URL',
+      message: 'must connect as the application role, not the migration owner',
+    });
+  }
+  const migration = addRequiredUrl(
+    issues,
+    environment,
+    'DATABASE_MIGRATION_URL',
+    'postgres:',
+  );
+  if (
+    migration &&
+    !['require', 'verify-ca', 'verify-full'].includes(
+      migration.searchParams.get('sslmode') ?? '',
+    )
+  ) {
+    issues.push({
+      key: 'DATABASE_MIGRATION_URL',
+      message: 'must enforce TLS with sslmode',
+    });
+  }
+  const roleIssue = migrationRoleIssue(environment);
+  if (roleIssue && environment.DATABASE_MIGRATION_URL) {
+    issues.push({ key: 'DATABASE_MIGRATION_URL', message: roleIssue });
+  }
   addRequiredUrl(issues, environment, 'REDIS_URL', 'rediss:');
 
   if (environment.S3_ENDPOINT) {
@@ -91,6 +121,28 @@ export function validateProductionReadiness(
     issues.push({
       key: 'S3_KMS_KEY_ID',
       message: 'must reference a customer-managed ap-southeast-2 KMS key',
+    });
+  }
+  if (!environment.S3_BUCKET_AUDIT_ANCHORS) {
+    issues.push({
+      key: 'S3_BUCKET_AUDIT_ANCHORS',
+      message: 'must name the object-lock audit anchor bucket',
+    });
+  }
+  if (environment.AUDIT_ANCHOR_OBJECT_LOCK !== 'true') {
+    issues.push({
+      key: 'AUDIT_ANCHOR_OBJECT_LOCK',
+      message: 'must be true so anchor puts use compliance retention',
+    });
+  }
+  if (
+    !/^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i.test(
+      environment.AUDIT_ANCHOR_SIGNING_KEY_ID ?? '',
+    )
+  ) {
+    issues.push({
+      key: 'AUDIT_ANCHOR_SIGNING_KEY_ID',
+      message: 'must reference a customer-managed ap-southeast-2 KMS signing key',
     });
   }
 

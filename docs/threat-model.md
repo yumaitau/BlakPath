@@ -14,15 +14,15 @@ threats (STRIDE), the mitigations, and our **fail-secure** stance.
 
 ## Assets
 
-| Asset                          | Why it matters                                         | Where it lives                                                  |
-| ------------------------------ | ------------------------------------------------------ | --------------------------------------------------------------- |
-| **Identity evidence**          | Uploaded documents proving identity; highly sensitive. | Object storage (evidence/quarantine buckets), `ap-southeast-2`. |
-| **Genealogy / ancestry**       | Family relationships and ancestry records.             | PostgreSQL (later-phase domain), tenant-scoped.                 |
-| **Determinations & decisions** | Human-recorded outcomes and their reasoning.           | PostgreSQL, tenant-scoped; recorded via audited actions.        |
-| **Certificates**               | Issued Confirmation certificates.                      | PostgreSQL + object storage; issue/revoke audited.              |
-| **Authentication secrets**     | Password hashes, TOTP secrets, recovery codes.         | `accounts`, `twoFactors` — hashed / envelope-encrypted.         |
-| **Audit trail**                | Tamper-evident record of who did what.                 | `audit_events` (append-only, hash-chained).                     |
-| **Tenant boundary metadata**   | `organisation_id` on every tenant row.                 | PostgreSQL.                                                     |
+| Asset                          | Why it matters                                         | Where it lives                                                                                       |
+| ------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Identity evidence**          | Uploaded documents proving identity; highly sensitive. | Object storage (evidence/quarantine buckets), `ap-southeast-2`.                                      |
+| **Genealogy / ancestry**       | Family relationships and ancestry records.             | PostgreSQL (later-phase domain), tenant-scoped.                                                      |
+| **Determinations & decisions** | Human-recorded outcomes and their reasoning.           | PostgreSQL, tenant-scoped; recorded via audited actions.                                             |
+| **Certificates**               | Issued Confirmation certificates.                      | PostgreSQL + object storage; issue/revoke audited.                                                   |
+| **Authentication secrets**     | Password hashes, TOTP secrets, recovery codes.         | `accounts`, `twoFactors` — hashed / envelope-encrypted.                                              |
+| **Audit trail**                | Tamper-evident record of who did what.                 | `audit_events` (append-only, hash-chained) plus daily signed heads in the object-lock anchor bucket. |
+| **Tenant boundary metadata**   | `organisation_id` on every tenant row.                 | PostgreSQL.                                                                                          |
 
 ## Trust boundaries
 
