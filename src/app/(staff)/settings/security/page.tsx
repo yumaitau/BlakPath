@@ -30,6 +30,12 @@ export default function SecuritySettingsPage() {
           <Link href="/settings/people">Manage people and access</Link>
         </Button>
         <Button asChild variant="outline" size="sm">
+          <Link href="/settings/encryption-keys">Encryption keys</Link>
+        </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/settings/correspondence">Letter templates</Link>
+        </Button>
+        <Button asChild variant="outline" size="sm">
           <Link href="/settings/certificate">Certificate template</Link>
         </Button>
       </div>

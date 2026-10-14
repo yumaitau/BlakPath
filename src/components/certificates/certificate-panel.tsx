@@ -2,8 +2,12 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
+import { withStepUp } from '@/lib/auth/step-up-flow';
 import { cn } from '@/lib/utils';
 
 /**
@@ -51,6 +55,8 @@ export function CertificatePanel({
   certificates: PanelCertificate[];
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,22 +76,20 @@ export function CertificatePanel({
     setBusy(key);
     setError(null);
     try {
-      const res = await fn();
+      const res = await withStepUp(fn, () => stepUp.request());
       if (res.status === 401) {
         const data: { code?: string } = await res.json().catch(() => ({}));
         setError(
           data.code === 'STEP_UP_REQUIRED'
-            ? 'For security, this action needs a recent sign-in. Sign out and back in, then try again within 10 minutes.'
+            ? 'Confirm it is you to continue. You stay signed in.'
             : 'Please sign in again.',
         );
         return;
       }
       if (!res.ok) {
-        const data: { error?: string } = await res.json().catch(() => ({}));
+        const conflict = await readConflictMessage(res);
         setError(
-          res.status === 409 && data.error
-            ? data.error
-            : 'That action could not be completed. Check your permissions.',
+          conflict ?? 'That action could not be completed. Check your permissions.',
         );
         return;
       }
@@ -107,7 +111,12 @@ export function CertificatePanel({
     );
 
   const sign = (id: string) =>
-    run(`sign:${id}`, () => fetch(`/api/certificates/${id}/sign`, { method: 'POST' }));
+    run(`sign:${id}`, () =>
+      fetch(`/api/certificates/${id}/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
 
   const reissue = (id: string) => {
     const ok = window.confirm(
@@ -133,6 +142,7 @@ export function CertificatePanel({
 
   return (
     <section aria-label="Certificates" className="flex flex-col gap-4">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <h2 className="text-lg font-semibold tracking-tight">Certificates</h2>
       <p className="text-muted-foreground text-sm">
         Drafts use the organisation&apos;s published wording, logo and signatory.{' '}
@@ -221,7 +231,7 @@ export function CertificatePanel({
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={busy !== null}
+                        disabled={!hydrated || busy !== null}
                         onClick={() => void reissue(c.id)}
                       >
                         {busy === `reissue:${c.id}` ? 'Re-issuing…' : 'Re-issue'}

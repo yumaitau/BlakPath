@@ -6,6 +6,7 @@ import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import { EVIDENCE_BUCKET, objectKey, putObjectBytes } from '@/lib/storage/s3';
 import { CertificateTemplateInputError } from './errors';
 import {
@@ -118,48 +119,90 @@ export async function publishCertificateTemplate(
       key: logoObjectKey,
       body: logo.bytes,
       contentType: logo.contentType,
+      organisationId: scope.organisationId,
     });
   }
 
-  const inserted = await scope.db
-    .insert(certificateTemplates)
-    .values(
-      scope.insertValues({
-        id,
-        templateVersion: plan.version,
-        wording: input.wording,
-        signatoryName: input.signatoryName,
-        signatoryRole: input.signatoryRole,
-        logoObjectKey,
-        logoContentType: logo.contentType,
-        logoSha256: logo.sha256,
-        contentHash,
-        createdByUserId: ctx.userId,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'certificate template');
+  let row: CertificateTemplateRow;
+  try {
+    row = await scope.db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(certificateTemplates)
+        .values(
+          scope.insertValues({
+            id,
+            templateVersion: plan.version,
+            wording: input.wording,
+            signatoryName: input.signatoryName,
+            signatoryRole: input.signatoryRole,
+            logoObjectKey,
+            logoContentType: logo.contentType,
+            logoSha256: logo.sha256,
+            contentHash,
+            createdByUserId: ctx.userId,
+          }),
+        )
+        .returning();
+      const created = must(inserted[0], 'certificate template');
 
-  await recordAudit({
-    action: 'certificate.template_published',
-    resourceType: 'certificate_template',
-    resourceId: row.id,
-    result: 'success',
-    ...(current
-      ? {
-          before: {
-            data: { version: current.templateVersion, contentHash: current.contentHash },
+      // Version and content hash only; the wording itself stays on the row.
+      await recordAudit(
+        {
+          action: 'certificate.template_published',
+          resourceType: 'certificate_template',
+          resourceId: created.id,
+          result: 'success',
+          ...(current
+            ? {
+                before: {
+                  data: {
+                    version: current.templateVersion,
+                    contentHash: current.contentHash,
+                  },
+                  allow: ['version', 'contentHash'],
+                },
+              }
+            : {}),
+          after: {
+            data: { version: created.templateVersion, contentHash: created.contentHash },
             allow: ['version', 'contentHash'],
           },
-        }
-      : {}),
-    after: {
-      data: { version: row.templateVersion, contentHash: row.contentHash },
-      allow: ['version', 'contentHash'],
-    },
-  });
+        },
+        tx,
+      );
+      return created;
+    });
+  } catch (error) {
+    // Two publishes raced for the same next version; the loser retries.
+    if (isUniqueViolation(error, 'certificate_templates_org_version_unique')) {
+      throw new ConcurrencyConflictError(
+        'The certificate template changed. Refresh and try again.',
+      );
+    }
+    throw error;
+  }
 
   return { template: toView(row), unchanged: false };
+}
+
+/** Walk `cause` for a Postgres unique violation on `constraint`. */
+function isUniqueViolation(error: unknown, constraint: string): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const row = current as {
+      code?: unknown;
+      constraint?: unknown;
+      constraint_name?: unknown;
+      cause?: unknown;
+    };
+    if (row.code === '23505') {
+      return row.constraint === constraint || row.constraint_name === constraint;
+    }
+    current = row.cause;
+  }
+  return false;
 }
 
 function resolveLogo(

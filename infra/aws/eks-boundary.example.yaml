@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  BlakPath secret sync and application mail. The External Secrets role can
+  read only /blakpath/production/* and only from the blakpath namespace.
+  The shared External Secrets role is denied that folder and the app-secrets
+  key. Mail send is ses:SendEmail for one From address on the web and
+  worker Pod Identity roles. workload-roles.example.yaml owns those roles and
+  their associations. This stack does not create an SMTP user or an access key.
+
+Parameters:
+  AppSecretsKeyArn:
+    Type: String
+    Description: CMK for /blakpath/production/* (alias/blakpath-app-secrets).
+    AllowedPattern: '^arn:aws:kms:ap-southeast-2:\d{12}:key/[0-9a-fA-F-]+$'
+  PlatformEsoRoleName:
+    Type: String
+    Description: Shared External Secrets role. Never a BlakPath role.
+    AllowedPattern: '^[A-Za-z0-9+=,.@_-]+$'
+  WebRoleName:
+    Type: String
+    Default: blakpath-web
+    Description: Pod Identity role for service account blakpath-web.
+  WorkerRoleName:
+    Type: String
+    Default: blakpath-worker
+    Description: Pod Identity role for service account blakpath-worker.
+  MailFromDomain:
+    Type: String
+    Default: blakpath.yumait.au
+  MailFromAddress:
+    Type: String
+    Default: no-reply@blakpath.yumait.au
+
+Rules:
+  DenyStaysOffBlakPathRoles:
+    Assertions:
+      - Assert:
+          Fn::Not:
+            - Fn::Equals:
+                - !Ref PlatformEsoRoleName
+                - blakpath-external-secrets
+        AssertDescription: Do not attach the deny policy to blakpath-external-secrets.
+      - Assert:
+          Fn::Not:
+            - Fn::Equals:
+                - !Ref PlatformEsoRoleName
+                - !Ref WebRoleName
+        AssertDescription: Do not attach the deny policy to the web role.
+      - Assert:
+          Fn::Not:
+            - Fn::Equals:
+                - !Ref PlatformEsoRoleName
+                - !Ref WorkerRoleName
+        AssertDescription: Do not attach the deny policy to the worker role.
+
+Resources:
+  ExternalSecretsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-external-secrets
+      Description: Reads /blakpath/production/* for the blakpath namespace only.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBlakPathExternalSecretsServiceAccount
+            Effect: Allow
+            Principal:
+              # Replace OIDC_ID with the cluster issuer id before deploy.
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.eks.ap-southeast-2.amazonaws.com/id/OIDC_ID
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'oidc.eks.ap-southeast-2.amazonaws.com/id/OIDC_ID:sub': system:serviceaccount:blakpath:blakpath-external-secrets
+                'oidc.eks.ap-southeast-2.amazonaws.com/id/OIDC_ID:aud': sts.amazonaws.com
+      Policies:
+        - PolicyName: ReadBlakPathProductionSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadBlakPathProductionFolder
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:ListSecretVersionIds
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/blakpath/production/*
+              - Sid: DecryptAppSecretsKey
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref AppSecretsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
+
+  PlatformEsoBlakPathDeny:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: BlakPathSecretSyncDeny
+      Roles:
+        - !Ref PlatformEsoRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyPlatformEsoBlakPathSecrets
+            Effect: Deny
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+              - secretsmanager:GetResourcePolicy
+              - secretsmanager:ListSecretVersionIds
+            Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/blakpath/production/*
+          - Sid: DenyPlatformEsoAppSecretsKey
+            Effect: Deny
+            Action: kms:Decrypt
+            Resource: !Ref AppSecretsKeyArn
+
+  WorkloadMailSend:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: BlakPathSesSend
+      Roles:
+        - !Ref WebRoleName
+        - !Ref WorkerRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SendFromApplicationIdentity
+            Effect: Allow
+            Action: ses:SendEmail
+            Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${MailFromDomain}
+            Condition:
+              StringEquals:
+                ses:FromAddress: !Ref MailFromAddress
+
+Outputs:
+  ExternalSecretsRoleArn:
+    Value: !GetAtt ExternalSecretsRole.Arn

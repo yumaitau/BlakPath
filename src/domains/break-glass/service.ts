@@ -2,6 +2,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { breakGlassRequests } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -71,34 +72,42 @@ export async function requestBreakGlass(params: {
   const input = requestBreakGlassSchema.parse(params.input);
   const expiresAt = new Date(Date.now() + input.expiresInMinutes * 60 * 1000);
 
-  const inserted = await db
-    .insert(breakGlassRequests)
-    .values({
-      organisationId: input.organisationId,
-      supportCaseRef: input.supportCaseRef,
-      requestedByUserId: params.requestedByUserId,
-      purpose: input.purpose,
-      scope: input.scope,
-      status: 'requested',
-      stepUpVerified: true,
-      expiresAt,
-    })
-    .returning();
-  const row = must(inserted[0], 'break-glass request');
+  return db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(breakGlassRequests)
+      .values({
+        organisationId: input.organisationId,
+        supportCaseRef: input.supportCaseRef,
+        requestedByUserId: params.requestedByUserId,
+        purpose: input.purpose,
+        scope: input.scope,
+        status: 'requested',
+        stepUpVerified: true,
+        expiresAt,
+      })
+      .returning();
+    const row = must(inserted[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.requested',
-    resourceType: 'break_glass_request',
-    resourceId: row.id,
-    result: 'success',
-    organisationId: input.organisationId,
-    actorUserId: params.requestedByUserId,
-    actingRole: 'platform-operator',
-    sessionId: null,
-    correlationId: params.correlationId,
-    after: { data: { supportCaseRef: input.supportCaseRef }, allow: ['supportCaseRef'] },
+    await recordAudit(
+      {
+        action: 'break_glass.requested',
+        resourceType: 'break_glass_request',
+        resourceId: row.id,
+        result: 'success',
+        organisationId: input.organisationId,
+        actorUserId: params.requestedByUserId,
+        actingRole: 'platform-operator',
+        sessionId: null,
+        correlationId: params.correlationId,
+        after: {
+          data: { supportCaseRef: input.supportCaseRef },
+          allow: ['supportCaseRef'],
+        },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function activateBreakGlass(params: {
@@ -122,30 +131,35 @@ export async function activateBreakGlass(params: {
   }
 
   const now = new Date();
-  const updated = await db
-    .update(breakGlassRequests)
-    .set({ status: 'active', activatedAt: now, tenantNotifiedAt: now })
-    .where(eq(breakGlassRequests.id, params.requestId))
-    .returning();
-  const row = must(updated[0], 'break-glass request');
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'active', activatedAt: now, tenantNotifiedAt: now })
+      .where(eq(breakGlassRequests.id, params.requestId))
+      .returning();
+    const row = must(updated[0], 'break-glass request');
 
-  for (const action of [
-    'break_glass.activated',
-    'break_glass.tenant_notified',
-  ] as const) {
-    await recordAudit({
-      action,
-      resourceType: 'break_glass_request',
-      resourceId: row.id,
-      result: 'success',
-      organisationId: row.organisationId,
-      actorUserId: params.activatingUserId,
-      actingRole: 'platform-operator',
-      sessionId: null,
-      correlationId: params.correlationId,
-    });
-  }
-  return row;
+    for (const action of [
+      'break_glass.activated',
+      'break_glass.tenant_notified',
+    ] as const) {
+      await recordAudit(
+        {
+          action,
+          resourceType: 'break_glass_request',
+          resourceId: row.id,
+          result: 'success',
+          organisationId: row.organisationId,
+          actorUserId: params.activatingUserId,
+          actingRole: 'platform-operator',
+          sessionId: null,
+          correlationId: params.correlationId,
+        },
+        tx,
+      );
+    }
+    return row;
+  });
 }
 
 /* --------------------------------------------------------------------------
@@ -175,25 +189,30 @@ export async function approveBreakGlass(requestId: string): Promise<BreakGlassRo
   assertDifferentActor(ctx.userId, request.requestedByUserId);
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(breakGlassRequests)
-    .set({ status: 'approved', approvedByUserId: ctx.userId })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.id, requestId),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'break-glass request');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'approved', approvedByUserId: ctx.userId })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.id, requestId),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.approved',
-    resourceType: 'break_glass_request',
-    resourceId: requestId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'break_glass.approved',
+        resourceType: 'break_glass_request',
+        resourceId: requestId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function denyBreakGlass(
@@ -211,26 +230,31 @@ export async function denyBreakGlass(
   }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(breakGlassRequests)
-    .set({ status: 'denied' })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.id, requestId),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'break-glass request');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'denied', denialReason: input.reason })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.id, requestId),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.denied',
-    resourceType: 'break_glass_request',
-    resourceId: requestId,
-    result: 'success',
-    reason: input.reason,
+    await recordAudit(
+      {
+        action: 'break_glass.denied',
+        resourceType: 'break_glass_request',
+        resourceId: requestId,
+        result: 'success',
+        reason: auditReason('break_glass.denied', requestId),
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function revokeBreakGlass(requestId: string): Promise<BreakGlassRow> {
@@ -244,25 +268,30 @@ export async function revokeBreakGlass(requestId: string): Promise<BreakGlassRow
   }
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(breakGlassRequests)
-    .set({ status: 'revoked', revokedAt: new Date() })
-    .where(
-      scope.where(
-        breakGlassRequests.organisationId,
-        eq(breakGlassRequests.id, requestId),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'break-glass request');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(breakGlassRequests)
+      .set({ status: 'revoked', revokedAt: new Date() })
+      .where(
+        scope.where(
+          breakGlassRequests.organisationId,
+          eq(breakGlassRequests.id, requestId),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'break-glass request');
 
-  await recordAudit({
-    action: 'break_glass.revoked',
-    resourceType: 'break_glass_request',
-    resourceId: requestId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'break_glass.revoked',
+        resourceType: 'break_glass_request',
+        resourceId: requestId,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listBreakGlassRequests(): Promise<BreakGlassRow[]> {

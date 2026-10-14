@@ -27,8 +27,13 @@ const PUNCTUATION: Readonly<Record<string, string>> = {
   '\u00A0': ' ',
 };
 
-/** WinAnsi-safe text: ASCII plus Latin-1, after curly punctuation is flattened. */
-const PRINTABLE = /^[\n\u0020-\u007E\u00A0-\u00FF]*$/;
+/**
+ * Text the certificate's Noto Sans subset can draw: Latin, Latin-1, Latin
+ * Extended (e.g. ŋ, ā), combining diacritics and Latin Extended Additional,
+ * after curly punctuation is flattened. Control characters other than a
+ * newline are rejected.
+ */
+const PRINTABLE = /^[\n\u0020-\u007E\u00A0-\u024F\u0300-\u036F\u1E00-\u1EFF]*$/u;
 
 /** Flatten curly quotes and dashes so the certificate font can encode the text. */
 export function normalizeCertificateText(value: string): string {

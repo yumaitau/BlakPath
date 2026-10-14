@@ -4,6 +4,7 @@ import {
   canReissue,
   canRevoke,
   canSign,
+  caseDecidedForCertificate,
   eligibleDecision,
   isValid,
   isWellFormedVerificationCode,
@@ -29,6 +30,13 @@ describe('certificate eligibility (human decision only)', () => {
       false,
     );
     expect(eligibleDecision({ status: 'finalised', finalOutcome: null })).toBe(false);
+  });
+
+  it('requires the case itself to be decided', () => {
+    expect(caseDecidedForCertificate('decided')).toBe(true);
+    for (const status of ['in_review', 'ready_for_committee', 'in_committee', 'closed']) {
+      expect(caseDecidedForCertificate(status)).toBe(false);
+    }
   });
 });
 

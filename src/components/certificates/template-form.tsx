@@ -7,6 +7,7 @@ import { Alert } from '@/components/ui/alert';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /**
  * Publish the organisation's certificate template.
@@ -40,6 +41,7 @@ export function CertificateTemplateForm({
   initial: TemplateFormInitial | null;
 }) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [wording, setWording] = useState(initial?.wording ?? '');
   const [signatoryName, setSignatoryName] = useState(initial?.signatoryName ?? '');
   const [signatoryRole, setSignatoryRole] = useState(initial?.signatoryRole ?? '');
@@ -183,7 +185,7 @@ export function CertificateTemplateForm({
       ) : null}
 
       <div>
-        <Button type="submit" disabled={busy}>
+        <Button type="submit" disabled={!hydrated || busy}>
           {busy ? 'Publishing…' : 'Publish template'}
         </Button>
       </div>

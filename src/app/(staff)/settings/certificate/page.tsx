@@ -5,6 +5,7 @@ import {
   type TemplateFormInitial,
 } from '@/components/certificates/template-form';
 import { getCertificateTemplate } from '@/domains/certificates';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 
 export const metadata: Metadata = {
@@ -29,7 +30,9 @@ export default async function CertificateTemplatePage() {
           hasLogo: template.hasLogo,
         }
       : null;
-  } catch {
+  } catch (error) {
+    // Session and organisation failures redirect; outages reach error.tsx.
+    await handlePageError(error);
     denied = true;
   }
 

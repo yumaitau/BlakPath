@@ -1,4 +1,6 @@
-import { inflateSync } from 'node:zlib';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it } from 'vitest';
 import { renderCertificatePdf } from '@/domains/certificates/render';
 import { publishCertificateTemplateSchema } from '@/domains/certificates/schemas';
@@ -18,6 +20,11 @@ import {
   templateContentHash,
   wrapCertificateLines,
 } from '@/domains/certificates/template';
+
+const require = createRequire(import.meta.url);
+GlobalWorkerOptions.workerSrc = pathToFileURL(
+  require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'),
+).href;
 
 const ONE_PX_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -63,7 +70,10 @@ describe('certificate template versioning', () => {
   it('normalises curly punctuation and rejects text the font cannot print', () => {
     expect(normalizeCertificateText('“Hello” — it’s fine')).toBe('"Hello" - it\'s fine');
     expect(isCertificatePrintable('Plain text, with (notes).')).toBe(true);
-    expect(isCertificatePrintable('Name with macron \u0101')).toBe(false);
+    // Noto Sans covers Latin Extended, so names such as Yolŋu print.
+    expect(isCertificatePrintable('Name with macron \u0101 and eng \u014B')).toBe(true);
+    expect(isCertificatePrintable('Emoji \u{1F600}')).toBe(false);
+    expect(isCertificatePrintable('Tab\there')).toBe(false);
   });
 
   it('accepts organisation wording and signatory, and rejects a short body', () => {
@@ -125,12 +135,14 @@ describe('public verification of a superseded certificate', () => {
       signedOn: '2026-10-13',
       signatureValid: true,
       payloadIntact: true,
+      holderBound: true,
     });
     expect(view.status).toBe('superseded');
     expect(view.valid).toBe(false);
     expect(publicCertificateStatus('revoked', false)).toBe('revoked');
     expect(publicCertificateStatus('signed', false)).toBe('signed');
     expect(Object.keys(view).sort()).toEqual([
+      'holderBound',
       'organisationName',
       'payloadIntact',
       'reference',
@@ -166,51 +178,56 @@ describe('certificate PDF', () => {
       resolutionOn: '2026-10-02',
       logoPng: ONE_PX_PNG,
     });
-    const text = decodePdfLiterals(inflatePdf(pdf));
+    const text = await pdfText(pdf);
     expect(text).toContain('Example Organisation');
     expect(text).toContain('ABN 51 824 753 556');
     expect(text).toContain('The committee recorded this confirmation in its own words.');
+    expect(text).not.toContain('This certifies that the organisation named above');
     expect(text).toContain('Pat Example');
     expect(text).toContain('Ada Brown');
     expect(text).toContain('Chairperson');
     expect(text).toContain('2026-10-01');
     expect(text).toContain('2026-10-02');
     expect(text).toContain('CERT-2026-ABCD1234');
-    expect(text).toContain('/Subtype /Image');
     expect(text).toContain('machine determination');
+    expect(pdf.toString('latin1')).toContain('/Subtype /Image');
+  });
+
+  it('fits the longest allowed wording on one page', async () => {
+    const wording = 'Recorded by the committee in its own words. '
+      .repeat(27)
+      .slice(0, 1200);
+    const pdf = await renderCertificatePdf({
+      organisationName: 'Example Organisation',
+      abn: '51824753556',
+      applicantName: 'P'.repeat(120),
+      reference: 'CERT-2026-ABCD1234',
+      verificationCode: 'a'.repeat(32),
+      issuedOn: '2026-10-13',
+      verifyUrl: 'https://example.test/verify/aaaaaaaa',
+      wording,
+      signatoryName: 'Ada Brown',
+      signatoryRole: 'Chairperson',
+      meetingOn: '2026-10-01',
+      resolutionOn: '2026-10-02',
+      logoPng: ONE_PX_PNG,
+    });
+    expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
 });
 
-/** pdf-lib flate-compresses page content. Inflate each stream so text is searchable. */
-function inflatePdf(pdf: Buffer): string {
-  const parts = [pdf.toString('latin1')];
-  let offset = 0;
-  while (offset < pdf.length) {
-    const start = pdf.indexOf('stream', offset);
-    if (start < 0) break;
-    let dataStart = start + 'stream'.length;
-    if (pdf[dataStart] === 0x0d) dataStart += 1;
-    if (pdf[dataStart] === 0x0a) dataStart += 1;
-    const end = pdf.indexOf('endstream', dataStart);
-    if (end < 0) break;
-    let dataEnd = end;
-    if (pdf[dataEnd - 1] === 0x0a) dataEnd -= 1;
-    if (pdf[dataEnd - 1] === 0x0d) dataEnd -= 1;
-    try {
-      parts.push(inflateSync(pdf.subarray(dataStart, dataEnd)).toString('latin1'));
-    } catch {
-      // Not a flate stream.
-    }
-    offset = end + 'endstream'.length;
-  }
-  return parts.join('\n');
-}
-
-/** pdf-lib writes WinAnsi text as hex string literals (`<4578…>`). */
-function decodePdfLiterals(text: string): string {
-  return text.replace(/<([0-9A-Fa-f\s]+)>/g, (literal, hex: string) => {
-    const clean = hex.replace(/\s+/g, '');
-    if (clean.length < 4 || clean.length % 2 !== 0) return literal;
-    return Buffer.from(clean, 'hex').toString('latin1');
-  });
+async function pdfText(pdf: Buffer): Promise<string> {
+  const doc = await getDocument({
+    data: new Uint8Array(pdf),
+    disableFontFace: true,
+    isEvalSupported: false,
+    useSystemFonts: false,
+    verbosity: 0,
+  }).promise;
+  const page = await doc.getPage(1);
+  const content = await page.getTextContent();
+  return content.items
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ')
+    .replace(/\s+/g, ' ');
 }

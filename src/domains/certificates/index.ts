@@ -8,13 +8,21 @@
  *   - `templates` — publish / read the organisation template (audited).
  *   - `service` — tenant-scoped, permission-checked, audited generate/sign/
  *     revoke/reissue/preview/download + the public `verifyCertificate`.
+ *   - `signing-keys` — stored public halves of seal keys (offline verify).
  */
+export {
+  CertificateConflictError,
+  CertificateTemplateInputError,
+  CertificateTemplateRequiredError,
+} from './errors';
+
 export {
   CERTIFICATE_STATUSES,
   PUBLIC_CERTIFICATE_STATUSES,
   canReissue,
   canRevoke,
   canSign,
+  caseDecidedForCertificate,
   eligibleDecision,
   isValid,
   isWellFormedVerificationCode,
@@ -28,18 +36,15 @@ export {
 } from './status';
 
 export {
+  checkCertificateHolderSchema,
   generateCertificateSchema,
   publishCertificateTemplateSchema,
   revokeCertificateSchema,
+  type CheckCertificateHolderInput,
   type GenerateCertificateInput,
   type PublishCertificateTemplateInput,
   type RevokeCertificateInput,
 } from './schemas';
-
-export {
-  CertificateTemplateInputError,
-  CertificateTemplateRequiredError,
-} from './errors';
 
 export {
   DEFAULT_CERTIFICATE_WORDING,
@@ -54,22 +59,34 @@ export {
 } from './template';
 
 export {
+  canonicalCoaPayload,
+  canonicalCoaPayloadV2,
+  canonicalPayloadForVersion,
+  checkCertificateHolder,
+  generateCertificate,
+  getDownloadUrl,
+  getPreviewUrl,
+  listCertificates,
+  rebuildCanonicalPayload,
+  reissueCertificate,
+  revokeCertificate,
+  signCertificate,
+  verifyCertificate,
+  type CertificateLookup,
+  type CertificateLookupContext,
+  type CertificateRow,
+  type CertificateVerification,
+  type CoaCanonicalPayload,
+  type CoaCanonicalPayloadV2,
+  type HolderCheckStatus,
+} from './service';
+
+// After `service`: it loads the applications domain before storage, which
+// keeps parallel dynamic imports of this barrel from deadlocking.
+export {
   getCertificateTemplate,
   publishCertificateTemplate,
   type CertificateTemplateView,
 } from './templates';
 
-export {
-  canonicalCoaPayload,
-  generateCertificate,
-  getDownloadUrl,
-  getPreviewUrl,
-  listCertificates,
-  reissueCertificate,
-  revokeCertificate,
-  signCertificate,
-  verifyCertificate,
-  type CertificateRow,
-  type CertificateVerification,
-  type CoaCanonicalPayload,
-} from './service';
+export { loadSigningKey, recordSigningKey } from './signing-keys';

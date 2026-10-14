@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 
 /**
  * Publish / close controls for a form.
@@ -32,7 +33,10 @@ export function FormStatusControls({
         body: JSON.stringify({ status: next }),
       });
       if (!res.ok) {
-        setError('Could not update the form status. Please try again.');
+        setError(
+          (await readConflictMessage(res)) ??
+            'Could not update the form status. Please try again.',
+        );
         return;
       }
       router.refresh();

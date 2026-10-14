@@ -1,5 +1,14 @@
-import { and, desc, eq, exists, isNull, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, exists, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
+import type { Database } from '@/db/client';
+import {
+  beforeConditionalWrite,
+  nextRowVersion,
+  takeVersionText,
+  versionedSelection,
+  versionMatches,
+} from '@/lib/concurrency/claim';
+import { ConcurrencyConflictError } from '@/lib/concurrency/error';
 import {
   applications,
   applicationAssignments,
@@ -13,6 +22,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import {
@@ -22,6 +32,14 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { applicationIntakeAuditMeta } from './audit-meta';
+import { applicationSearchMac } from '@/lib/encryption/blind-index';
+import {
+  openApplicationRows,
+  openNoteRows,
+  sealApplicationFields,
+  sealNoteBody,
+} from '@/lib/encryption/tenant-fields';
 import { canReadApplication, readsAllApplications } from './policies';
 import {
   addNoteSchema,
@@ -68,6 +86,20 @@ export type ApplicationStatusHistoryRow = typeof applicationStatusHistory.$infer
 /** Columns that may be patched on an application update. */
 type ApplicationPatch = Partial<typeof applications.$inferInsert>;
 
+/** The transaction handle drizzle passes to a `db.transaction(...)` callback. */
+type DbTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+type DbExecutor = Database | DbTransaction;
+
+/** A workflow write applied on a caller-supplied executor, before its audit. */
+export interface AppliedApplicationTransition {
+  readonly row: ApplicationRow;
+  readonly from: ApplicationStatus;
+  readonly to: ApplicationStatus;
+  readonly note: string | null;
+  /** The status-history row holding `note`; the audit reason points at it. */
+  readonly statusHistoryId: string | null;
+}
+
 /** An application together with its active assignee ids (for read policy). */
 export interface ApplicationDetail {
   readonly application: ApplicationRow;
@@ -98,7 +130,7 @@ function must<T>(row: T | undefined, what: string): T {
 /** Build a human-friendly per-organisation reference from a fresh id. */
 function makeReference(id: string): string {
   // Year is presentational only; uniqueness is guaranteed by the id tail and
-  // the (organisation_id, reference) unique index.
+  // the (organisation_id, reference_bidx) unique index.
   const year = new Date().getUTCFullYear();
   const tail = id.replace(/-/g, '').slice(-6).toUpperCase();
   return `APP-${year}-${tail}`;
@@ -109,17 +141,37 @@ function liveApplication(where: SQL): SQL {
   return and(where, isNull(applications.deletedAt)) as SQL;
 }
 
-/** Load a single application within scope, or return null. */
-async function loadApplication(id: string): Promise<ApplicationRow | null> {
+/**
+ * Load a single application within scope plus the exact `version` text a
+ * conditional update must match, or return null. One statement so status and
+ * version cannot diverge between queries.
+ */
+async function loadApplicationClaimOn(
+  executor: DbExecutor,
+  id: string,
+): Promise<{ row: ApplicationRow; versionText: string } | null> {
   const scope = currentScope();
-  const rows = await scope.db
-    .select()
+  const rows = await executor
+    .select(versionedSelection(applications))
     .from(applications)
     .where(
       liveApplication(scope.where(applications.organisationId, eq(applications.id, id))),
     )
     .limit(1);
-  return scope.assertOwned(rows[0]) ?? null;
+  const owned = scope.assertOwned(rows[0]);
+  if (!owned) return null;
+  const split = takeVersionText(owned);
+  if (!split) return null;
+  const [opened] = await openApplicationRows(scope.organisationId, [
+    split.record as ApplicationRow,
+  ]);
+  return opened ? { row: opened, versionText: split.versionText } : null;
+}
+
+/** Load a single application within scope, or return null. */
+async function loadApplication(id: string): Promise<ApplicationRow | null> {
+  const loaded = await loadApplicationClaimOn(currentScope().db, id);
+  return loaded?.row ?? null;
 }
 
 /** Load the user ids with an ACTIVE assignment on an application. */
@@ -189,7 +241,7 @@ export async function getApplication(id: string): Promise<ApplicationDetail> {
       resourceType: 'application',
       resourceId: id,
       result: 'denied',
-      reason: 'not readable by actor or not found',
+      reason: 'application.not_readable',
     });
     // Same error whether missing or forbidden — never reveal which.
     throw new AuthorizationError('POLICY_DENIED');
@@ -245,7 +297,12 @@ export async function getApplicationCaseRecord(
       .orderBy(desc(applicationNotes.createdAt)),
   ]);
 
-  return { ...detail, assignments, statusHistory, notes };
+  return {
+    ...detail,
+    assignments,
+    statusHistory,
+    notes: await openNoteRows(scope.organisationId, notes),
+  };
 }
 
 /** List active applicant-role accounts that intake staff may link to a new case. */
@@ -300,47 +357,68 @@ export async function createApplication(
 
   const id = uuidv7();
   const reference = makeReference(id);
-
-  const inserted = await scope.db
-    .insert(applications)
-    .values(
-      scope.insertValues({
-        id,
-        reference,
-        applicantName: input.applicantName,
-        applicantUserId: input.applicantUserId ?? null,
-        clientId,
-        priority: input.priority,
-        intake: input.intake ?? null,
-        createdByUserId: ctx.userId,
-        status: 'draft',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'application');
-
-  await scope.db.insert(applicationStatusHistory).values(
-    scope.insertValues({
-      applicationId: id,
-      fromStatus: null,
-      toStatus: 'draft',
-      action: 'create',
-      actorUserId: ctx.userId,
-    }),
-  );
-
-  await recordAudit({
-    action: 'application.created',
-    resourceType: 'application',
-    resourceId: id,
-    result: 'success',
-    after: {
-      data: { reference, status: 'draft', priority: input.priority },
-      allow: ['reference', 'status', 'priority'],
-    },
+  const sealed = await sealApplicationFields(scope.organisationId, id, {
+    applicantName: input.applicantName,
+    intake: input.intake ?? null,
+    reference,
   });
+  const applicantName = sealed.applicantName;
+  const referenceBidx = sealed.referenceBidx;
+  const applicantNameBidx = sealed.applicantNameBidx;
+  const applicantNameTokenBidx = sealed.applicantNameTokenBidx;
+  if (!applicantName || !referenceBidx || !applicantNameBidx || !applicantNameTokenBidx) {
+    throw new Error('Applicant fields were not sealed');
+  }
 
-  return row;
+  const stored = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(applications)
+      .values(
+        scope.insertValues({
+          id,
+          reference,
+          applicantName,
+          applicantUserId: input.applicantUserId ?? null,
+          clientId,
+          priority: input.priority,
+          intake: sealed.intake ?? null,
+          referenceBidx,
+          applicantNameBidx,
+          applicantNameTokenBidx,
+          createdByUserId: ctx.userId,
+          status: 'draft',
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'application');
+
+    await tx.insert(applicationStatusHistory).values(
+      scope.insertValues({
+        applicationId: id,
+        fromStatus: null,
+        toStatus: 'draft',
+        action: 'create',
+        actorUserId: ctx.userId,
+      }),
+    );
+
+    await recordAudit(
+      {
+        action: 'application.created',
+        resourceType: 'application',
+        resourceId: id,
+        result: 'success',
+        after: {
+          data: { reference, status: 'draft', priority: input.priority },
+          allow: ['reference', 'status', 'priority'],
+        },
+      },
+      tx,
+    );
+    return created;
+  });
+  const [row] = await openApplicationRows(scope.organisationId, [stored]);
+  return must(row, 'application');
 }
 
 /** Update intake details. Requires `application:update-intake`. */
@@ -356,37 +434,66 @@ export async function updateIntake(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const patch: ApplicationPatch = {};
-  if (input.applicantName !== undefined) patch.applicantName = input.applicantName;
-  if (input.priority !== undefined) patch.priority = input.priority;
-  if (input.intake !== undefined) patch.intake = input.intake;
-
-  const updated = await scope.db
-    .update(applications)
-    .set(patch)
-    .where(scope.where(applications.organisationId, eq(applications.id, id)))
-    .returning();
-  const row = must(updated[0], 'application');
-
-  await recordAudit({
-    action: 'application.updated',
-    resourceType: 'application',
-    resourceId: id,
-    result: 'success',
-    before: {
-      data: {
-        applicantName: existing.applicantName,
-        priority: existing.priority,
-      },
-      allow: ['applicantName', 'priority'],
-    },
-    after: {
-      data: { applicantName: row.applicantName, priority: row.priority },
-      allow: ['applicantName', 'priority'],
-    },
+  const sealed = await sealApplicationFields(scope.organisationId, id, {
+    ...(input.applicantName !== undefined ? { applicantName: input.applicantName } : {}),
+    ...(input.intake !== undefined ? { intake: input.intake } : {}),
   });
+  const patch: ApplicationPatch = {};
+  if (input.applicantName !== undefined) {
+    const applicantName = sealed.applicantName;
+    const applicantNameBidx = sealed.applicantNameBidx;
+    const applicantNameTokenBidx = sealed.applicantNameTokenBidx;
+    if (!applicantName || !applicantNameBidx || !applicantNameTokenBidx) {
+      throw new Error('Applicant name was not sealed');
+    }
+    patch.applicantName = applicantName;
+    patch.applicantNameBidx = applicantNameBidx;
+    patch.applicantNameTokenBidx = applicantNameTokenBidx;
+  }
+  if (input.priority !== undefined) patch.priority = input.priority;
+  if (input.intake !== undefined) patch.intake = sealed.intake ?? null;
 
-  return row;
+  const changed: string[] = [];
+  if (
+    input.applicantName !== undefined &&
+    input.applicantName !== existing.applicantName
+  ) {
+    changed.push('applicantName');
+  }
+  if (input.priority !== undefined && input.priority !== existing.priority) {
+    changed.push('priority');
+  }
+  if (input.intake !== undefined) changed.push('intake');
+
+  const stored = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(applications)
+      .set(patch)
+      .where(scope.where(applications.organisationId, eq(applications.id, id)))
+      .returning();
+    const saved = must(updated[0], 'application');
+
+    const intakeAudit = applicationIntakeAuditMeta({
+      beforePriority: existing.priority,
+      afterPriority: saved.priority,
+      changed,
+    });
+
+    await recordAudit(
+      {
+        action: 'application.updated',
+        resourceType: 'application',
+        resourceId: id,
+        result: 'success',
+        before: intakeAudit.before,
+        after: intakeAudit.after,
+      },
+      tx,
+    );
+    return saved;
+  });
+  const [row] = await openApplicationRows(scope.organisationId, [stored]);
+  return must(row, 'application');
 }
 
 /** Assign (or reassign) an application to a worker. Requires `application:assign`. */
@@ -442,41 +549,48 @@ export async function assignApplication(
         ),
       );
 
-    await recordAudit({
-      action: isReassignment ? 'assignment.reassigned' : 'assignment.assigned',
-      resourceType: 'assignment',
-      resourceId: assignment.id,
-      result: 'success',
-      after: {
-        data: { applicationId: id, assigneeUserId: input.assigneeUserId },
-        allow: ['applicationId', 'assigneeUserId'],
+    await recordAudit(
+      {
+        action: isReassignment ? 'assignment.reassigned' : 'assignment.assigned',
+        resourceType: 'assignment',
+        resourceId: assignment.id,
+        result: 'success',
+        after: {
+          data: { applicationId: id, assigneeUserId: input.assigneeUserId },
+          allow: ['applicationId', 'assigneeUserId'],
+        },
       },
-    });
+      tx,
+    );
 
     return assignment;
   });
 }
 
 /**
- * Apply a workflow transition. The action is authorised by ANY of the
- * permissions the workflow declares for it, and the move must be legal from the
- * application's current status (else the workflow throws).
+ * Write a workflow transition on `executor` without auditing.
+ *
+ * Callers that already hold a transaction (finalising a decision) pass that
+ * transaction so the case move commits or rolls back with their own write.
+ * Throws {@link ApplicationWorkflowError} when the move is illegal from the
+ * status read inside this call.
  */
-export async function transitionApplication(
+export async function applyApplicationTransition(
+  executor: DbExecutor,
   id: string,
   action: ApplicationAction,
   rawInput: TransitionApplicationInput = {},
-): Promise<ApplicationRow> {
+): Promise<AppliedApplicationTransition> {
   const ctx = requireTenantContext();
   const subject: Subject = subjectFromContext(ctx);
   requireAny(subject, permissionsForAction(action));
 
   const input = transitionApplicationSchema.parse(rawInput);
-  const existing = await loadApplication(id);
-  if (!existing) throw new AuthorizationError('POLICY_DENIED');
+  const loaded = await loadApplicationClaimOn(executor, id);
+  if (!loaded) throw new AuthorizationError('POLICY_DENIED');
+  const existing = loaded.row;
 
   const from = existing.status as ApplicationStatus;
-  // Throws ApplicationWorkflowError if the move is illegal from `from`.
   const to = nextStatus(action, from);
 
   const scope = currentScope();
@@ -490,39 +604,101 @@ export async function transitionApplication(
   }
   if (action === 'close') patch.closedAt = now;
 
-  const updatedRows = await scope.db.transaction(async (tx) => {
-    const updated = await tx
-      .update(applications)
-      .set(patch)
-      .where(scope.where(applications.organisationId, eq(applications.id, id)))
-      .returning();
+  const note = input.note ?? null;
+  // Both racers pass the in-memory check. Only the update whose status and
+  // version still match the read may write; the loser throws and rolls back
+  // the caller's transaction, so status history cannot gain a second row for
+  // the same move.
+  await beforeConditionalWrite();
+  const updated = await executor
+    .update(applications)
+    .set({ ...patch, version: nextRowVersion() })
+    .where(
+      scope.where(
+        applications.organisationId,
+        eq(applications.id, id),
+        eq(applications.status, from),
+        versionMatches(applications.version, loaded.versionText),
+      ),
+    )
+    .returning();
+  if (updated.length === 0) {
+    throw new ConcurrencyConflictError(
+      'This application changed while you were working. Refresh and try again.',
+    );
+  }
 
-    await tx.insert(applicationStatusHistory).values(
+  const history = await executor
+    .insert(applicationStatusHistory)
+    .values(
       scope.insertValues({
         applicationId: id,
         fromStatus: from,
         toStatus: to,
         action,
         actorUserId: ctx.userId,
-        note: input.note ?? null,
+        note,
       }),
-    );
+    )
+    .returning({ id: applicationStatusHistory.id });
+  const statusHistoryId = history[0]?.id ?? null;
 
-    return updated;
+  return { row: must(updated[0], 'application'), from, to, note, statusHistoryId };
+}
+
+/** Audit a transition inside the transaction that wrote it. */
+export async function recordApplicationTransitionAudit(
+  action: ApplicationAction,
+  applied: AppliedApplicationTransition,
+  tx: DbTransaction,
+): Promise<void> {
+  // The note text stays on application_status_history (mutable). The trail
+  // records the code and, when a note was written, that row's id.
+  const reason =
+    applied.note && applied.statusHistoryId
+      ? auditReason('application.transition_note', applied.statusHistoryId)
+      : null;
+
+  await recordAudit(
+    {
+      action: TRANSITIONS[action].audit,
+      resourceType: 'application',
+      resourceId: applied.row.id,
+      result: 'success',
+      reason,
+      before: { data: { status: applied.from }, allow: ['status'] },
+      after: {
+        data: {
+          status: applied.to,
+          action,
+          ...(applied.statusHistoryId
+            ? { statusHistoryId: applied.statusHistoryId }
+            : {}),
+        },
+        allow: ['status', 'action', 'statusHistoryId'],
+      },
+    },
+    tx,
+  );
+}
+
+/**
+ * Apply a workflow transition. The action is authorised by ANY of the
+ * permissions the workflow declares for it, and the move must be legal from the
+ * application's current status (else the workflow throws).
+ */
+export async function transitionApplication(
+  id: string,
+  action: ApplicationAction,
+  rawInput: TransitionApplicationInput = {},
+): Promise<ApplicationRow> {
+  const applied = await currentScope().db.transaction(async (tx) => {
+    const result = await applyApplicationTransition(tx, id, action, rawInput);
+    await recordApplicationTransitionAudit(action, result, tx);
+    return result;
   });
-  const row = must(updatedRows[0], 'application');
-
-  await recordAudit({
-    action: TRANSITIONS[action].audit,
-    resourceType: 'application',
-    resourceId: id,
-    result: 'success',
-    reason: input.note ?? null,
-    before: { data: { status: from }, allow: ['status'] },
-    after: { data: { status: to, action }, allow: ['status', 'action'] },
-  });
-
-  return row;
+  const [opened] = await openApplicationRows(applied.row.organisationId, [applied.row]);
+  return must(opened, 'application');
 }
 
 /**
@@ -545,6 +721,18 @@ export async function listApplications(
   }
   if (input.applicantUserId) {
     filters.push(eq(applications.applicantUserId, input.applicantUserId));
+  }
+  if (input.q) {
+    const mac = await applicationSearchMac(scope.organisationId, input.q);
+    if (mac) {
+      filters.push(
+        or(
+          eq(applications.referenceBidx, mac),
+          eq(applications.applicantNameBidx, mac),
+          sql`${mac} = ANY(${applications.applicantNameTokenBidx})`,
+        ),
+      );
+    }
   }
 
   // Narrow to own/assigned/team unless the actor may read the whole tenant.
@@ -585,7 +773,11 @@ export async function listApplications(
     .limit(input.limit)
     .offset(input.offset);
 
-  return { items, limit: input.limit, offset: input.offset };
+  return {
+    items: await openApplicationRows(scope.organisationId, items),
+    limit: input.limit,
+    offset: input.offset,
+  };
 }
 
 /**
@@ -608,31 +800,40 @@ export async function addNote(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const insertedNote = await scope.db
-    .insert(applicationNotes)
-    .values(
-      scope.insertValues({
-        applicationId: id,
-        authorUserId: ctx.userId,
-        body: input.body,
-        visibility: input.visibility,
-      }),
-    )
-    .returning();
-  const note = must(insertedNote[0], 'note');
+  const noteId = uuidv7();
+  const body = await sealNoteBody(scope.organisationId, noteId, input.body);
+  const stored = await scope.db.transaction(async (tx) => {
+    const insertedNote = await tx
+      .insert(applicationNotes)
+      .values(
+        scope.insertValues({
+          id: noteId,
+          applicationId: id,
+          authorUserId: ctx.userId,
+          body,
+          visibility: input.visibility,
+        }),
+      )
+      .returning();
+    const created = must(insertedNote[0], 'note');
 
-  await recordAudit({
-    action: 'record.created',
-    resourceType: 'record',
-    resourceId: note.id,
-    result: 'success',
-    after: {
-      data: { applicationId: id, visibility: input.visibility },
-      allow: ['applicationId', 'visibility'],
-    },
+    await recordAudit(
+      {
+        action: 'record.created',
+        resourceType: 'record',
+        resourceId: created.id,
+        result: 'success',
+        after: {
+          data: { applicationId: id, visibility: input.visibility },
+          allow: ['applicationId', 'visibility'],
+        },
+      },
+      tx,
+    );
+    return created;
   });
-
-  return note;
+  const [note] = await openNoteRows(scope.organisationId, [stored]);
+  return must(note, 'note');
 }
 
 /** Re-export the context type for callers that thread it explicitly. */

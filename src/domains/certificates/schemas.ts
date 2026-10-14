@@ -39,3 +39,13 @@ export const publishCertificateTemplateSchema = z.object({
 export type PublishCertificateTemplateInput = z.infer<
   typeof publishCertificateTemplateSchema
 >;
+
+/**
+ * Details a verifier typed from the printed certificate.
+ * The date of birth is optional and is ignored when the seal has none.
+ */
+export const checkCertificateHolderSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  dateOfBirth: z.string().trim().max(32).optional(),
+});
+export type CheckCertificateHolderInput = z.infer<typeof checkCertificateHolderSchema>;

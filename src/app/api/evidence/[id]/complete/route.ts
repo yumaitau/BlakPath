@@ -1,16 +1,13 @@
 import { NextResponse } from 'next/server';
 import { completeUpload } from '@/domains/evidence';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const evidence = await withRequestTenant(() => completeUpload(id));
-    return NextResponse.json({ evidence });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const evidence = await withRequestTenant(() => completeUpload(id));
+  return NextResponse.json({ evidence });
+});

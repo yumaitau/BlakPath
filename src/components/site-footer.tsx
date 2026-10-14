@@ -42,6 +42,12 @@ function SiteFooter() {
               Privacy
             </Link>
             <Link
+              href="/key-custody"
+              className="text-foreground focus-visible:ring-ring rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+            >
+              Key custody
+            </Link>
+            <Link
               href="/support"
               className="text-foreground focus-visible:ring-ring rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
             >
