@@ -163,13 +163,21 @@ Federated sign-in is tenant-bound and off unless explicitly configured:
 - **Sessions:** issued by Better Auth itself (`sso-plugin.ts`) with
   `activeOrganisationId` set to the bound tenant after an active membership
   check. Federation never creates users or memberships (invite-only): first
-  sign-in links an invited, email-verified user whose email (`email`, else the
-  UPN) is on the binding's domain; later sign-ins resolve by IdP subject.
-  Success and denial are audited as `auth.sign_in`.
+  sign-in links an invited, email-verified user whose UPN
+  (`preferred_username`) is exactly the binding's verified domain. A divergent
+  `email` claim is ignored. If Entra sends no UPN, the `email` claim is used
+  only when `email_verified` or `xms_edov` is true. Later sign-ins resolve by
+  IdP subject. Success and denial are audited as `auth.sign_in`.
 - **Tokens:** IdP access/refresh tokens are not stored. Better Auth
   `account.encryptOAuthTokens` is on as a backstop.
-- **MFA:** for federated users the second factor is the IdP's job — the
-  council must enforce MFA in Entra Conditional Access for the BlakPath app.
+- **MFA:** federated sign-in does not prompt for BlakPath TOTP or a passkey.
+  The id_token must include an `amr` second factor (`mfa`, or a concrete
+  method such as `otp` or `fido`). Password-only tokens, and tokens with no
+  `amr` claim, are denied and audited as `MFA_REQUIRED`. The council still
+  requires MFA in Entra Conditional Access for this app, and the app
+  registration must emit `amr` as an optional ID token claim. A missing claim
+  fails closed. A council administrator can still assign a UPN; that is the
+  trust placed in the tenant.
 - **SCIM provisioning:** membership lifecycle already lives in `memberships` /
   `membership_roles` with clear statuses, so SCIM create/update/deactivate maps
   onto membership status transitions rather than a parallel identity store.

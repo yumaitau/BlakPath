@@ -24,9 +24,12 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
   the Secrets Manager runtime secret; add binding `POST /api/sso/providers`
   with the tenant-specific issuer
   `https://login.microsoftonline.com/<tenant-id>/v2.0`; verify the domain in
-  `organisation_domains`, then enable. Enforce MFA via Conditional Access.
-  Staff must already be invited members. SCIM maps onto membership status
-  transitions.
+  `organisation_domains`, then enable. In the Entra app registration, add
+  `amr` as an optional ID token claim, and require MFA with Conditional
+  Access. BlakPath rejects the sign-in unless `amr` includes a second factor.
+  First sign-in links the invited user by UPN on that verified domain, not by
+  the mail attribute. Staff must already be invited members. SCIM maps onto
+  membership status transitions.
 
 ## 3. Go live
 

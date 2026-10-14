@@ -92,7 +92,12 @@ describe('resolveMember', () => {
       ...over,
     };
   }
-  const identity = { subject: 'sub-1', email: 'Staff@council.example' };
+  const identity = {
+    subject: 'sub-1',
+    email: 'Staff@council.example',
+    emailVerified: true,
+    claims: { amr: ['mfa'] },
+  };
   const member = vi.fn(async () => true);
 
   async function denial(promise: Promise<unknown>): Promise<string> {
@@ -123,6 +128,7 @@ describe('resolveMember', () => {
     await expect(
       resolveMember({ accounts, isActiveMember: member }, binding, {
         subject: 'sub-1',
+        claims: { amr: ['mfa'] },
       }),
     ).resolves.toBe('user-9');
     expect(accounts.linkAccount).not.toHaveBeenCalled();
@@ -133,17 +139,39 @@ describe('resolveMember', () => {
     const deps = { accounts: store(), isActiveMember: member };
     expect(
       await denial(
-        resolveMember(deps, binding, { subject: 's', email: 'x@attacker.example' }),
+        resolveMember(deps, binding, {
+          subject: 's',
+          email: 'x@attacker.example',
+          emailVerified: true,
+          claims: { amr: ['mfa'] },
+        }),
       ),
     ).toBe('EMAIL_DOMAIN_MISMATCH');
     expect(
       await denial(
-        resolveMember(deps, binding, { subject: 's', email: 'x@evilcouncil.example' }),
+        resolveMember(deps, binding, {
+          subject: 's',
+          email: 'x@evilcouncil.example',
+          emailVerified: true,
+          claims: { amr: ['mfa'] },
+        }),
       ),
     ).toBe('EMAIL_DOMAIN_MISMATCH');
-    expect(await denial(resolveMember(deps, binding, { subject: 's' }))).toBe(
-      'EMAIL_DOMAIN_MISMATCH',
-    );
+    expect(
+      await denial(
+        resolveMember(deps, binding, {
+          subject: 's',
+          email: 'staff@sub.council.example',
+          emailVerified: true,
+          claims: { amr: ['mfa'] },
+        }),
+      ),
+    ).toBe('EMAIL_DOMAIN_MISMATCH');
+    expect(
+      await denial(
+        resolveMember(deps, binding, { subject: 's', claims: { amr: ['mfa'] } }),
+      ),
+    ).toBe('EMAIL_DOMAIN_MISMATCH');
   });
 
   it('never creates accounts: unknown email is denied', async () => {
@@ -153,6 +181,30 @@ describe('resolveMember', () => {
         resolveMember({ accounts, isActiveMember: member }, binding, identity),
       ),
     ).toBe('NO_ACCOUNT');
+  });
+
+  it('denies a first link the IdP has not verified', async () => {
+    const accounts = store();
+    expect(
+      await denial(
+        resolveMember({ accounts, isActiveMember: member }, binding, {
+          ...identity,
+          emailVerified: false,
+        }),
+      ),
+    ).toBe('EMAIL_UNVERIFIED');
+    expect(accounts.linkAccount).not.toHaveBeenCalled();
+  });
+
+  it('denies a password-only federated sign-in', async () => {
+    expect(
+      await denial(
+        resolveMember({ accounts: store(), isActiveMember: member }, binding, {
+          ...identity,
+          claims: { amr: ['pwd'] },
+        }),
+      ),
+    ).toBe('MFA_REQUIRED');
   });
 
   it('denies a user who has not verified their email', async () => {

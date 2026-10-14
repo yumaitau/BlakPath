@@ -225,15 +225,65 @@ async function verifyIdToken(
 }
 
 /**
- * Email for first-time account linking. Entra only emits `email` when the
- * optional claim is configured; otherwise `preferred_username` (the UPN, whose
- * suffix Entra requires to be a domain verified in that tenant) is used. The
- * caller still requires the domain to equal the binding's verified domain.
+ * Second-factor methods Entra puts in `amr` once MFA has actually run.
+ * `pwd` alone is password-only and is rejected.
  */
-function emailFrom(claims: Record<string, unknown>): string | undefined {
-  if (typeof claims.email === 'string' && claims.email.includes('@')) return claims.email;
+const MFA_AMR = new Set([
+  'mfa',
+  'ngcmfa',
+  'otp',
+  'fido',
+  'rsa',
+  'hwk',
+  'sms',
+  'tel',
+  'pin',
+  'pop',
+]);
+
+/** Thrown when the id_token does not prove a second factor. */
+export class SsoMfaRequiredError extends Error {
+  constructor() {
+    super('SSO multi-factor authentication required.');
+    this.name = 'SsoMfaRequiredError';
+  }
+}
+
+/** True when `amr` contains a second factor. Missing `amr` fails closed. */
+export function idTokenSatisfiesMfa(
+  claims: Record<string, unknown> | undefined,
+): boolean {
+  const amr = claims?.amr;
+  if (!Array.isArray(amr)) return false;
+  return amr.some(
+    (value) => typeof value === 'string' && MFA_AMR.has(value.toLowerCase()),
+  );
+}
+
+/**
+ * Address used for first-time account linking.
+ *
+ * The UPN (`preferred_username`) wins. Entra only issues a UPN whose suffix is
+ * a domain verified in that tenant, and a council admin is the only person who
+ * can change it. A divergent `email` / mail attribute is ignored so it cannot
+ * point the link at a different BlakPath user. The mail claim is used only
+ * when there is no UPN, and only counts as verified when `email_verified` or
+ * `xms_edov` is true.
+ */
+function emailFrom(
+  claims: Record<string, unknown>,
+): { email: string; verified: boolean } | undefined {
   const upn = claims.preferred_username;
-  return typeof upn === 'string' && upn.includes('@') ? upn : undefined;
+  if (typeof upn === 'string' && upn.includes('@')) {
+    return { email: upn, verified: true };
+  }
+  if (typeof claims.email === 'string' && claims.email.includes('@')) {
+    return {
+      email: claims.email,
+      verified: claims.email_verified === true || claims.xms_edov === true,
+    };
+  }
+  return undefined;
 }
 
 export class EntraSsoProvider implements SsoProvider {
@@ -318,15 +368,15 @@ export class EntraSsoProvider implements SsoProvider {
       audience: this.config.clientId,
       nonce: tx.nonce,
     });
+    if (!idTokenSatisfiesMfa(claims)) throw new SsoMfaRequiredError();
     const subject = claims.sub;
     if (typeof subject !== 'string' || subject.length === 0) {
       throw new Error('SSO identity missing subject.');
     }
-    const email = emailFrom(claims);
+    const link = emailFrom(claims);
     return {
       subject,
-      ...(email ? { email } : {}),
-      emailVerified: claims.email_verified === true || claims.xms_edov === true,
+      ...(link ? { email: link.email, emailVerified: link.verified } : {}),
       ...(typeof claims.name === 'string' ? { name: claims.name } : {}),
       claims,
     };

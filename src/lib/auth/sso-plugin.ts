@@ -3,6 +3,7 @@ import { APIError, createAuthEndpoint } from 'better-auth/api';
 import { expireCookie, setSessionCookie } from 'better-auth/cookies';
 import { z } from 'zod';
 import {
+  emailDomain,
   hasActiveMembership,
   recordSsoSignIn,
   resolveSsoBindingById,
@@ -11,7 +12,11 @@ import {
   type SsoDenialReason,
 } from '@/domains/sso/sign-in';
 import { logger } from '@/lib/observability/logger';
-import { registerEntraFromEnv } from './sso-entra';
+import {
+  idTokenSatisfiesMfa,
+  registerEntraFromEnv,
+  SsoMfaRequiredError,
+} from './sso-entra';
 import { resolveSsoProvider, type FederatedIdentity } from './sso-provider';
 
 /**
@@ -179,6 +184,12 @@ export function ssoPlugin() {
               transaction: flow.transaction,
             });
           } catch (error) {
+            if (
+              error instanceof SsoMfaRequiredError ||
+              (error instanceof Error && error.name === 'SsoMfaRequiredError')
+            ) {
+              throw new SsoDenied('MFA_REQUIRED');
+            }
             // Messages are fixed strings (no tokens or claims) — safe to log.
             logger.warn(
               { err: error instanceof Error ? error.message : 'unknown' },
@@ -252,9 +263,10 @@ export interface SsoAccountStore {
 
 /**
  * Map a verified identity to an existing, invited user with an ACTIVE
- * membership of the binding's organisation. A first sign-in links by email
- * (domain must equal the binding's verified domain; the user must already have
- * verified that email); later sign-ins resolve by the stable IdP subject.
+ * membership of the binding's organisation. The id_token must show MFA.
+ * A first sign-in links by the exact email domain (the UPN the provider
+ * chose); the IdP and the BlakPath user must both have verified that email.
+ * Later sign-ins resolve by the stable IdP subject and still require MFA.
  * Throws {@link SsoDenied} otherwise — federation never creates accounts.
  */
 export async function resolveMember(
@@ -265,6 +277,7 @@ export async function resolveMember(
   binding: SsoBinding,
   identity: FederatedIdentity,
 ): Promise<string> {
+  if (!idTokenSatisfiesMfa(identity.claims)) throw new SsoDenied('MFA_REQUIRED');
   const providerId = ssoAccountProviderId(binding.id);
   const linked = await deps.accounts.findAccountByProviderId(
     identity.subject,
@@ -273,9 +286,11 @@ export async function resolveMember(
   let userId = linked?.userId;
   if (!userId) {
     const email = identity.email?.trim().toLowerCase();
-    if (!email || !email.endsWith(`@${binding.domain}`)) {
+    const domain = binding.domain.trim().toLowerCase();
+    if (!email || emailDomain(email) !== domain) {
       throw new SsoDenied('EMAIL_DOMAIN_MISMATCH');
     }
+    if (!identity.emailVerified) throw new SsoDenied('EMAIL_UNVERIFIED');
     const found = await deps.accounts.findUserByEmail(email);
     if (!found) throw new SsoDenied('NO_ACCOUNT');
     if (!found.user.emailVerified) throw new SsoDenied('EMAIL_UNVERIFIED');

@@ -23,7 +23,8 @@ export type SsoDenialReason =
   | 'EMAIL_DOMAIN_MISMATCH'
   | 'NO_ACCOUNT'
   | 'EMAIL_UNVERIFIED'
-  | 'NO_ACTIVE_MEMBERSHIP';
+  | 'NO_ACTIVE_MEMBERSHIP'
+  | 'MFA_REQUIRED';
 
 export interface SsoBinding {
   id: string;

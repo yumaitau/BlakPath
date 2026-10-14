@@ -103,10 +103,12 @@ describe('entra provider', () => {
     iss: ISSUER,
     aud: CLIENT_ID,
     sub: 'entra-sub-123',
+    preferred_username: 'staff@council.example',
     email: 'staff@council.example',
     name: 'Test Staff',
     nonce,
     exp: Math.floor(Date.now() / 1000) + 3600,
+    amr: ['pwd', 'mfa'],
   });
 
   /** Mock IdP authorize: user signs in, IdP redirects back with a code. */
@@ -210,7 +212,7 @@ describe('entra provider', () => {
     expect(identity).toMatchObject({
       subject: 'entra-sub-123',
       email: 'staff@council.example',
-      emailVerified: false,
+      emailVerified: true,
     });
     expect(tokenRequests[0]?.get('redirect_uri')).toBe(CALLBACK);
     expect(tokenRequests[0]?.get('code_verifier')).toBeTruthy();
@@ -220,6 +222,38 @@ describe('entra provider', () => {
     claimOverrides = { email: undefined, preferred_username: 'upn@council.example' };
     const identity = await complete(await startFlow());
     expect(identity.email).toBe('upn@council.example');
+    expect(identity.emailVerified).toBe(true);
+  });
+
+  it('links on the UPN and ignores a divergent mail attribute', async () => {
+    claimOverrides = {
+      email: 'victim@council.example',
+      preferred_username: 'staff@council.example',
+    };
+    const identity = await complete(await startFlow());
+    expect(identity.email).toBe('staff@council.example');
+    expect(identity.emailVerified).toBe(true);
+  });
+
+  it('does not treat an unverified mail claim as a verified address', async () => {
+    claimOverrides = { preferred_username: undefined };
+    const identity = await complete(await startFlow());
+    expect(identity.email).toBe('staff@council.example');
+    expect(identity.emailVerified).toBe(false);
+  });
+
+  it('accepts a mail claim when Entra marks the domain verified and there is no UPN', async () => {
+    claimOverrides = { preferred_username: undefined, xms_edov: true };
+    const identity = await complete(await startFlow());
+    expect(identity.email).toBe('staff@council.example');
+    expect(identity.emailVerified).toBe(true);
+  });
+
+  it('rejects a password-only token and a token with no amr claim', async () => {
+    claimOverrides = { amr: ['pwd'] };
+    await expect(complete(await startFlow())).rejects.toThrow(/multi-factor/);
+    claimOverrides = { amr: undefined };
+    await expect(complete(await startFlow())).rejects.toThrow(/multi-factor/);
   });
 
   it('rejects a callback without this browser’s transaction', async () => {

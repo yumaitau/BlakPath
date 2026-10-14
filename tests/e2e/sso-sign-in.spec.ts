@@ -122,6 +122,7 @@ function startMockIdp(): Promise<void> {
             aud: CLIENT_ID,
             sub: `mock-${createHash('sha256').update(grant.email).digest('hex').slice(0, 24)}`,
             preferred_username: grant.email,
+            amr: ['pwd', 'mfa'],
             name: 'SSO E2E Staff',
             nonce: forgeNonce ? 'forged-nonce' : grant.nonce,
             iat: now,
