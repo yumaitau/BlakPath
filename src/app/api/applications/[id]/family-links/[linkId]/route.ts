@@ -5,7 +5,8 @@ import {
   disputeFamilyLink,
   withdrawFamilyLink,
 } from '@/domains/family-links';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 
 const mutationSchema = z.object({
   operation: z.enum(['approve', 'dispute', 'withdraw']),
@@ -20,24 +21,20 @@ const mutationSchema = z.object({
  * audited. `withdraw` is the requester, before a decision. None of these
  * operations determines Aboriginality.
  */
-export async function PATCH(
+export const PATCH = tenantHandler(async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string; linkId: string }> },
 ): Promise<Response> {
-  try {
-    const { id, linkId } = await params;
-    const input = mutationSchema.parse(await request.json().catch(() => null));
-    const link = await withRequestTenant(() => {
-      if (input.operation === 'approve') {
-        return approveFamilyLink(id, linkId, { note: input.note });
-      }
-      if (input.operation === 'dispute') {
-        return disputeFamilyLink(id, linkId, { note: input.note });
-      }
-      return withdrawFamilyLink(id, linkId);
-    });
-    return NextResponse.json({ link });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id, linkId } = await params;
+  const input = mutationSchema.parse(await request.json());
+  const link = await withRequestTenant(() => {
+    if (input.operation === 'approve') {
+      return approveFamilyLink(id, linkId, { note: input.note });
+    }
+    if (input.operation === 'dispute') {
+      return disputeFamilyLink(id, linkId, { note: input.note });
+    }
+    return withdrawFamilyLink(id, linkId);
+  });
+  return NextResponse.json({ link });
+});

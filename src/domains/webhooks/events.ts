@@ -10,6 +10,7 @@ export const WEBHOOK_EVENTS = [
   'application.submitted',
   'decision.finalised',
   'certificate.signed',
+  'certificate.revoked',
   'form.response_submitted',
   'evidence.scan_infected',
 ] as const;

@@ -35,7 +35,6 @@ function props(overrides: Partial<FamilyLinksPanelProps> = {}): FamilyLinksPanel
         status: 'requested',
         requestedByUserId: 'genealogy-a',
         decisionNote: null,
-        sensitiveFieldsUnreadable: false,
         createdAt: '2026-10-13T00:00:00.000Z',
       },
     ],

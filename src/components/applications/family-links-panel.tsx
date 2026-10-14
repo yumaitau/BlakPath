@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 export interface FamilyLinkPanelItem {
   id: string;
@@ -20,7 +21,6 @@ export interface FamilyLinkPanelItem {
   status: string;
   requestedByUserId: string | null;
   decisionNote: string | null;
-  sensitiveFieldsUnreadable: boolean;
   createdAt: string;
 }
 
@@ -67,6 +67,7 @@ export function FamilyLinksPanel({
   permissions,
 }: FamilyLinksPanelProps) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -153,6 +154,7 @@ export function FamilyLinksPanel({
               deceasedWarning={deceasedWarning}
               permissions={permissions}
               busy={busy}
+              hydrated={hydrated}
               onSend={send}
             />
           ))}
@@ -241,6 +243,7 @@ export function FamilyLinksPanel({
               type="checkbox"
               className="border-input focus-visible:ring-ring mt-1 size-4 rounded-sm focus-visible:ring-2 focus-visible:outline-none"
               checked={relativeDeceased}
+              disabled={!hydrated}
               onChange={(event) => setRelativeDeceased(event.target.checked)}
               aria-describedby="family-link-deceased-hint"
             />
@@ -255,7 +258,7 @@ export function FamilyLinksPanel({
               </p>
             </div>
           </div>
-          <Button className="w-fit" type="submit" disabled={busy !== null}>
+          <Button className="w-fit" type="submit" disabled={!hydrated || busy !== null}>
             {busy === 'create-link' ? 'Recording…' : 'Record family link'}
           </Button>
         </form>
@@ -271,6 +274,7 @@ function FamilyLinkItem({
   deceasedWarning,
   permissions,
   busy,
+  hydrated,
   onSend,
 }: {
   link: FamilyLinkPanelItem;
@@ -279,6 +283,7 @@ function FamilyLinkItem({
   deceasedWarning: string;
   permissions: FamilyLinksPanelProps['permissions'];
   busy: string | null;
+  hydrated: boolean;
   onSend: (
     key: string,
     url: string,
@@ -321,7 +326,7 @@ function FamilyLinkItem({
       {link.relativeDeceased ? (
         <p className="text-muted-foreground mt-1 text-sm">Relative is deceased</p>
       ) : null}
-      <LinkDetails link={link} warning={deceasedWarning} />
+      <LinkDetails link={link} warning={deceasedWarning} hydrated={hydrated} />
       {mine && open ? (
         <p className="text-muted-foreground mt-3 text-sm">
           Someone else must approve or dispute this link.
@@ -342,7 +347,7 @@ function FamilyLinkItem({
             <Button
               type="button"
               size="sm"
-              disabled={busy !== null}
+              disabled={!hydrated || busy !== null}
               onClick={() =>
                 void mutate('approve', 'Family link approved by a different person.')
               }
@@ -353,7 +358,7 @@ function FamilyLinkItem({
               type="button"
               size="sm"
               variant="outline"
-              disabled={busy !== null}
+              disabled={!hydrated || busy !== null}
               onClick={() => void mutate('dispute', 'Family link disputed.')}
             >
               {busy === `dispute:${link.id}` ? 'Saving…' : 'Dispute link'}
@@ -367,7 +372,7 @@ function FamilyLinkItem({
           type="button"
           size="sm"
           variant="outline"
-          disabled={busy !== null}
+          disabled={!hydrated || busy !== null}
           onClick={() => void mutate('withdraw', 'Family link withdrawn.')}
         >
           {busy === `withdraw:${link.id}` ? 'Saving…' : 'Withdraw link'}
@@ -383,7 +388,15 @@ function FamilyLinkItem({
   );
 }
 
-function LinkDetails({ link, warning }: { link: FamilyLinkPanelItem; warning: string }) {
+function LinkDetails({
+  link,
+  warning,
+  hydrated,
+}: {
+  link: FamilyLinkPanelItem;
+  warning: string;
+  hydrated: boolean;
+}) {
   const [shown, setShown] = useState(false);
   const detailsRef = useRef<HTMLDivElement>(null);
   const warningId = `family-link-warning-${link.id}`;
@@ -391,14 +404,6 @@ function LinkDetails({ link, warning }: { link: FamilyLinkPanelItem; warning: st
   useEffect(() => {
     if (shown) detailsRef.current?.focus();
   }, [shown]);
-
-  if (link.sensitiveFieldsUnreadable) {
-    return (
-      <p className="mt-3 text-sm" role="status">
-        This record could not be opened. The stored details stay sealed.
-      </p>
-    );
-  }
 
   if (!link.relativeDeceased) {
     return (
@@ -422,6 +427,7 @@ function LinkDetails({ link, warning }: { link: FamilyLinkPanelItem; warning: st
           variant="outline"
           className="mt-3"
           aria-describedby={warningId}
+          disabled={!hydrated}
           onClick={() => setShown(true)}
         >
           <Eye aria-hidden="true" />

@@ -5,7 +5,6 @@
  *   - `schemas` — zod v4 input validation.
  *   - `service` — tenant-scoped, permission-checked, audited path with
  *     separation of duties on approval (approver ≠ requester).
- *   - `fields`  — envelope encryption for names, community, and notes.
  *   - `cultural-safety` — deceased-name warning copy.
  */
 export {
@@ -31,6 +30,7 @@ export {
 
 export {
   approveFamilyLink,
+  canReadFamilyLinks,
   disputeFamilyLink,
   listFamilyLinks,
   requestFamilyLink,

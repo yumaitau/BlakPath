@@ -1,14 +1,6 @@
-import { randomBytes } from 'node:crypto';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { toErrorResponse } from '@/lib/http/tenant-route';
-import { __resetEnvCache } from '@/lib/env';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { errorResponse } from '@/lib/http/error-response';
 import { AuthorizationError } from '@/lib/permissions/errors';
-
-beforeAll(() => {
-  process.env.ENCRYPTION_MASTER_KEY = randomBytes(32).toString('base64');
-  process.env.ENCRYPTION_KEY_VERSION = '1';
-  __resetEnvCache();
-});
 
 interface StoredLink {
   id: string;
@@ -33,7 +25,11 @@ interface StoredLink {
 const state = vi.hoisted(() => ({
   userId: 'genealogy-a',
   organisationId: 'org-1',
-  permissions: new Set<string>(['family-link:request', 'family-link:approve']),
+  permissions: new Set<string>([
+    'family-link:request',
+    'family-link:approve',
+    'application:read-assigned',
+  ]),
   rows: [] as StoredLink[],
   audits: [] as Array<Record<string, unknown>>,
   updates: 0,
@@ -96,29 +92,32 @@ vi.mock('@/db/tenant-db', () => {
     return query;
   }
 
+  const db: Record<string, unknown> = {
+    select: () => builder(() => state.rows),
+    insert: () => builder(() => state.rows),
+    update: () => {
+      let patch: Record<string, unknown> = {};
+      const query = builder(() => state.rows);
+      query.set = (values: Record<string, unknown>) => {
+        patch = values;
+        return query;
+      };
+      query.returning = () => {
+        state.updates += 1;
+        const row = state.rows[0];
+        if (!row) return Promise.resolve([]);
+        Object.assign(row, patch);
+        return Promise.resolve([row]);
+      };
+      return query;
+    },
+    transaction: <T>(fn: (tx: unknown) => Promise<T>) => fn(db),
+  };
+
   return {
     currentScope: () => ({
       organisationId: state.organisationId,
-      db: {
-        select: () => builder(() => state.rows),
-        insert: () => builder(() => state.rows),
-        update: () => {
-          let patch: Record<string, unknown> = {};
-          const query = builder(() => state.rows);
-          query.set = (values: Record<string, unknown>) => {
-            patch = values;
-            return query;
-          };
-          query.returning = () => {
-            state.updates += 1;
-            const row = state.rows[0];
-            if (!row) return Promise.resolve([]);
-            Object.assign(row, patch);
-            return Promise.resolve([row]);
-          };
-          return query;
-        },
-      },
+      db,
       where: (orgColumn: unknown) => ({ orgColumn }),
       assertOwned: <T>(row: T) => row,
       insertValues: <T extends Record<string, unknown>>(values: T) => ({
@@ -126,6 +125,43 @@ vi.mock('@/db/tenant-db', () => {
         organisationId: state.organisationId,
       }),
     }),
+  };
+});
+
+// Reversible stand-in for the tenant key: bound to org, column and row.
+vi.mock('@/lib/encryption/tenant-fields', () => {
+  const seal = (org: string, column: string, id: string, value: string | null) =>
+    value === null
+      ? null
+      : `sealed:${Buffer.from(JSON.stringify([org, column, id, value])).toString('base64')}`;
+  const open = (org: string, column: string, id: string, value: string | null) => {
+    if (value === null || !value.startsWith('sealed:')) return value;
+    const [o, c, i, p] = JSON.parse(
+      Buffer.from(value.slice('sealed:'.length), 'base64').toString('utf8'),
+    ) as string[];
+    if (o !== org || c !== column || i !== id) throw new Error('binding mismatch');
+    return p ?? null;
+  };
+  return {
+    sealFamilyFields: async (
+      org: string,
+      id: string,
+      fields: { relativeName: string; community: string | null; notes: string | null },
+    ) => ({
+      relativeName: seal(org, 'relative_name', id, fields.relativeName),
+      community: seal(org, 'community', id, fields.community),
+      notes: seal(org, 'notes', id, fields.notes),
+    }),
+    sealFamilyDecisionNote: async (org: string, id: string, note: string | null) =>
+      seal(org, 'decision_note', id, note),
+    openFamilyRows: async (org: string, rows: StoredLink[]) =>
+      rows.map((row) => ({
+        ...row,
+        relativeName: open(org, 'relative_name', row.id, row.relativeName) ?? '',
+        community: open(org, 'community', row.id, row.community),
+        notes: open(org, 'notes', row.id, row.notes),
+        decisionNote: open(org, 'decision_note', row.id, row.decisionNote),
+      })),
   };
 });
 
@@ -155,7 +191,6 @@ const {
   requestFamilyLink,
   withdrawFamilyLink,
 } = await import('@/domains/family-links/service');
-const { openFamilyField } = await import('@/domains/family-links/fields');
 
 const input = {
   relationship: 'grandmother',
@@ -167,7 +202,11 @@ const input = {
 
 beforeEach(() => {
   state.userId = 'genealogy-a';
-  state.permissions = new Set(['family-link:request', 'family-link:approve']);
+  state.permissions = new Set([
+    'family-link:request',
+    'family-link:approve',
+    'application:read-assigned',
+  ]);
   state.rows.length = 0;
   state.audits.length = 0;
   state.updates = 0;
@@ -186,16 +225,11 @@ describe('family-link service', () => {
     expect(stored?.relativeName.includes('Aunty May')).toBe(false);
     expect(stored?.community?.includes('Example Nation')).toBe(false);
     expect(stored?.notes?.includes('Maternal')).toBe(false);
-    expect(
-      openFamilyField(stored!.relativeName, {
-        organisationId: 'org-1',
-        rowId: stored!.id,
-        column: 'relative_name',
-      }),
-    ).toBe('Aunty May');
+    expect(stored?.relativeDeceased).toBe(true);
     expect(state.audits[0]).toMatchObject({
       action: 'family_link.created',
       result: 'success',
+      after: { data: { relativeDeceased: true } },
     });
   });
 
@@ -210,7 +244,7 @@ describe('family-link service', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(AuthorizationError);
       expect((error as AuthorizationError).code).toBe('SEPARATION_OF_DUTIES');
-      expect(toErrorResponse(error).status).toBe(403);
+      expect(errorResponse(error).status).toBe(403);
     }
 
     await expect(disputeFamilyLink('app-1', link.id)).rejects.toMatchObject({
@@ -225,7 +259,7 @@ describe('family-link service', () => {
         action: 'family_link.confirmed',
         resourceId: link.id,
         result: 'denied',
-        reason: 'separation of duties',
+        reason: 'family_link.separation_of_duties',
       }),
       expect.objectContaining({
         action: 'family_link.confirmed',
@@ -272,6 +306,23 @@ describe('family-link service', () => {
     const links = await listFamilyLinks('app-1');
     expect(links).toHaveLength(1);
     expect(links[0]?.relativeName).toBe('Aunty May');
-    expect(links[0]?.sensitiveFieldsUnreadable).toBe(false);
+    expect(links[0]).not.toHaveProperty('organisationId');
+  });
+
+  it('refuses the list to an applicant who can request but not read staff cases', async () => {
+    await requestFamilyLink('app-1', input);
+    state.permissions = new Set(['family-link:request', 'application:read-own']);
+    await expect(listFamilyLinks('app-1')).rejects.toMatchObject({
+      code: 'PERMISSION_DENIED',
+    });
+  });
+
+  it('refuses a decision on a link from another application', async () => {
+    const link = await requestFamilyLink('app-1', input);
+    state.userId = 'genealogy-b';
+    await expect(approveFamilyLink('app-2', link.id)).rejects.toMatchObject({
+      code: 'POLICY_DENIED',
+    });
+    expect(state.updates).toBe(0);
   });
 });

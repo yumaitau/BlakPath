@@ -77,7 +77,9 @@ describe('family-link routes', () => {
       { params: Promise.resolve({ id: 'app-1', linkId: 'link-1' }) },
     );
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toEqual({ error: 'Forbidden' });
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ code: 'FORBIDDEN', error: 'Forbidden' });
+    expect(JSON.stringify(body)).not.toContain('SEPARATION');
     expect(service.approveFamilyLink).toHaveBeenCalledWith('app-1', 'link-1', {
       note: 'mine',
     });
@@ -108,5 +110,28 @@ describe('family-link routes', () => {
     );
     expect(withdrawn.status).toBe(200);
     expect(service.withdrawFamilyLink).toHaveBeenCalledWith('app-1', 'link-1');
+  });
+
+  it('maps bad input to the central 400 codes without calling the service', async () => {
+    const unknownOperation = await PATCH(
+      new Request('http://localhost/api', {
+        method: 'PATCH',
+        body: JSON.stringify({ operation: 'determine' }),
+      }),
+      { params: Promise.resolve({ id: 'app-1', linkId: 'link-1' }) },
+    );
+    expect(unknownOperation.status).toBe(400);
+    await expect(unknownOperation.json()).resolves.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    });
+
+    const malformed = await POST(
+      new Request('http://localhost/api', { method: 'POST', body: '{not json' }),
+      { params: Promise.resolve({ id: 'app-1' }) },
+    );
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toMatchObject({ code: 'INVALID_JSON' });
+    expect(service.approveFamilyLink).not.toHaveBeenCalled();
+    expect(service.requestFamilyLink).not.toHaveBeenCalled();
   });
 });

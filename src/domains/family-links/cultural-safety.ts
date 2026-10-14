@@ -1,8 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '@/db/client';
 import { organisationSettings } from '@/db/schema';
-import { requireTenantContext } from '@/lib/tenancy/context';
+import { currentScope } from '@/db/tenant-db';
 
 /**
  * Deceased-name warning for family links.
@@ -32,11 +31,11 @@ export function deceasedNameWarningFromTerminology(value: unknown): string {
 
 /** Load the active organisation's deceased-name warning. */
 export async function loadDeceasedNameWarning(): Promise<string> {
-  const ctx = requireTenantContext();
-  const rows = await db
+  const scope = currentScope();
+  const rows = await scope.db
     .select({ terminology: organisationSettings.terminology })
     .from(organisationSettings)
-    .where(eq(organisationSettings.organisationId, ctx.organisationId))
+    .where(eq(organisationSettings.organisationId, scope.organisationId))
     .limit(1);
   return deceasedNameWarningFromTerminology(rows[0]?.terminology);
 }
