@@ -22,11 +22,26 @@ const PAGE_SIZE = 100;
 
 type ScheduledJobData = TenantJob & { platformChain?: boolean };
 
+type ScheduledJobOpts = {
+  attempts: number;
+  backoff: { type: 'exponential'; delay: number };
+  removeOnComplete: { age: number; count: number };
+  removeOnFail: { age: number };
+};
+
+/** Sweep failures retry quickly. They must not inherit the 24-attempt scan policy. */
+const SCAN_SWEEP_JOB_OPTS: ScheduledJobOpts = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 2_000 },
+  removeOnComplete: { age: 24 * 3600, count: 100 },
+  removeOnFail: { age: 7 * 24 * 3600 },
+};
+
 type ScheduledQueue = {
   upsertJobScheduler(
     id: string,
     repeat: { every: number },
-    template: { name: string; data: ScheduledJobData },
+    template: { name: string; data: ScheduledJobData; opts?: ScheduledJobOpts },
   ): Promise<unknown>;
   getJobSchedulers(
     start?: number,
@@ -42,6 +57,8 @@ export interface SchedulerIntervals {
   reminderSweepMs?: number;
   webhookSweepMs?: number;
   keyHealthMs?: number;
+  /** How often to redrive stuck evidence scans. Default 5 minutes. */
+  evidenceScanSweepMs?: number;
 }
 
 export interface ReconcileSchedulesInput {
@@ -51,6 +68,8 @@ export interface ReconcileSchedulesInput {
   reminderQueue?: ScheduledQueue;
   webhookSweepQueue?: ScheduledQueue;
   keyHealthQueue?: ScheduledQueue;
+  /** Malware-scan queue. Its repeatable job is the evidence recovery sweep. */
+  malwareScanQueue?: ScheduledQueue;
   intervals: SchedulerIntervals;
   /** Also schedule the platform (null organisation) chain. */
   includePlatformChain?: boolean;
@@ -62,6 +81,7 @@ export interface ReconcileSchedulesResult {
   reminderSchedulers: number;
   webhookSweepSchedulers: number;
   keyHealthSchedulers: number;
+  scanSchedulers: number;
   removedSchedulers: number;
 }
 
@@ -97,6 +117,7 @@ async function reconcileQueue(
   organisationIds: readonly string[],
   every: number,
   protectedIds: readonly string[] = [],
+  jobOpts?: ScheduledJobOpts,
 ): Promise<number> {
   const wanted = new Set([
     ...organisationIds.map((organisationId) =>
@@ -116,6 +137,7 @@ async function reconcileQueue(
           // The scheduler id is a stable, non-PII correlation value. Each job
           // remains tenant-bound and can safely be retried by BullMQ.
           data: { organisationId, correlationId: id },
+          ...(jobOpts ? { opts: jobOpts } : {}),
         },
       );
     }),
@@ -162,6 +184,7 @@ export async function reconcileTenantSchedules(
     reminderRemoved,
     webhookSweepRemoved,
     keyHealthRemoved,
+    scanRemoved,
   ] = await Promise.all([
     reconcileQueue(
       input.auditQueue,
@@ -200,6 +223,16 @@ export async function reconcileTenantSchedules(
           input.intervals.keyHealthMs ?? 300_000,
         )
       : Promise.resolve(0),
+    input.malwareScanQueue
+      ? reconcileQueue(
+          input.malwareScanQueue,
+          QueueName.MalwareScan,
+          organisationIds,
+          input.intervals.evidenceScanSweepMs ?? 300_000,
+          [],
+          SCAN_SWEEP_JOB_OPTS,
+        )
+      : Promise.resolve(0),
   ]);
 
   return {
@@ -208,12 +241,14 @@ export async function reconcileTenantSchedules(
     reminderSchedulers: input.reminderQueue ? organisationIds.length : 0,
     webhookSweepSchedulers: input.webhookSweepQueue ? organisationIds.length : 0,
     keyHealthSchedulers: input.keyHealthQueue ? organisationIds.length : 0,
+    scanSchedulers: input.malwareScanQueue ? organisationIds.length : 0,
     removedSchedulers:
       auditRemoved +
       retentionRemoved +
       reminderRemoved +
       webhookSweepRemoved +
-      keyHealthRemoved,
+      keyHealthRemoved +
+      scanRemoved,
   };
 }
 
@@ -231,12 +266,14 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
     reminderQueue: getQueue(QueueName.Reminder),
     webhookSweepQueue: getQueue(QueueName.WebhookSweep),
     keyHealthQueue: getQueue(QueueName.KeyHealth),
+    malwareScanQueue: getQueue(QueueName.MalwareScan),
     intervals: {
       auditVerifyMs: env.AUDIT_VERIFY_INTERVAL_MS,
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
       reminderSweepMs: env.REMINDER_SWEEP_INTERVAL_MS,
       webhookSweepMs: env.WEBHOOK_SWEEP_INTERVAL_MS,
       keyHealthMs: env.KEY_HEALTH_INTERVAL_MS,
+      evidenceScanSweepMs: env.EVIDENCE_SCAN_SWEEP_INTERVAL_MS,
     },
     includePlatformChain: true,
   });

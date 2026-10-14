@@ -153,6 +153,23 @@ export function objectKey(organisationId: string, ...parts: string[]): string {
   return segments.join('/');
 }
 
+/**
+ * S3 reports a missing object as `NotFound` (HeadObject) or `NoSuchKey`
+ * (GetObject). MinIO uses the same names. Anything else is a real storage fault.
+ */
+export function isMissingObject(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const name = 'name' in err ? err.name : undefined;
+  if (name === 'NotFound' || name === 'NoSuchKey') return true;
+  const meta = '$metadata' in err ? err.$metadata : undefined;
+  return (
+    typeof meta === 'object' &&
+    meta !== null &&
+    'httpStatusCode' in meta &&
+    meta.httpStatusCode === 404
+  );
+}
+
 /** Assert a key belongs to the given tenant before signing/moving it. */
 function assertOwnedKey(organisationId: string, key: string): void {
   if (!key.startsWith(`${organisationId}/`)) {
