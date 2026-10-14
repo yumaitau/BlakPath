@@ -61,31 +61,37 @@ export async function createEndpoint(
   // The id is fixed before sealing so the ciphertext is bound to this row.
   const id = uuidv7();
   const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
-  const inserted = await scope.db
-    .insert(webhookEndpoints)
-    .values(
-      scope.insertValues({
-        id,
-        url: input.url,
-        secretCiphertext,
-        events: input.events,
-        active: true,
-        createdByUserId: ctx.userId,
-      }),
-    )
-    .returning({
-      id: webhookEndpoints.id,
-      url: webhookEndpoints.url,
-      events: webhookEndpoints.events,
-    });
-  const row = must(inserted[0], 'webhook endpoint');
+  const row = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(webhookEndpoints)
+      .values(
+        scope.insertValues({
+          id,
+          url: input.url,
+          secretCiphertext,
+          events: input.events,
+          active: true,
+          createdByUserId: ctx.userId,
+        }),
+      )
+      .returning({
+        id: webhookEndpoints.id,
+        url: webhookEndpoints.url,
+        events: webhookEndpoints.events,
+      });
+    const created = must(inserted[0], 'webhook endpoint');
 
-  await recordAudit({
-    action: 'integration.connected',
-    resourceType: 'integration',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { url: input.url }, allow: ['url'] },
+    await recordAudit(
+      {
+        action: 'integration.connected',
+        resourceType: 'integration',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { url: input.url }, allow: ['url'] },
+      },
+      tx,
+    );
+    return created;
   });
   return { id: row.id, url: row.url, events: row.events, secret };
 }
@@ -126,25 +132,31 @@ export async function rotateEndpointSecret(
   const secret = secretGen();
   const scope = currentScope();
   const secretCiphertext = await sealWebhookSecret(scope.organisationId, id, secret);
-  const updated = await scope.db
-    .update(webhookEndpoints)
-    .set({ secretCiphertext, updatedAt: new Date() })
-    .where(
-      scope.where(
-        webhookEndpoints.organisationId,
-        eq(webhookEndpoints.id, id),
-        isNull(webhookEndpoints.deletedAt),
-      ),
-    )
-    .returning({ id: webhookEndpoints.id });
-  const row = updated[0];
-  if (!row) throw new AuthorizationError('PERMISSION_DENIED');
+  const row = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(webhookEndpoints)
+      .set({ secretCiphertext, updatedAt: new Date() })
+      .where(
+        scope.where(
+          webhookEndpoints.organisationId,
+          eq(webhookEndpoints.id, id),
+          isNull(webhookEndpoints.deletedAt),
+        ),
+      )
+      .returning({ id: webhookEndpoints.id });
+    const rotated = updated[0];
+    if (!rotated) throw new AuthorizationError('PERMISSION_DENIED');
 
-  await recordAudit({
-    action: 'integration.credentials_rotated',
-    resourceType: 'integration',
-    resourceId: row.id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'integration.credentials_rotated',
+        resourceType: 'integration',
+        resourceId: rotated.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return rotated;
   });
   return { id: row.id, secret };
 }
@@ -153,16 +165,21 @@ export async function deleteEndpoint(id: string): Promise<void> {
   const ctx = requireTenantContext();
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
   const scope = currentScope();
-  await scope.db
-    .update(webhookEndpoints)
-    .set({ active: false, deletedAt: new Date() })
-    .where(scope.where(webhookEndpoints.organisationId, eq(webhookEndpoints.id, id)));
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .update(webhookEndpoints)
+      .set({ active: false, deletedAt: new Date() })
+      .where(scope.where(webhookEndpoints.organisationId, eq(webhookEndpoints.id, id)));
 
-  await recordAudit({
-    action: 'integration.disconnected',
-    resourceType: 'integration',
-    resourceId: id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'integration.disconnected',
+        resourceType: 'integration',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }
 

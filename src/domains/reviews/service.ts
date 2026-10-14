@@ -77,28 +77,33 @@ export async function createReview(
   await getApplication(applicationId);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(reviews)
-    .values(
-      scope.insertValues({
-        applicationId,
-        reviewerUserId: ctx.userId,
-        status: 'draft',
-        content: input.content,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'review');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(reviews)
+      .values(
+        scope.insertValues({
+          applicationId,
+          reviewerUserId: ctx.userId,
+          status: 'draft',
+          content: input.content,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'review');
 
-  await recordAudit({
-    action: 'review.started',
-    resourceType: 'review',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { applicationId }, allow: ['applicationId'] },
+    await recordAudit(
+      {
+        action: 'review.started',
+        resourceType: 'review',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { applicationId }, allow: ['applicationId'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Add a comment to a draft review. */
@@ -117,26 +122,31 @@ export async function addReviewComment(
   }
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(reviewComments)
-    .values(
-      scope.insertValues({
-        reviewId,
-        authorUserId: ctx.userId,
-        body: input.body,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'review comment');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(reviewComments)
+      .values(
+        scope.insertValues({
+          reviewId,
+          authorUserId: ctx.userId,
+          body: input.body,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'review comment');
 
-  await recordAudit({
-    action: 'review.comment_added',
-    resourceType: 'review',
-    resourceId: reviewId,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'review.comment_added',
+        resourceType: 'review',
+        resourceId: reviewId,
+        result: 'success',
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Finalise a draft review, locking it into the committee record. */
@@ -153,40 +163,45 @@ export async function finaliseReview(reviewId: string): Promise<ReviewRow> {
 
   const scope = currentScope();
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(reviews)
-    .set({
-      status: 'finalised',
-      finalisedAt: new Date(),
-      finalisedByUserId: ctx.userId,
-      version: nextRowVersion(),
-    })
-    .where(
-      scope.where(
-        reviews.organisationId,
-        eq(reviews.id, reviewId),
-        eq(reviews.status, 'draft'),
-        versionMatches(reviews.version, loaded.versionText),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError(
-      'This review changed while you were working. Refresh and try again.',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(reviews)
+      .set({
+        status: 'finalised',
+        finalisedAt: new Date(),
+        finalisedByUserId: ctx.userId,
+        version: nextRowVersion(),
+      })
+      .where(
+        scope.where(
+          reviews.organisationId,
+          eq(reviews.id, reviewId),
+          eq(reviews.status, 'draft'),
+          versionMatches(reviews.version, loaded.versionText),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This review changed while you were working. Refresh and try again.',
+      );
+    }
+    const row = must(updated[0], 'review');
+
+    await recordAudit(
+      {
+        action: 'review.completed',
+        resourceType: 'review',
+        resourceId: reviewId,
+        result: 'success',
+        before: { data: { status: 'draft' }, allow: ['status'] },
+        after: { data: { status: 'finalised' }, allow: ['status'] },
+      },
+      tx,
     );
-  }
-  const row = must(updated[0], 'review');
 
-  await recordAudit({
-    action: 'review.completed',
-    resourceType: 'review',
-    resourceId: reviewId,
-    result: 'success',
-    before: { data: { status: 'draft' }, allow: ['status'] },
-    after: { data: { status: 'finalised' }, allow: ['status'] },
+    return row;
   });
-
-  return row;
 }
 
 /** Reopen a finalised review back to draft. */
@@ -203,33 +218,38 @@ export async function reopenReview(reviewId: string): Promise<ReviewRow> {
 
   const scope = currentScope();
   await beforeConditionalWrite();
-  const updated = await scope.db
-    .update(reviews)
-    .set({ status: 'draft', reopenedAt: new Date(), version: nextRowVersion() })
-    .where(
-      scope.where(
-        reviews.organisationId,
-        eq(reviews.id, reviewId),
-        eq(reviews.status, 'finalised'),
-        versionMatches(reviews.version, loaded.versionText),
-      ),
-    )
-    .returning();
-  if (updated.length === 0) {
-    throw new ConcurrencyConflictError(
-      'This review changed while you were working. Refresh and try again.',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(reviews)
+      .set({ status: 'draft', reopenedAt: new Date(), version: nextRowVersion() })
+      .where(
+        scope.where(
+          reviews.organisationId,
+          eq(reviews.id, reviewId),
+          eq(reviews.status, 'finalised'),
+          versionMatches(reviews.version, loaded.versionText),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      throw new ConcurrencyConflictError(
+        'This review changed while you were working. Refresh and try again.',
+      );
+    }
+    const row = must(updated[0], 'review');
+
+    await recordAudit(
+      {
+        action: 'review.reopened',
+        resourceType: 'review',
+        resourceId: reviewId,
+        result: 'success',
+      },
+      tx,
     );
-  }
-  const row = must(updated[0], 'review');
 
-  await recordAudit({
-    action: 'review.reopened',
-    resourceType: 'review',
-    resourceId: reviewId,
-    result: 'success',
+    return row;
   });
-
-  return row;
 }
 
 /** List reviews for an application the actor may read. */

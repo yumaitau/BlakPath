@@ -1,7 +1,7 @@
 import { and, eq, ne } from 'drizzle-orm';
 import { db, type Database } from '@/db/client';
 import { organisationKeyRewraps, organisationKeys } from '@/db/schema';
-import { recordPlatformAudit } from '@/domains/audit';
+import { recordPlatformAudit, type AuditTransaction } from '@/domains/audit';
 import { assertCodedAuditReason } from '@/domains/audit/hash';
 import { sharedDekCache } from '@/lib/encryption/dek-cache';
 import {
@@ -63,6 +63,30 @@ function auditSnapshot(row: OrganisationKeyRow): Record<string, unknown> {
     escrowPackageDigest: row.escrowPackageDigest,
     kmsKeyArn: row.kmsKeyArn,
   };
+}
+
+/** KMS KeyState values. Anything else from KMS is reported as `other`. */
+const KMS_KEY_STATES: ReadonlySet<string> = new Set([
+  'Creating',
+  'Enabled',
+  'Disabled',
+  'PendingDeletion',
+  'PendingImport',
+  'PendingReplicaDeletion',
+  'Unavailable',
+  'Updating',
+]);
+const KMS_EXCEPTION_NAME = /^[A-Za-z]{1,64}Exception$/;
+
+/**
+ * Reduce a KMS error name or key state to a closed vocabulary before it
+ * reaches the audit chain. Free text (messages, ARNs, request ids) becomes
+ * `other` so nothing unvetted is hashed into the trail.
+ */
+export function auditableKmsSignal(value: string | null | undefined): string {
+  if (!value) return 'other';
+  if (KMS_KEY_STATES.has(value) || KMS_EXCEPTION_NAME.test(value)) return value;
+  return 'other';
 }
 
 /** Reject anything that is not a CMK ARN in this deployment's region. */
@@ -156,28 +180,33 @@ export async function registerOrganisationKey(
   database: Database = db,
 ): Promise<OrganisationKeyRow> {
   assertTenantKeyArn(input.kmsKeyArn);
-  const inserted = await database
-    .insert(organisationKeys)
-    .values({
-      organisationId: input.organisationId,
-      custodyMode: input.custodyMode,
-      kmsKeyArn: input.kmsKeyArn,
-      keyVersion: 1,
-      status: 'pending_validation',
-      validationStatus: 'pending',
-      escrow: input.escrow ?? false,
-    })
-    .returning();
-  const row = inserted[0];
-  if (!row) throw new Error('Failed to register organisation key');
-  await recordPlatformAudit({
-    action: 'key.registered',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+  return database.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(organisationKeys)
+      .values({
+        organisationId: input.organisationId,
+        custodyMode: input.custodyMode,
+        kmsKeyArn: input.kmsKeyArn,
+        keyVersion: 1,
+        status: 'pending_validation',
+        validationStatus: 'pending',
+        escrow: input.escrow ?? false,
+      })
+      .returning();
+    const row = inserted[0];
+    if (!row) throw new Error('Failed to register organisation key');
+    await recordPlatformAudit(
+      {
+        action: 'key.registered',
+        resourceType: 'organisation_key',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export interface KeyReplacement {
@@ -213,51 +242,85 @@ export async function rotateOrganisationKey(
     throw new Error('A key replacement is already in progress');
   }
   const nextVersion = current.keyVersion + 1;
-  const updated = await database
+  return database.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationKeys)
+      .set({
+        kmsKeyArn,
+        keyVersion: nextVersion,
+        previousKmsKeyArn: current.kmsKeyArn,
+        previousKeyVersion: current.keyVersion,
+        rotatedAt: new Date(),
+        status: 'active',
+        validationStatus: 'pending',
+        validatedAt: null,
+        validationFailure: null,
+        canaryCiphertext: null,
+        escrow: false,
+        escrowPackageDigest: null,
+      })
+      .where(eq(organisationKeys.organisationId, organisationId))
+      .returning();
+    const row = updated[0];
+    if (!row) throw new Error('Failed to rotate organisation key');
+    const inserted = await tx
+      .insert(organisationKeyRewraps)
+      .values({
+        organisationId,
+        fromKmsKeyArn: current.kmsKeyArn,
+        fromKeyVersion: current.keyVersion,
+        toKmsKeyArn: kmsKeyArn,
+        toKeyVersion: nextVersion,
+        status: 'running',
+        phase: 'fields',
+      })
+      .returning();
+    const rewrap = inserted[0];
+    if (!rewrap) throw new Error('Failed to record key re-wrap');
+    await recordPlatformAudit(
+      {
+        action: 'key.replacement_started',
+        resourceType: 'organisation_key_rewrap',
+        resourceId: rewrap.id,
+        result: 'success',
+        after: {
+          data: { ...auditSnapshot(row), rewrapId: rewrap.id },
+          allow: [...AUDIT_ALLOW, 'rewrapId'],
+        },
+      },
+      tx,
+    );
+    return { key: row, rewrapId: rewrap.id };
+  });
+}
+
+/**
+ * Write a status change and its audit on `tx`. The caller owns the
+ * transaction and must evict cached data keys after it commits.
+ */
+export async function applyOrganisationKeyStatus(
+  tx: AuditTransaction,
+  organisationId: string,
+  status: OrganisationKeyStatus,
+): Promise<OrganisationKeyRow> {
+  const updated = await tx
     .update(organisationKeys)
-    .set({
-      kmsKeyArn,
-      keyVersion: nextVersion,
-      previousKmsKeyArn: current.kmsKeyArn,
-      previousKeyVersion: current.keyVersion,
-      rotatedAt: new Date(),
-      status: 'active',
-      validationStatus: 'pending',
-      validatedAt: null,
-      validationFailure: null,
-      canaryCiphertext: null,
-      escrow: false,
-      escrowPackageDigest: null,
-    })
+    .set({ status })
     .where(eq(organisationKeys.organisationId, organisationId))
     .returning();
-  const row = updated[0];
-  if (!row) throw new Error('Failed to rotate organisation key');
-  const inserted = await database
-    .insert(organisationKeyRewraps)
-    .values({
-      organisationId,
-      fromKmsKeyArn: current.kmsKeyArn,
-      fromKeyVersion: current.keyVersion,
-      toKmsKeyArn: kmsKeyArn,
-      toKeyVersion: nextVersion,
-      status: 'running',
-      phase: 'fields',
-    })
-    .returning();
-  const rewrap = inserted[0];
-  if (!rewrap) throw new Error('Failed to record key re-wrap');
-  await recordPlatformAudit({
-    action: 'key.replacement_started',
-    resourceType: 'organisation_key_rewrap',
-    resourceId: rewrap.id,
-    result: 'success',
-    after: {
-      data: { ...auditSnapshot(row), rewrapId: rewrap.id },
-      allow: [...AUDIT_ALLOW, 'rewrapId'],
+  const changed = updated[0];
+  if (!changed) throw new Error('Organisation has no key');
+  await recordPlatformAudit(
+    {
+      action: 'key.status_changed',
+      resourceType: 'organisation_key',
+      resourceId: changed.id,
+      result: 'success',
+      after: { data: auditSnapshot(changed), allow: AUDIT_ALLOW },
     },
-  });
-  return { key: row, rewrapId: rewrap.id };
+    tx,
+  );
+  return changed;
 }
 
 /** Human status change (disable, schedule deletion, re-enable). */
@@ -266,21 +329,11 @@ export async function setOrganisationKeyStatus(
   status: OrganisationKeyStatus,
   database: Database = db,
 ): Promise<OrganisationKeyRow> {
-  const updated = await database
-    .update(organisationKeys)
-    .set({ status })
-    .where(eq(organisationKeys.organisationId, organisationId))
-    .returning();
-  const row = updated[0];
-  if (!row) throw new Error('Organisation has no key');
+  const row = await database.transaction((tx) =>
+    applyOrganisationKeyStatus(tx, organisationId, status),
+  );
+  // Evict after commit so a concurrent read cannot re-cache under the old status.
   if (status !== 'active') sharedDekCache().evictOrganisation(organisationId);
-  await recordPlatformAudit({
-    action: 'key.status_changed',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
-  });
   return row;
 }
 
@@ -293,25 +346,33 @@ export async function markOrganisationKeyUnavailable(
   kmsError: string,
   database: Database = db,
 ): Promise<void> {
-  const updated = await database
-    .update(organisationKeys)
-    .set({ status: 'unavailable' })
-    .where(
-      and(
-        eq(organisationKeys.organisationId, organisationId),
-        ne(organisationKeys.status, 'unavailable'),
-      ),
-    )
-    .returning();
-  const row = updated[0];
-  if (!row) return;
-  await recordPlatformAudit({
-    action: 'key.unavailable',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: 'failure',
-    reason: kmsError,
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+  await database.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationKeys)
+      .set({ status: 'unavailable' })
+      .where(
+        and(
+          eq(organisationKeys.organisationId, organisationId),
+          ne(organisationKeys.status, 'unavailable'),
+        ),
+      )
+      .returning();
+    const row = updated[0];
+    if (!row) return;
+    await recordPlatformAudit(
+      {
+        action: 'key.unavailable',
+        resourceType: 'organisation_key',
+        resourceId: row.id,
+        result: 'failure',
+        reason: 'key.kms_refused',
+        after: {
+          data: { ...auditSnapshot(row), kmsError: auditableKmsSignal(kmsError) },
+          allow: [...AUDIT_ALLOW, 'kmsError'],
+        },
+      },
+      tx,
+    );
   });
 }
 
@@ -328,32 +389,37 @@ export async function resetOrganisationKeyForValidation(
   assertTenantKeyArn(input.kmsKeyArn);
   const current = await getOrganisationKey(input.organisationId, database);
   if (!current) return registerOrganisationKey(input, database);
-  const updated = await database
-    .update(organisationKeys)
-    .set({
-      custodyMode: input.custodyMode,
-      kmsKeyArn: input.kmsKeyArn,
-      keyVersion: current.keyVersion + 1,
-      status: 'pending_validation',
-      validationStatus: 'pending',
-      escrow: input.escrow ?? false,
-      validatedAt: null,
-      validationFailure: null,
-      canaryCiphertext: null,
-      rotatedAt: new Date(),
-    })
-    .where(eq(organisationKeys.organisationId, input.organisationId))
-    .returning();
-  const row = updated[0];
-  if (!row) throw new Error('Failed to reset organisation key');
-  await recordPlatformAudit({
-    action: 'key.rotated',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+  return database.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationKeys)
+      .set({
+        custodyMode: input.custodyMode,
+        kmsKeyArn: input.kmsKeyArn,
+        keyVersion: current.keyVersion + 1,
+        status: 'pending_validation',
+        validationStatus: 'pending',
+        escrow: input.escrow ?? false,
+        validatedAt: null,
+        validationFailure: null,
+        canaryCiphertext: null,
+        rotatedAt: new Date(),
+      })
+      .where(eq(organisationKeys.organisationId, input.organisationId))
+      .returning();
+    const row = updated[0];
+    if (!row) throw new Error('Failed to reset organisation key');
+    await recordPlatformAudit(
+      {
+        action: 'key.rotated',
+        resourceType: 'organisation_key',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Persist the handshake. Only a pass marks the key usable. */
@@ -366,28 +432,33 @@ export async function completeOrganisationKeyValidation(
   database: Database = db,
 ): Promise<OrganisationKeyRow> {
   const passed = input.failureCode === null;
-  const updated = await database
-    .update(organisationKeys)
-    .set({
-      status: passed ? 'active' : 'pending_validation',
-      validationStatus: passed ? 'passed' : 'failed',
-      validatedAt: passed ? new Date() : null,
-      validationFailure: input.failureCode,
-      canaryCiphertext: passed ? input.canaryCiphertext : null,
-    })
-    .where(eq(organisationKeys.organisationId, input.organisationId))
-    .returning();
-  const row = updated[0];
-  if (!row) throw new Error('Organisation has no key');
-  await recordPlatformAudit({
-    action: passed ? 'key.validation_passed' : 'key.validation_failed',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: passed ? 'success' : 'failure',
-    ...(input.failureCode ? { reason: input.failureCode } : {}),
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+  return database.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationKeys)
+      .set({
+        status: passed ? 'active' : 'pending_validation',
+        validationStatus: passed ? 'passed' : 'failed',
+        validatedAt: passed ? new Date() : null,
+        validationFailure: input.failureCode,
+        canaryCiphertext: passed ? input.canaryCiphertext : null,
+      })
+      .where(eq(organisationKeys.organisationId, input.organisationId))
+      .returning();
+    const row = updated[0];
+    if (!row) throw new Error('Organisation has no key');
+    await recordPlatformAudit(
+      {
+        action: passed ? 'key.validation_passed' : 'key.validation_failed',
+        resourceType: 'organisation_key',
+        resourceId: row.id,
+        result: passed ? 'success' : 'failure',
+        ...(input.failureCode ? { reason: input.failureCode } : {}),
+        after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export interface PublicOrganisationKey {
@@ -429,24 +500,35 @@ export async function saveKeyHealthObservation(
   },
   database: Database = db,
 ): Promise<void> {
-  const updated = await database
-    .update(organisationKeys)
-    .set({
-      status: input.status,
-      lastHealthAt: new Date(),
-      lastHealthState: input.healthState,
-    })
-    .where(eq(organisationKeys.organisationId, input.organisationId))
-    .returning();
-  const row = updated[0];
-  if (!row || input.previousStatus === input.status) return;
-  await recordPlatformAudit({
-    action: input.status === 'unavailable' ? 'key.unavailable' : 'key.status_changed',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: input.status === 'active' ? 'success' : 'failure',
-    reason: input.healthState,
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+  await database.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationKeys)
+      .set({
+        status: input.status,
+        lastHealthAt: new Date(),
+        lastHealthState: input.healthState,
+      })
+      .where(eq(organisationKeys.organisationId, input.organisationId))
+      .returning();
+    const row = updated[0];
+    if (!row || input.previousStatus === input.status) return;
+    await recordPlatformAudit(
+      {
+        action: input.status === 'unavailable' ? 'key.unavailable' : 'key.status_changed',
+        resourceType: 'organisation_key',
+        resourceId: row.id,
+        result: input.status === 'active' ? 'success' : 'failure',
+        reason: input.status === 'active' ? 'key.health_ok' : 'key.health_degraded',
+        after: {
+          data: {
+            ...auditSnapshot(row),
+            healthState: auditableKmsSignal(input.healthState),
+          },
+          allow: [...AUDIT_ALLOW, 'healthState'],
+        },
+      },
+      tx,
+    );
   });
 }
 
@@ -491,27 +573,32 @@ export async function recordEscrowOptIn(
       'Escrow requires imported key material (custody mode client_owned_escrow)',
     );
   }
-  const updated = await database
-    .update(organisationKeys)
-    .set({
-      escrow: true,
-      escrowConsentReference: consentReference,
-      escrowConsentedAt: input.consentedAt,
-      escrowPackageDigest: packageDigest,
-    })
-    .where(eq(organisationKeys.organisationId, input.organisationId))
-    .returning();
-  const row = updated[0];
-  if (!row) throw new Error('Failed to record escrow opt-in');
-  await recordPlatformAudit({
-    action: 'key.escrow_opted_in',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: 'success',
-    actorUserId: input.recordedByUserId,
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+  return database.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationKeys)
+      .set({
+        escrow: true,
+        escrowConsentReference: consentReference,
+        escrowConsentedAt: input.consentedAt,
+        escrowPackageDigest: packageDigest,
+      })
+      .where(eq(organisationKeys.organisationId, input.organisationId))
+      .returning();
+    const row = updated[0];
+    if (!row) throw new Error('Failed to record escrow opt-in');
+    await recordPlatformAudit(
+      {
+        action: 'key.escrow_opted_in',
+        resourceType: 'organisation_key',
+        resourceId: row.id,
+        result: 'success',
+        actorUserId: input.recordedByUserId,
+        after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /**
@@ -530,21 +617,26 @@ export async function withdrawEscrow(
   // Reject free text before the write, so a bad reason cannot leave escrow
   // withdrawn without its audit event.
   assertCodedAuditReason(reason);
-  const updated = await database
-    .update(organisationKeys)
-    .set({ escrow: false, escrowPackageDigest: null })
-    .where(eq(organisationKeys.organisationId, organisationId))
-    .returning();
-  const row = updated[0];
-  if (!row) throw new Error('Organisation has no key');
-  await recordPlatformAudit({
-    action: 'key.escrow_withdrawn',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: 'success',
-    reason,
-    actorUserId: recordedByUserId,
-    after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+  return database.transaction(async (tx) => {
+    const updated = await tx
+      .update(organisationKeys)
+      .set({ escrow: false, escrowPackageDigest: null })
+      .where(eq(organisationKeys.organisationId, organisationId))
+      .returning();
+    const row = updated[0];
+    if (!row) throw new Error('Organisation has no key');
+    await recordPlatformAudit(
+      {
+        action: 'key.escrow_withdrawn',
+        resourceType: 'organisation_key',
+        resourceId: row.id,
+        result: 'success',
+        reason,
+        actorUserId: recordedByUserId,
+        after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
