@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { assertCodedAuditReason } from '@/domains/audit/hash';
 
 const { insert, update, select, recordPlatformAudit } = vi.hoisted(() => ({
   insert: vi.fn(),
@@ -108,10 +109,105 @@ describe('organisation key changes', () => {
         resourceType: 'organisation_key',
         resourceId: row.id,
         result: 'failure',
-        reason: 'DisabledException',
+        reason: 'key.kms_refused',
+        after: expect.objectContaining({
+          data: expect.objectContaining({ kmsError: 'DisabledException' }),
+        }),
       }),
       expect.anything(),
     );
+  });
+
+  it('marks the key unavailable on an arbitrary KMS message and audits a coded reason', async () => {
+    const set = vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ ...row, status: 'unavailable' }]),
+      }),
+    });
+    update.mockReturnValue({ set });
+
+    const { markOrganisationKeyUnavailable } =
+      await import('@/domains/organisation-keys');
+    const message =
+      'User: arn:aws:sts::222222222222:assumed-role/x is not authorized to perform: kms:Decrypt (Service: Kms, Status Code: 400)';
+    await markOrganisationKeyUnavailable(row.organisationId, message);
+
+    expect(set).toHaveBeenCalledWith({ status: 'unavailable' });
+    const [event] = recordPlatformAudit.mock.calls[0] as [
+      { reason: string; after: { data: Record<string, unknown> } },
+    ];
+    expect(assertCodedAuditReason(event.reason)).toBe('key.kms_refused');
+    expect(event.after.data.kmsError).toBe('other');
+    expect(JSON.stringify(event)).not.toContain('not authorized');
+  });
+
+  it('audits a health change with a coded reason and a closed key state', async () => {
+    const returning = vi.fn().mockResolvedValue([{ ...row, status: 'disabled' }]);
+    update.mockReturnValue({
+      set: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ returning }) }),
+    });
+
+    const { saveKeyHealthObservation } =
+      await import('@/domains/organisation-keys/service');
+    await saveKeyHealthObservation({
+      organisationId: row.organisationId,
+      status: 'disabled',
+      healthState: 'Disabled',
+      previousStatus: 'active',
+    });
+    await saveKeyHealthObservation({
+      organisationId: row.organisationId,
+      status: 'unavailable',
+      healthState: 'socket hang up, retry later',
+      previousStatus: 'disabled',
+    });
+
+    const events = recordPlatformAudit.mock.calls.map(
+      ([event]) => event as { reason: string; after: { data: Record<string, unknown> } },
+    );
+    expect(events.map((e) => e.reason)).toEqual([
+      'key.health_degraded',
+      'key.health_degraded',
+    ]);
+    expect(events.map((e) => e.after.data.healthState)).toEqual(['Disabled', 'other']);
+    for (const event of events) {
+      expect(assertCodedAuditReason(event.reason)).toBe(event.reason);
+    }
+  });
+
+  it('limits KMS signals to exception names and key states', async () => {
+    const { auditableKmsSignal } = await import('@/domains/organisation-keys/service');
+    expect(auditableKmsSignal('AccessDeniedException')).toBe('AccessDeniedException');
+    expect(auditableKmsSignal('PendingDeletion')).toBe('PendingDeletion');
+    expect(auditableKmsSignal('Access denied for user@example.org')).toBe('other');
+    expect(auditableKmsSignal('')).toBe('other');
+    expect(auditableKmsSignal(null)).toBe('other');
+  });
+
+  it('joins the deletion audit to the pending_deletion status change', async () => {
+    const returning = vi.fn().mockResolvedValue([{ ...row, status: 'pending_deletion' }]);
+    update.mockReturnValue({
+      set: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ returning }) }),
+    });
+    const transaction = vi.spyOn(
+      (await import('@/db/client')).db as unknown as {
+        transaction: (fn: (tx: unknown) => unknown) => unknown;
+      },
+      'transaction',
+    );
+
+    const { scheduleKeyDeletion } = await import('@/domains/organisation-keys');
+    await scheduleKeyDeletion(row.organisationId);
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const actions = recordPlatformAudit.mock.calls.map(
+      ([event, tx]) => [(event as { action: string }).action, Boolean(tx)] as const,
+    );
+    expect(actions).toEqual([
+      ['key.status_changed', true],
+      ['key.deletion_scheduled', true],
+    ]);
+    transaction.mockRestore();
   });
 
   it('records a replacement re-wrap and refuses automatic rotation of the same ARN', async () => {

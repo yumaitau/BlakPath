@@ -1,7 +1,7 @@
 import { and, eq, ne } from 'drizzle-orm';
 import { db, type Database } from '@/db/client';
 import { organisationKeyRewraps, organisationKeys } from '@/db/schema';
-import { recordPlatformAudit } from '@/domains/audit';
+import { recordPlatformAudit, type AuditTransaction } from '@/domains/audit';
 import { assertCodedAuditReason } from '@/domains/audit/hash';
 import { sharedDekCache } from '@/lib/encryption/dek-cache';
 import {
@@ -63,6 +63,30 @@ function auditSnapshot(row: OrganisationKeyRow): Record<string, unknown> {
     escrowPackageDigest: row.escrowPackageDigest,
     kmsKeyArn: row.kmsKeyArn,
   };
+}
+
+/** KMS KeyState values. Anything else from KMS is reported as `other`. */
+const KMS_KEY_STATES: ReadonlySet<string> = new Set([
+  'Creating',
+  'Enabled',
+  'Disabled',
+  'PendingDeletion',
+  'PendingImport',
+  'PendingReplicaDeletion',
+  'Unavailable',
+  'Updating',
+]);
+const KMS_EXCEPTION_NAME = /^[A-Za-z]{1,64}Exception$/;
+
+/**
+ * Reduce a KMS error name or key state to a closed vocabulary before it
+ * reaches the audit chain. Free text (messages, ARNs, request ids) becomes
+ * `other` so nothing unvetted is hashed into the trail.
+ */
+export function auditableKmsSignal(value: string | null | undefined): string {
+  if (!value) return 'other';
+  if (KMS_KEY_STATES.has(value) || KMS_EXCEPTION_NAME.test(value)) return value;
+  return 'other';
 }
 
 /** Reject anything that is not a CMK ARN in this deployment's region. */
@@ -270,32 +294,44 @@ export async function rotateOrganisationKey(
   });
 }
 
+/**
+ * Write a status change and its audit on `tx`. The caller owns the
+ * transaction and must evict cached data keys after it commits.
+ */
+export async function applyOrganisationKeyStatus(
+  tx: AuditTransaction,
+  organisationId: string,
+  status: OrganisationKeyStatus,
+): Promise<OrganisationKeyRow> {
+  const updated = await tx
+    .update(organisationKeys)
+    .set({ status })
+    .where(eq(organisationKeys.organisationId, organisationId))
+    .returning();
+  const changed = updated[0];
+  if (!changed) throw new Error('Organisation has no key');
+  await recordPlatformAudit(
+    {
+      action: 'key.status_changed',
+      resourceType: 'organisation_key',
+      resourceId: changed.id,
+      result: 'success',
+      after: { data: auditSnapshot(changed), allow: AUDIT_ALLOW },
+    },
+    tx,
+  );
+  return changed;
+}
+
 /** Human status change (disable, schedule deletion, re-enable). */
 export async function setOrganisationKeyStatus(
   organisationId: string,
   status: OrganisationKeyStatus,
   database: Database = db,
 ): Promise<OrganisationKeyRow> {
-  const row = await database.transaction(async (tx) => {
-    const updated = await tx
-      .update(organisationKeys)
-      .set({ status })
-      .where(eq(organisationKeys.organisationId, organisationId))
-      .returning();
-    const changed = updated[0];
-    if (!changed) throw new Error('Organisation has no key');
-    await recordPlatformAudit(
-      {
-        action: 'key.status_changed',
-        resourceType: 'organisation_key',
-        resourceId: changed.id,
-        result: 'success',
-        after: { data: auditSnapshot(changed), allow: AUDIT_ALLOW },
-      },
-      tx,
-    );
-    return changed;
-  });
+  const row = await database.transaction((tx) =>
+    applyOrganisationKeyStatus(tx, organisationId, status),
+  );
   // Evict after commit so a concurrent read cannot re-cache under the old status.
   if (status !== 'active') sharedDekCache().evictOrganisation(organisationId);
   return row;
@@ -329,8 +365,11 @@ export async function markOrganisationKeyUnavailable(
         resourceType: 'organisation_key',
         resourceId: row.id,
         result: 'failure',
-        reason: kmsError,
-        after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+        reason: 'key.kms_refused',
+        after: {
+          data: { ...auditSnapshot(row), kmsError: auditableKmsSignal(kmsError) },
+          allow: [...AUDIT_ALLOW, 'kmsError'],
+        },
       },
       tx,
     );
@@ -479,8 +518,14 @@ export async function saveKeyHealthObservation(
         resourceType: 'organisation_key',
         resourceId: row.id,
         result: input.status === 'active' ? 'success' : 'failure',
-        reason: input.healthState,
-        after: { data: auditSnapshot(row), allow: AUDIT_ALLOW },
+        reason: input.status === 'active' ? 'key.health_ok' : 'key.health_degraded',
+        after: {
+          data: {
+            ...auditSnapshot(row),
+            healthState: auditableKmsSignal(input.healthState),
+          },
+          allow: [...AUDIT_ALLOW, 'healthState'],
+        },
       },
       tx,
     );

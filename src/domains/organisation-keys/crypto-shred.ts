@@ -2,7 +2,8 @@ import { db, type Database } from '@/db/client';
 import { destructionCertificates } from '@/db/schema';
 import { recordPlatformAudit } from '@/domains/audit';
 import type { DestructionCertificate } from '@/lib/encryption/destruction';
-import { setOrganisationKeyStatus, type OrganisationKeyRow } from './service';
+import { sharedDekCache } from '@/lib/encryption/dek-cache';
+import { applyOrganisationKeyStatus, type OrganisationKeyRow } from './service';
 
 /**
  * Mark the key pending deletion. Reads fail closed and the worker pauses the
@@ -12,26 +13,35 @@ export async function scheduleKeyDeletion(
   organisationId: string,
   database: Database = db,
 ): Promise<OrganisationKeyRow> {
-  const row = await setOrganisationKeyStatus(
-    organisationId,
-    'pending_deletion',
-    database,
-  );
-  await recordPlatformAudit({
-    action: 'key.deletion_scheduled',
-    resourceType: 'organisation_key',
-    resourceId: row.id,
-    result: 'success',
-    after: {
-      data: {
-        organisationId: row.organisationId,
-        status: row.status,
-        kmsKeyArn: row.kmsKeyArn,
-        keyVersion: row.keyVersion,
+  // Status change, its audit and the deletion audit commit together.
+  const row = await database.transaction(async (tx) => {
+    const changed = await applyOrganisationKeyStatus(
+      tx,
+      organisationId,
+      'pending_deletion',
+    );
+    await recordPlatformAudit(
+      {
+        action: 'key.deletion_scheduled',
+        resourceType: 'organisation_key',
+        resourceId: changed.id,
+        result: 'success',
+        after: {
+          data: {
+            organisationId: changed.organisationId,
+            status: changed.status,
+            kmsKeyArn: changed.kmsKeyArn,
+            keyVersion: changed.keyVersion,
+          },
+          allow: ['organisationId', 'status', 'kmsKeyArn', 'keyVersion'],
+        },
       },
-      allow: ['organisationId', 'status', 'kmsKeyArn', 'keyVersion'],
-    },
+      tx,
+    );
+    return changed;
   });
+  // Evict after commit so a concurrent read cannot re-cache the key.
+  sharedDekCache().evictOrganisation(organisationId);
   return row;
 }
 
