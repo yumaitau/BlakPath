@@ -1,0 +1,16 @@
+{
+  "AdvancedEventSelectors": [
+    {
+      "Name": "Management events",
+      "FieldSelectors": [{ "Field": "eventCategory", "Equals": ["Management"] }]
+    },
+    {
+      "Name": "KMS data events for the BlakPath CMK",
+      "FieldSelectors": [
+        { "Field": "eventCategory", "Equals": ["Data"] },
+        { "Field": "resources.type", "Equals": ["AWS::KMS::Key"] },
+        { "Field": "resources.ARN", "Equals": ["REPLACE_WITH_KEY_ARN"] }
+      ]
+    }
+  ]
+}

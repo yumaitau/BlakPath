@@ -39,6 +39,12 @@ export const users = pgTable(
     image: text('image'),
     /** Platform (BlakPath) staff flag. Not a tenant role; grants no tenant data. */
     isPlatformOperator: boolean('is_platform_operator').notNull().default(false),
+    /**
+     * Set by the two-factor plugin once a TOTP code is confirmed. Sign-in
+     * issues a second-factor challenge only when this is true. A pending
+     * enrolment leaves this false.
+     */
+    twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
     ...timestamps,
   },
   (table) => [uniqueIndex('users_email_unique').on(table.email)],
@@ -142,6 +148,8 @@ export const passkeys = pgTable(
     backedUp: boolean('backed_up').notNull().default(false),
     /** Comma-separated authenticator transports (e.g. 'internal,hybrid'). */
     transports: text('transports'),
+    /** Authenticator model id from registration. Optional; not a device id. */
+    aaguid: text('aaguid'),
     ...timestamps,
   },
   (table) => [uniqueIndex('passkeys_credential_id_unique').on(table.credentialID)],
@@ -150,20 +158,31 @@ export const passkeys = pgTable(
 /**
  * TOTP two-factor secret and recovery codes (Better Auth twoFactor plugin).
  *
- * SECURITY: `secret` and `backupCodes` hold authentication secrets. They MUST
- * be envelope-encrypted (AES-GCM under a KMS-managed data key) by the
- * application before being written here — this table stores ciphertext only,
- * never the plaintext TOTP secret or usable backup codes.
+ * Better Auth 1.6 encrypts `secret` and `backupCodes` with
+ * XChaCha20-Poly1305 under SHA-256(BETTER_AUTH_SECRET) before insert
+ * (`symmetricEncrypt`). That is not `encryptField`, not
+ * `ENCRYPTION_MASTER_KEY`, and not a KMS data key. Plaintext exists in the
+ * auth process during enrolment and verification.
  */
 export const twoFactors = pgTable('two_factors', {
   id: primaryId(),
   userId: refId('user_id')
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
-  /** Envelope-encrypted TOTP secret ciphertext. Never plaintext. */
+  /** Better Auth ciphertext of the TOTP secret. Not a KMS envelope. */
   secret: text('secret').notNull(),
-  /** Envelope-encrypted recovery codes ciphertext. Never plaintext. */
+  /** Better Auth ciphertext of the recovery codes. Not a KMS envelope. */
   backupCodes: text('backup_codes').notNull(),
+  /**
+   * True once the user has proved they can produce a code for this secret.
+   * Defaults to true so rows written before this column existed stay valid.
+   * A new enrolment is inserted with `verified` false until that proof.
+   */
+  verified: boolean('verified').notNull().default(true),
+  /** Consecutive failed second-factor checks. Reset after a success. */
+  failedVerificationCount: integer('failed_verification_count').notNull().default(0),
+  /** When set and still in the future, second-factor verification is refused. */
+  lockedUntil: timestamp('locked_until', { withTimezone: true }),
   ...timestamps,
 });
 

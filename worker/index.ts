@@ -1,12 +1,22 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
+import { getOrganisationKey } from '@/domains/organisation-keys/service';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
+import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
 import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
 import { closeMalwareScanDlq, deadLetterExhaustedScan } from '@/lib/queues/dlq';
 import { malwareScanBackoffStrategy } from '@/lib/queues/scan-policy';
+import { startKeyHealthLoop } from './key-health-loop';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
-import { startTenantScheduleSync } from './scheduler';
 import { queueFailureSignal } from './operational-signals';
+import { startAuthEmailWorker } from './auth-email';
+import { startTenantScheduleSync } from './scheduler';
+import { rememberPausedJob } from './tenant-pause-ledger';
+import {
+  applyTenantJobGate,
+  pauseOnTenantKeyLoss,
+  tenantKeyPauseSignal,
+} from './tenant-key-gate';
 
 /**
  * BlakPath background worker bootstrap.
@@ -46,7 +56,32 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
   const worker = new Worker<TenantJob>(
     queueName,
-    async (job) => processor(job, childLogger),
+    async (job, token) => {
+      const moveToDelayed = async (timestamp: number): Promise<void> => {
+        if (!token) throw new Error('tenant key pause requires the BullMQ lock token');
+        await job.moveToDelayed(timestamp, token);
+        if (job.id) rememberPausedJob(job.data.organisationId, `${queueName}:${job.id}`);
+      };
+      const row = await getOrganisationKey(job.data.organisationId);
+      const outcome = await applyTenantJobGate({
+        status: row?.status ?? null,
+        moveToDelayed,
+      });
+      if (outcome === 'paused') throw tenantKeyPauseSignal();
+      try {
+        return await processor(job, childLogger);
+      } catch (err) {
+        // A scan whose tenant key went non-active mid-job waits like a gated
+        // job. It must not burn a scan attempt or reach the dead-letter queue.
+        if (
+          queueName === QueueName.MalwareScan &&
+          (await pauseOnTenantKeyLoss({ err, moveToDelayed }))
+        ) {
+          throw tenantKeyPauseSignal();
+        }
+        throw err;
+      }
+    },
     {
       connection,
       prefix: 'bp:queue',
@@ -90,6 +125,8 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
 
 let shuttingDown = false;
 let stopTenantScheduleSync: (() => void) | null = null;
+const authEmailWorker = startAuthEmailWorker(connection, workerLogger);
+let stopKeyHealth: (() => void) | null = null;
 
 /**
  * Graceful shutdown: close every worker (waits for active jobs to settle),
@@ -113,9 +150,11 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
   try {
     stopTenantScheduleSync?.();
-    await Promise.all(workers.map((w) => w.close()));
+    stopKeyHealth?.();
+    await Promise.all([authEmailWorker.close(), ...workers.map((w) => w.close())]);
     await closeMalwareScanDlq();
     await closeQueues();
+    await closeAuthEmailQueue();
     await redis.quit();
     clearTimeout(deadline);
     workerLogger.info('shutdown complete');
@@ -138,8 +177,12 @@ async function main(): Promise<void> {
   // accepting jobs. A startup failure is intentional: a worker without its
   // integrity/retention schedules is not healthy enough to serve.
   stopTenantScheduleSync = await startTenantScheduleSync(workerLogger);
-  await Promise.all(workers.map((w) => w.run()));
-  workerLogger.info({ queues: REGISTERED_QUEUES }, 'blakpath worker started');
+  stopKeyHealth = startKeyHealthLoop(workerLogger);
+  await Promise.all([authEmailWorker.run(), ...workers.map((w) => w.run())]);
+  workerLogger.info(
+    { queues: [...REGISTERED_QUEUES, 'auth-email'] },
+    'blakpath worker started',
+  );
 }
 
 main().catch((err) => {

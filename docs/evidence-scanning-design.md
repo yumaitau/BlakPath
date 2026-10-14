@@ -90,13 +90,28 @@ Only `clean` objects can be presigned for download, and only to a caller with
 
 ## Validation & hardening
 
-- **Pre-upload:** enforce allow-listed content types and a maximum size before
-  minting the presigned PUT.
-- **Post-upload (worker):** verify the real content type from magic bytes
-  (`file-type`) against the declared type — reject spoofed extensions before
-  scanning.
+- **Pre-upload:** enforce allow-listed content types and a maximum size (25 MiB)
+  before minting the presigned PUT. The upload form checks type and size in the
+  browser first, with plain-language errors, but the server is authoritative.
+- **Signed PUT:** the presigned URL signs `Content-Type` and `Content-Length`
+  (the presigner leaves `Content-Type` unsigned unless asked), so S3 refuses a
+  PUT whose type or size differs from the declaration.
+- **Post-upload (worker):** `HeadObject` first — the stored size must equal the
+  declared size and stay within the cap, or the upload is rejected
+  (`rejected:size`). Every later read and the promotion copy are pinned to that
+  `ETag`, so a re-upload cannot swap bytes between checks.
+- **Content type (worker):** verify the real content type from magic bytes
+  (`file-type`, streamed) against the declared type — reject spoofed extensions
+  before scanning. Known container equivalences are accepted: a legacy `.doc`
+  is detected as an MS Compound File (`application/x-cfb`) and is accepted as
+  `application/msword` only when the file name ends in `.doc`; HEIC and HEIF
+  share a container and are interchangeable. Unidentifiable bytes are rejected.
 - **Scanning:** stream the object to ClamAV (`INSTREAM`) at
-  `CLAMAV_HOST:CLAMAV_PORT`; do not load whole files into app memory.
+  `CLAMAV_HOST:CLAMAV_PORT` in 64 KiB frames with socket backpressure, hashing
+  (SHA-256) on the way; whole files are never loaded into app memory.
+- **Promotion:** the copy into the evidence bucket replaces the object metadata
+  (`MetadataDirective: REPLACE`) and sets `Content-Type` to the verified type,
+  never the client-declared one.
 - **Retries:** a `malware-scan` job uses 24 attempts and exponential backoff
   from 2 seconds, capped at 10 minutes (`src/lib/queues/scan-policy.ts`). A
   scanner outage causes retries, not promotion. The capped schedule still has
@@ -116,10 +131,15 @@ Only `clean` objects can be presigned for download, and only to a caller with
 - **Complete checks the object.** `completeUpload` calls `HeadObject` on the
   quarantine key and returns HTTP 409, leaving the row `pending`, when the
   object is missing or its size does not match the declaration.
-- **Promote is idempotent.** If the evidence-bucket object already exists at
-  the expected size, the scan marks the row `clean` and deletes any leftover
-  quarantine copy. A crash between copy and the status update does not strand
-  the row.
+- **Missing quarantine object is terminal.** If the quarantine object is gone
+  and the evidence bucket already holds the promoted copy at the declared
+  size (a crash between copy+delete and the status update), the scan hashes
+  that copy and marks the row `clean`. With nothing promoted, the row is
+  `rejected` (`rejected:missing-object`) instead of retrying a 404 forever.
+- **Tenant key pause.** A scan or sweep for a tenant whose key is not
+  `active` is moved to delayed by the worker's tenant-key gate (no attempt is
+  spent). A key that goes non-active mid-scan pauses the job the same way, so
+  a key incident never dead-letters or settles evidence.
 - **Backlog metric.** Each sweep logs `signal=evidence_quarantine_backlog` with
   `quarantinedCount`, `oldestQuarantinedAgeSeconds`, `dlqDepth` and `redriven`.
   The CloudWatch alarm `blakpath-oldest-quarantined-age` pages when the oldest

@@ -132,7 +132,10 @@ export function FormInvitations({ formId, initialInvitations }: FormInvitationsP
   async function onRevoke(id: string) {
     setError(null);
     try {
-      const res = await fetch(`/api/forms/invitations/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/forms/invitations/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      });
       if (!res.ok) {
         setError('Could not revoke the invitation. Please try again.');
         return;

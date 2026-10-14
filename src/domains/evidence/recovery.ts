@@ -10,7 +10,7 @@
  */
 
 export interface ObjectHead {
-  readonly contentLength: number;
+  readonly contentLength: number | undefined;
 }
 
 /** Why `completeUpload` must refuse to leave `pending`. `null` means the bytes match. */

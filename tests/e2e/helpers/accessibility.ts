@@ -10,7 +10,19 @@ import axe from 'axe-core';
 export async function expectNoWcagViolations(page: Page): Promise<void> {
   // Next.js may stream metadata after visible content on slower CI runners.
   await expect(page).toHaveTitle(/\S/);
-  await page.addScriptTag({ content: axe.source });
+  await page.evaluate((source) => {
+    let nonce = '';
+    for (const existing of document.scripts) {
+      if (existing.nonce) {
+        nonce = existing.nonce;
+        break;
+      }
+    }
+    const script = document.createElement('script');
+    if (nonce) script.nonce = nonce;
+    script.text = source;
+    document.head.appendChild(script);
+  }, axe.source);
   const violations = await page.evaluate(async () => {
     type Violation = {
       id: string;
