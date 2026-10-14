@@ -70,7 +70,7 @@ test('protected routes reject anonymous access and sign-in errors stay generic',
   await expect(apiResponse.json()).resolves.toMatchObject({ error: 'Unauthorized' });
 
   await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
 
   await page.getByLabel('Email').fill('unknown@example.test');
   await page.getByLabel('Password').fill('incorrect-password');

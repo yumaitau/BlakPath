@@ -13,8 +13,18 @@ spec:
   backoffLimit: 1
   template:
     spec:
-      serviceAccountName: blakpath
+      # Sends the invitation through SES, so it runs as the web identity
+      # (Pod Identity role blakpath-web). The old shared account is gone.
+      serviceAccountName: blakpath-web
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: invite-admin
           image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
@@ -26,12 +36,17 @@ spec:
             - secretRef:
                 name: blakpath-runtime
           env:
+            - name: HOME
+              value: /tmp
             - name: FIRST_ADMIN_EMAIL
               value: REPLACE_WITH_ADMIN_EMAIL
             - name: ORGANISATION_LEGAL_NAME
               value: REPLACE_WITH_LEGAL_NAME
             - name: ORGANISATION_SLUG
               value: REPLACE_WITH_SLUG
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
           resources:
             requests:
               cpu: 250m
@@ -39,3 +54,8 @@ spec:
             limits:
               cpu: 1000m
               memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

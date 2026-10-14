@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __resetEnvCache } from '@/lib/env';
+import { stubProductionEnv } from '../helpers/production-env';
 import { clientIp, clientIpForLimits, UNKNOWN_CLIENT_IP } from '@/lib/http/client-ip';
 import {
   createMemoryCounterStore,
@@ -58,7 +59,7 @@ describe('client address', () => {
     const headers = new Headers({ 'x-real-ip': '203.0.113.9' });
     expect(clientIp({ headers }, { originVerifySecret: secret })).toBeNull();
     expect(clientIpForLimits(headers)).toBe(UNKNOWN_CLIENT_IP);
-    vi.stubEnv('NODE_ENV', 'production');
+    stubProductionEnv();
     __resetEnvCache();
     expect(clientIpForLimits(headers)).toBe(UNKNOWN_CLIENT_IP);
   });

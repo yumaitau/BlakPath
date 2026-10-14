@@ -84,6 +84,12 @@ const BY_NAME: Record<string, { status: number; code: string; error: string }> =
     code: 'INVALID_TRANSITION',
     error: 'Invalid transition',
   },
+  // The row stays pending. Do not echo object keys or sizes.
+  EvidenceUploadIncompleteError: {
+    status: 409,
+    code: 'EVIDENCE_UPLOAD_INCOMPLETE',
+    error: 'Upload incomplete',
+  },
   DecisionWorkflowError: {
     status: 409,
     code: 'CASE_NOT_READY_FOR_DECISION',

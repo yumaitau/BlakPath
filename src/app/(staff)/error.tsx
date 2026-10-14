@@ -1,31 +1,24 @@
 'use client';
 
 import { TenantKeyUnavailable } from '@/components/encryption/tenant-key-unavailable';
-import { Button } from '@/components/ui/button';
+import { ServerErrorView } from '@/components/errors/server-error-view';
 
 /**
- * Staff error boundary. A tenant key failure renders the locked state instead
- * of a generic server error. Other failures stay calm and offer a retry.
+ * Staff error boundary. Renders inside the staff shell's `<main>`, so the
+ * navigation stays usable and the person can move to another area while the
+ * failing one recovers. A tenant key failure renders the locked state instead
+ * of a generic server error.
  */
 export default function StaffError({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
   const text = `${error.message} ${error.digest ?? ''}`;
   if (text.includes('TENANT_KEY_UNAVAILABLE')) {
     return <TenantKeyUnavailable status="unavailable" />;
   }
-
-  return (
-    <div className="mx-auto max-w-xl px-6 py-16">
-      <h1 className="text-xl font-semibold">This page could not be loaded</h1>
-      <p className="text-muted-foreground mt-3 text-sm">Nothing was changed.</p>
-      <Button type="button" variant="secondary" className="mt-4" onClick={reset}>
-        Try again
-      </Button>
-    </div>
-  );
+  return <ServerErrorView error={error} retry={retry} />;
 }

@@ -1,5 +1,7 @@
 import Link from 'next/link';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import { NewFormButton } from '@/components/forms/new-form-button';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { listForms, type FormRow } from '@/domains/forms';
 
@@ -7,9 +9,9 @@ import { listForms, type FormRow } from '@/domains/forms';
  * Forms list (RSC).
  *
  * Loads the tenant's forms inside a DB-verified tenant context and lists them
- * with a link to each editor and a "New form" control. If the caller is not
- * signed in or has no active organisation, a friendly prompt is shown instead
- * of an error.
+ * with a link to each editor and a "New form" control. An expired session or
+ * missing organisation redirects; a role without form access sees a 403 state;
+ * anything else surfaces as the 500 error page.
  *
  * PRODUCT INVARIANT: forms only collect information a human provides. They never
  * determine a person's Aboriginality.
@@ -22,25 +24,22 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default async function FormsPage() {
-  let forms: FormRow[] = [];
-  let error: string | null = null;
-
+  let forms: FormRow[];
   try {
     forms = await withRequestTenant(() => listForms());
-  } catch {
-    error = 'Sign in and select your organisation to view and manage forms.';
+  } catch (error) {
+    await handlePageError(error);
+    return <ForbiddenNotice title="You do not have access to forms" />;
   }
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Forms</h1>
-        {error || forms.length === 0 ? null : <NewFormButton />}
+        {forms.length === 0 ? null : <NewFormButton />}
       </div>
 
-      {error ? (
-        <p className="text-muted-foreground">{error}</p>
-      ) : forms.length === 0 ? (
+      {forms.length === 0 ? (
         <section className="border-border bg-surface max-w-xl rounded-lg border p-5">
           <h2 className="text-lg font-semibold">Create your first form</h2>
           <p className="text-muted-foreground mt-1 text-sm">
