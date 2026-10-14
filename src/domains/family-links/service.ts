@@ -149,7 +149,7 @@ async function decideLink(
     resourceType: 'family_link',
     resourceId: linkId,
     result: 'success',
-    reason: input.note ?? null,
+    reason: input.note ? 'family_link.decision_note' : null,
     before: { data: { status: 'requested' }, allow: ['status'] },
     after: { data: { status: next }, allow: ['status'] },
   });

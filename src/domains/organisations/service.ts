@@ -52,7 +52,11 @@ export async function setOrganisationStatus(
   input: SetOrganisationStatusInput,
 ): Promise<{ id: string; status: OrganisationStatus }> {
   const [current] = await db
-    .select({ id: organisations.id, status: organisations.status })
+    .select({
+      id: organisations.id,
+      status: organisations.status,
+      statusReason: organisations.statusReason,
+    })
     .from(organisations)
     .where(eq(organisations.id, input.organisationId))
     .limit(1);
@@ -71,7 +75,7 @@ export async function setOrganisationStatus(
 
   await db
     .update(organisations)
-    .set({ status: input.status })
+    .set({ status: input.status, statusReason: input.reason ?? null })
     .where(eq(organisations.id, current.id));
 
   try {
@@ -80,7 +84,8 @@ export async function setOrganisationStatus(
       resourceType: 'organisation',
       resourceId: current.id,
       result: 'success',
-      reason: input.reason ?? null,
+      // Free text stays on organisations.status_reason; the trail records the code.
+      reason: input.reason ? 'organisation.status_note' : null,
       actorUserId: input.actorUserId,
       actingRole: 'platform-operator',
       sessionId: input.sessionId,
@@ -95,7 +100,7 @@ export async function setOrganisationStatus(
     try {
       await db
         .update(organisations)
-        .set({ status: current.status })
+        .set({ status: current.status, statusReason: current.statusReason ?? null })
         .where(eq(organisations.id, current.id));
     } catch (rollbackError) {
       logger.error(

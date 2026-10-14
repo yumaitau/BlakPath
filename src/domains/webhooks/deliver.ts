@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { openWebhookSecret } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
@@ -123,7 +124,7 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
         resourceType: 'integration',
         resourceId: endpoint.id,
         result: 'failure',
-        reason: 'endpoint secret unavailable',
+        reason: 'webhook.secret_unavailable',
       });
       return;
     }
@@ -174,7 +175,10 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
       resourceType: 'integration',
       resourceId: endpoint.id,
       result: 'failure',
-      reason,
+      reason:
+        disposition === 'redirect'
+          ? 'webhook.redirect_not_followed'
+          : auditReason('webhook.http_status', String(res.status)),
     });
     if (!terminal) throw new Error(`webhook delivery failed: HTTP ${res.status}`);
   } catch (err) {
@@ -188,7 +192,7 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
         resourceType: 'integration',
         resourceId: endpoint.id,
         result: 'failure',
-        reason: 'destination not allowed',
+        reason: 'webhook.destination_not_allowed',
       });
       return;
     }
@@ -203,7 +207,7 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
       resourceType: 'integration',
       resourceId: endpoint.id,
       result: 'failure',
-      reason: 'network error',
+      reason: 'webhook.network_error',
     });
     logger.warn({ organisationId, deliveryId, attempts }, 'webhook delivery error');
     if (!giveUp) throw err instanceof Error ? err : new Error('webhook delivery error');

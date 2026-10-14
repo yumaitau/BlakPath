@@ -129,7 +129,7 @@ export async function setTenantAiFeatures(
     resourceType: 'feature_flag',
     resourceId: AI_FEATURES_FLAG,
     result: 'success',
-    reason: input.enabled ? (input.governanceReference ?? null) : 'disabled',
+    reason: input.enabled ? 'ai_features.enabled' : 'ai_features.disabled',
     after: {
       data: {
         key: AI_FEATURES_FLAG,
