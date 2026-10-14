@@ -6,9 +6,9 @@
  * non-revoked certificate is valid or downloadable.
  *
  * PRODUCT INVARIANT: a certificate may only be generated from a decision that
- * authorised humans FINALISED with a `confirmed` outcome. There is no path that
- * computes or infers that outcome — `eligibleDecision` merely checks the human
- * decision already recorded in Phase 5.
+ * authorised humans FINALISED with a `confirmed` outcome, and only once the
+ * case itself is `decided`. There is no path that computes or infers that
+ * outcome — these helpers merely check the human decision already recorded.
  */
 
 export const CERTIFICATE_STATUSES = ['draft', 'signed', 'revoked'] as const;
@@ -23,6 +23,14 @@ export interface EligibleDecision {
 /** May a certificate be generated from this decision? Finalised + confirmed only. */
 export function eligibleDecision(decision: EligibleDecision): boolean {
   return decision.status === 'finalised' && decision.finalOutcome === 'confirmed';
+}
+
+/**
+ * The case itself must be `decided` — a finalised decision row is not enough
+ * if the application never reached that stage.
+ */
+export function caseDecidedForCertificate(applicationStatus: string): boolean {
+  return applicationStatus === 'decided';
 }
 
 /** Only a draft certificate can be signed. */

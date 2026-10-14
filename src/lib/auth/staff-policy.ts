@@ -1,6 +1,14 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
-import { passkeys, twoFactors } from '@/db/schema';
+import {
+  membershipRoles,
+  memberships,
+  passkeys,
+  roles,
+  twoFactors,
+  users,
+} from '@/db/schema';
+import { recordStaffMfaDenial, type StaffMfaAuditContext } from '@/lib/auth/mfa-audit';
 
 /**
  * Staff multi-factor authentication policy.
@@ -24,8 +32,29 @@ import { passkeys, twoFactors } from '@/db/schema';
 export interface MfaEnrolment {
   /** The user holds at least one registered WebAuthn passkey. */
   hasPasskey: boolean;
-  /** The user has completed TOTP two-factor enrolment. */
+  /** The user has a TOTP factor that has been confirmed with a code. */
   hasTotp: boolean;
+}
+
+/**
+ * Where a staff member who still owes a second factor is sent. This route sits
+ * outside the staff shell so the redirect cannot loop.
+ */
+export const STAFF_MFA_ENROL_PATH = '/mfa/enrol';
+
+/**
+ * Roles that use the applicant flow. They are not staff and are not forced to
+ * enrol. Any other role, or a membership with no role yet, is staff.
+ */
+const APPLICANT_ROLE_SLUGS = new Set(['applicant', 'applicant-representative']);
+
+/**
+ * True when this membership must hold a verified second factor before tenant
+ * data is served. Applicant-only memberships are the documented exception.
+ */
+export function staffMfaApplies(roleSlugs: readonly string[]): boolean {
+  if (roleSlugs.length === 0) return true;
+  return roleSlugs.some((slug) => !APPLICANT_ROLE_SLUGS.has(slug));
 }
 
 /** The outcome of evaluating the staff MFA policy for an account. */
@@ -86,7 +115,7 @@ export async function getMfaEnrolment(userId: string): Promise<MfaEnrolment> {
     db
       .select({ id: twoFactors.id })
       .from(twoFactors)
-      .where(and(eq(twoFactors.userId, userId)))
+      .where(and(eq(twoFactors.userId, userId), eq(twoFactors.verified, true)))
       .limit(1),
   ]);
   return {
@@ -110,10 +139,58 @@ export async function checkStaffMfa(userId: string): Promise<StaffMfaDecision> {
  * account access to any protected surface. Returns the decision on success so
  * the caller may audit-log the satisfied enrolment.
  */
-export async function requireStaffMfa(userId: string): Promise<StaffMfaDecision> {
+export async function requireStaffMfa(
+  userId: string,
+  audit?: StaffMfaAuditContext,
+): Promise<StaffMfaDecision> {
   const decision = await checkStaffMfa(userId);
   if (!decision.satisfied) {
+    if (audit) await recordStaffMfaDenial(userId, audit);
     throw new StaffMfaRequiredError(userId);
   }
   return decision;
+}
+
+async function userIsPlatformOperator(userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ isPlatformOperator: users.isPlatformOperator })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return rows[0]?.isPlatformOperator === true;
+}
+
+/**
+ * Staff, and every platform operator, must satisfy the second-factor policy.
+ * Applicant-only memberships do not, unless the account is also an operator.
+ */
+export async function tenantActorRequiresStaffMfa(
+  userId: string,
+  roleSlugs: readonly string[],
+): Promise<boolean> {
+  if (staffMfaApplies(roleSlugs)) return true;
+  return userIsPlatformOperator(userId);
+}
+
+/** Role slugs on the user's active membership of one organisation. */
+export async function membershipRequiresStaffMfa(
+  userId: string,
+  organisationId: string,
+): Promise<boolean> {
+  const roleRows = await db
+    .select({ slug: roles.slug })
+    .from(membershipRoles)
+    .innerJoin(roles, eq(membershipRoles.roleId, roles.id))
+    .innerJoin(memberships, eq(membershipRoles.membershipId, memberships.id))
+    .where(
+      and(
+        eq(memberships.userId, userId),
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.status, 'active'),
+      ),
+    );
+  return tenantActorRequiresStaffMfa(
+    userId,
+    roleRows.map((row) => row.slug),
+  );
 }

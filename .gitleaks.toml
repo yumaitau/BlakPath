@@ -5,5 +5,5 @@
 description = "Public CI encryption fixture"
 regexTarget = "match"
 regexes = [
-  '''ENCRYPTION_MASTER_KEY:\\s*dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtMTIzNDU=''',
+  '''ENCRYPTION_MASTER_KEY:\\s*Ymxha3BhdGgtY2ktdGVzdC1tYXN0ZXIta2V5LTMyYiE=''',
 ]

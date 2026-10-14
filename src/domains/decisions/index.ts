@@ -9,8 +9,10 @@
 export {
   DECISION_OUTCOMES,
   DECISION_STATUSES,
+  PROPOSABLE_CASE_STATUSES,
   VOTE_CHOICES,
   canFinalise,
+  canProposeOnCase,
   canVote,
   canWithdraw,
   indicativeResult,
@@ -20,6 +22,8 @@ export {
   type VoteChoice,
   type VoteTally,
 } from './tally';
+
+export { DecisionWorkflowError } from './errors';
 
 export {
   castVoteSchema,

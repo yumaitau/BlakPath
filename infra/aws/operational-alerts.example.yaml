@@ -23,6 +23,9 @@ Mappings:
     Readiness:
       Name: readiness_dependency_down
       Metric: ReadinessDependencyFailures
+    KeyHealth:
+      Name: key_health_state_change
+      Metric: KeyHealthStateChanges
 
 Resources:
   ExhaustedJobFilter:
@@ -127,6 +130,33 @@ Resources:
       Period: 60
       EvaluationPeriods: 3
       Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      OKActions: [!Ref OnCallTopicArn]
+
+  KeyHealthFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationLogGroupName
+      FilterPattern: '{ $.signal = "key_health_state_change" && $.alert = true }'
+      MetricTransformations:
+        - MetricNamespace: BlakPath/Operations
+          MetricName: KeyHealthStateChanges
+          MetricValue: '1'
+          DefaultValue: 0
+
+  KeyHealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-key-health-state-change
+      AlarmDescription: A tenant CMK changed state. Records for that organisation stay locked until the key is usable.
+      Namespace: BlakPath/Operations
+      MetricName: KeyHealthStateChanges
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
       AlarmActions: [!Ref OnCallTopicArn]

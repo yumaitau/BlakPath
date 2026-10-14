@@ -14,8 +14,9 @@ import type { AuthMailer, AuthEmailMessage } from '@/lib/auth/emails';
  *     environments without an IAM path.
  *   - Local dev: Mailpit over plain SMTP.
  *
- * AUTH emails (verification, password reset) send synchronously; TENANT
- * emails (invitations, notification copies) go through the Email queue.
+ * Verification mail sends on the request. Password-reset mail is queued
+ * (`auth-email`) so the response does not wait on the relay. TENANT emails
+ * (invitations, notification copies) go through the Email queue.
  * Bodies may contain bearer links: logged metadata only, never content.
  */
 
@@ -136,8 +137,27 @@ function passwordResetText(name: string, url: string): string {
 }
 
 /**
+ * SMTP delivery for a password-reset message. The worker calls this.
+ * The auth mailer must not — it only enqueues, and calling it from the
+ * worker would queue the same message again.
+ */
+export async function deliverPasswordResetEmail({
+  to,
+  name,
+  url,
+}: Pick<AuthEmailMessage, 'to' | 'name' | 'url'>): Promise<void> {
+  await sendEmail({
+    to,
+    subject: 'Reset your BlakPath password',
+    text: passwordResetText(name, url),
+  });
+}
+
+/**
  * The production auth transport injected into better-auth via `setAuthMailer`
- * at startup (see `src/instrumentation.ts`). Sends synchronously.
+ * at startup (see `src/instrumentation.ts`). Verification is synchronous.
+ * Password reset is queued; an enqueue failure is logged and swallowed so a
+ * known address does not fail the request while an unknown one succeeds.
  */
 export const authMailer: AuthMailer = {
   async sendVerificationEmail({ to, name, url }: AuthEmailMessage): Promise<void> {
@@ -148,10 +168,11 @@ export const authMailer: AuthMailer = {
     });
   },
   async sendPasswordResetEmail({ to, name, url }: AuthEmailMessage): Promise<void> {
-    await sendEmail({
-      to,
-      subject: 'Reset your BlakPath password',
-      text: passwordResetText(name, url),
-    });
+    try {
+      const { enqueuePasswordResetEmail } = await import('@/lib/auth/reset-queue');
+      await enqueuePasswordResetEmail({ to, name, url });
+    } catch (err) {
+      logger.error({ err }, 'failed to enqueue password reset email');
+    }
   },
 };
