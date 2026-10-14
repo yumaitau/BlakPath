@@ -9,6 +9,7 @@ import {
   UnauthenticatedError,
 } from '@/lib/auth/session';
 import { requireStaffMfa, StaffMfaRequiredError } from '@/lib/auth/staff-policy';
+import { stepUpRequiredBody } from '@/lib/auth/step-up-policy';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { BreakGlassError } from '@/domains/break-glass';
 
@@ -40,10 +41,7 @@ export async function requirePlatformOperator(): Promise<{ userId: string }> {
 /** Map break-glass / step-up / auth errors to non-leaking responses. */
 export function breakGlassErrorResponse(error: unknown): NextResponse {
   if (error instanceof StepUpRequiredError) {
-    return NextResponse.json(
-      { error: 'Re-authentication required', code: 'STEP_UP_REQUIRED' },
-      { status: 401 },
-    );
+    return NextResponse.json(stepUpRequiredBody(), { status: 401 });
   }
   if (error instanceof UnauthenticatedError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

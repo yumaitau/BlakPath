@@ -1,5 +1,14 @@
-import { relations } from 'drizzle-orm';
-import { boolean, index, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import { users } from './auth';
 import {
   organisationId as organisationIdCol,
@@ -79,9 +88,23 @@ export const organisationSettings = pgTable(
     escalationContacts: jsonb('escalation_contacts'),
     /** Onboarding readiness checklist state. */
     readinessChecklist: jsonb('readiness_checklist'),
+    /**
+     * Idle timeout for staff sessions in this organisation, in seconds.
+     * Allowed range is 30–60 minutes. This only ends a session; it does not
+     * score, rank, or decide identity.
+     */
+    staffIdleTimeoutSeconds: integer('staff_idle_timeout_seconds')
+      .notNull()
+      .default(45 * 60),
     ...timestamps,
   },
-  (table) => [uniqueIndex('organisation_settings_org_unique').on(table.organisationId)],
+  (table) => [
+    uniqueIndex('organisation_settings_org_unique').on(table.organisationId),
+    check(
+      'organisation_settings_staff_idle_range',
+      sql`${table.staffIdleTimeoutSeconds} BETWEEN 1800 AND 3600`,
+    ),
+  ],
 );
 
 /** A DNS domain claimed by an organisation (for email-domain-based routing). */

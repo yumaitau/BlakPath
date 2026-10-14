@@ -169,6 +169,13 @@
       "when": 1791942242458,
       "tag": "0023_long_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791942544561,
+      "tag": "0024_mushy_rocket_racer",
+      "breakpoints": true
     }
   ]
 }

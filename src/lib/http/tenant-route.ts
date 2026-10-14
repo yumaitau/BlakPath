@@ -1,6 +1,7 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
+import { stepUpRequiredBody } from '@/lib/auth/step-up-policy';
 import {
   requireSession,
   StepUpRequiredError,
@@ -84,7 +85,7 @@ export function toErrorResponse(error: unknown): NextResponse {
     );
   }
   if (error instanceof StepUpRequiredError) {
-    return NextResponse.json({ error: 'Re-authentication required' }, { status: 401 });
+    return NextResponse.json(stepUpRequiredBody(), { status: 401 });
   }
   if (error instanceof NoActiveOrganisationError) {
     return NextResponse.json({ error: 'No active organisation' }, { status: 409 });
