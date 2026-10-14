@@ -3,7 +3,8 @@ Description: >-
   BlakPath production email sender (ADR 0090): SES v2 API in ap-southeast-2
   under the workload role. Subdomain identity with Easy DKIM, custom MAIL FROM,
   DMARC, a configuration set publishing bounce/complaint events to SNS, and an
-  HTTPS subscription to POST /api/email/events. No SMTP credentials.
+  HTTPS subscription to the forwarder in front of POST /api/email/events.
+  No SMTP credentials.
 
 Parameters:
   SendingDomain:
@@ -18,15 +19,18 @@ Parameters:
     Type: String
     Default: blakpath-production
     Description: Must equal SES_CONFIGURATION_SET in the ConfigMap.
-  EventsEndpoint:
+  EventsTopicName:
     Type: String
-    Default: https://blakpath.yumait.au/api/email/events
-  RuntimeSecretId:
+    Default: blakpath-email-events
+    Description: Topic name. Its ARN must equal EMAIL_SNS_TOPIC_ARN in the ConfigMap.
+  EventsForwarderEndpoint:
     Type: String
-    Default: /blakpath/production/runtime
     Description: >-
-      Secrets Manager JSON holding EMAIL_WEBHOOK_SECRET. Resolved at deploy time;
-      SNS HTTPS subscriptions cannot set headers, so the secret is a query value.
+      HTTPS forwarder (API Gateway or Lambda) that relays the unmodified SNS
+      envelope to https://blakpath.yumait.au/api/email/events and adds the
+      x-email-webhook-secret header from Secrets Manager. SNS cannot set
+      headers, and the app rejects a secret in the query string. Never put the
+      secret in this URL.
   EventsTopicKmsKeyArn:
     Type: String
     Description: >-
@@ -86,7 +90,7 @@ Resources:
   EventsTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: !Sub '${ConfigurationSetName}-email-events'
+      TopicName: !Ref EventsTopicName
       KmsMasterKeyId: !Ref EventsTopicKmsKeyArn
 
   EventsTopicPolicy:
@@ -124,10 +128,11 @@ Resources:
     Properties:
       TopicArn: !Ref EventsTopic
       Protocol: https
-      # The app expects the SNS envelope (not raw delivery) and confirms the
-      # subscription itself after the shared-secret check.
+      # The app expects the signed SNS envelope (not raw delivery) and
+      # confirms the subscription itself after the header-secret, signature
+      # and topic checks.
       RawMessageDelivery: false
-      Endpoint: !Sub '${EventsEndpoint}?secret={{resolve:secretsmanager:${RuntimeSecretId}:SecretString:EMAIL_WEBHOOK_SECRET}}'
+      Endpoint: !Ref EventsForwarderEndpoint
 
   WorkloadSendPolicy:
     Type: AWS::IAM::ManagedPolicy

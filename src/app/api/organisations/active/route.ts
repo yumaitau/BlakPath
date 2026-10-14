@@ -1,14 +1,10 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { SESSION_DATA_COOKIE_NAMES } from '@/lib/auth';
 import { requireSession, UnauthenticatedError } from '@/lib/auth/session';
 import { TenantContextError } from '@/lib/tenancy/context';
 import { setActiveOrganisation } from '@/domains/tenancy-selection/service';
-
-const SESSION_DATA_COOKIE_NAMES = [
-  'blakpath.session_data',
-  '__Secure-blakpath.session_data',
-] as const;
 
 /**
  * POST /api/organisations/active — set the session's active organisation.
@@ -51,7 +47,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         path: '/',
         httpOnly: true,
         sameSite: 'lax',
-        secure: name.startsWith('__Secure-'),
+        secure: name.startsWith('__Secure-') || name.startsWith('__Host-'),
         maxAge: 0,
       });
     }

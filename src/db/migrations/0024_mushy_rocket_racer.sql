@@ -1,0 +1,2 @@
+ALTER TABLE "organisation_settings" ADD COLUMN "staff_idle_timeout_seconds" integer DEFAULT 2700 NOT NULL;--> statement-breakpoint
+ALTER TABLE "organisation_settings" ADD CONSTRAINT "organisation_settings_staff_idle_range" CHECK ("organisation_settings"."staff_idle_timeout_seconds" BETWEEN 1800 AND 3600);

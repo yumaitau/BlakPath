@@ -15,7 +15,13 @@ data:
   S3_REGION: ap-southeast-2
   S3_BUCKET_EVIDENCE: blakpath-prod-evidence-959038055523-ap-southeast-2
   S3_BUCKET_QUARANTINE: blakpath-prod-quarantine-959038055523-ap-southeast-2
+  S3_BUCKET_AUDIT_ANCHORS: blakpath-prod-audit-anchors-959038055523-ap-southeast-2
+  AUDIT_ANCHOR_OBJECT_LOCK: 'true'
+  # Bucket default CMK only. Per-object SSE-KMS uses the tenant key.
   S3_KMS_KEY_ID: arn:aws:kms:ap-southeast-2:959038055523:key/737b7098-2c77-4a4e-b4c6-666597743651
+  # Platform CMK for non-tenant envelope encryption. Not a secret.
+  # Replace before production; release:check rejects a missing or local key.
+  # PLATFORM_KMS_KEY_ARN: arn:aws:kms:ap-southeast-2:ACCOUNT:key/KEY_ID
   S3_FORCE_PATH_STYLE: 'false'
   # The one production sender: SES v2 API in ap-southeast-2 under the
   # workload role (no SMTP, no static mail credentials). The configuration
@@ -24,7 +30,14 @@ data:
   EMAIL_TRANSPORT: ses
   SES_CONFIGURATION_SET: blakpath-production
   SMTP_FROM: BlakPath <no-reply@blakpath.yumait.au>
+  # SES permanent-bounce and complaint topic. Must match the live topic.
+  # EMAIL_WEBHOOK_SECRET stays in Secrets Manager and is sent as the
+  # x-email-webhook-secret header, not in the URL.
+  EMAIL_SNS_TOPIC_ARN: arn:aws:sns:ap-southeast-2:959038055523:blakpath-email-events
   CLAMAV_HOST: blakpath-clamav
   CLAMAV_PORT: '3310'
   AI_FEATURES_ENABLED: 'false'
+  MCP_RATE_LIMIT_PER_MINUTE: '60'
+  # On-call mailbox for tenant key health changes. Not a secret.
+  # OPERATOR_ONCALL_EMAIL: oncall@blakpath.yumait.au
   OTEL_SERVICE_NAME: blakpath

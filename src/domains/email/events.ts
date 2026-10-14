@@ -1,18 +1,18 @@
 import { z } from 'zod';
 
 /**
- * Pure parsing of SES bounce/complaint events delivered through SNS.
+ * SES notifications that may suppress an address.
  *
  * Two SES shapes reach POST /api/email/events:
  *   - configuration-set event publishing (the production path): `eventType`;
  *   - identity feedback notifications (legacy): `notificationType`.
+ * Both are normalised to `notificationType`.
  *
- * Only permanent bounces and complaints suppress an address. Transient and
- * undetermined bounces (mailbox full, greylisting) must not lock someone out
- * of invite-only onboarding, so they are acknowledged and ignored.
+ * Only a permanent bounce or a complaint. Transient and undetermined bounces
+ * are ignored so a temporary delivery failure does not block later mail.
  */
 
-const sesMessage = z.object({
+const sesMessageSchema = z.object({
   eventType: z.string().optional(),
   notificationType: z.string().optional(),
   mail: z.object({ messageId: z.string().optional() }).optional(),
@@ -29,40 +29,38 @@ const sesMessage = z.object({
     .optional(),
 });
 
-export interface SuppressionTarget {
-  address: string;
-  kind: 'bounce' | 'complaint';
-}
+export type SesEvent = Omit<
+  z.infer<typeof sesMessageSchema>,
+  'eventType' | 'notificationType'
+> & { notificationType: string };
 
-export interface ParsedSesEvent {
-  targets: SuppressionTarget[];
-  messageId?: string;
-}
-
-/**
- * Turn an SNS `Message` string into suppression targets. Returns null when the
- * message is not a valid SES event (caller answers 400).
- */
-export function parseSesEvent(raw: string): ParsedSesEvent | null {
-  let message: z.infer<typeof sesMessage>;
+export function parseSesEvent(raw: string): SesEvent | null {
   try {
-    message = sesMessage.parse(JSON.parse(raw));
+    const parsed = sesMessageSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return null;
+    const { eventType, notificationType, ...rest } = parsed.data;
+    const type = eventType ?? notificationType;
+    return type ? { ...rest, notificationType: type } : null;
   } catch {
     return null;
   }
-  const type = message.eventType ?? message.notificationType;
-  if (!type) return null;
+}
 
-  const targets: SuppressionTarget[] = [];
-  if (type === 'Bounce' && message.bounce?.bounceType === 'Permanent') {
-    for (const r of message.bounce.bouncedRecipients ?? []) {
-      targets.push({ address: r.emailAddress, kind: 'bounce' });
-    }
-  } else if (type === 'Complaint') {
-    for (const r of message.complaint?.complainedRecipients ?? []) {
-      targets.push({ address: r.emailAddress, kind: 'complaint' });
-    }
+export function suppressionTargets(
+  message: SesEvent,
+): { address: string; kind: 'bounce' | 'complaint' }[] {
+  if (message.notificationType === 'Bounce') {
+    if (message.bounce?.bounceType !== 'Permanent') return [];
+    return (message.bounce.bouncedRecipients ?? [])
+      .map((recipient) => recipient.emailAddress)
+      .filter((address) => address.length > 0)
+      .map((address) => ({ address, kind: 'bounce' as const }));
   }
-  const messageId = message.mail?.messageId;
-  return messageId ? { targets, messageId } : { targets };
+  if (message.notificationType === 'Complaint') {
+    return (message.complaint?.complainedRecipients ?? [])
+      .map((recipient) => recipient.emailAddress)
+      .filter((address) => address.length > 0)
+      .map((address) => ({ address, kind: 'complaint' as const }));
+  }
+  return [];
 }

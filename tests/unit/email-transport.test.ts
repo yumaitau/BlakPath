@@ -126,47 +126,49 @@ describe('email transport', () => {
 });
 
 describe('SES event parsing', () => {
-  async function parse(message: unknown) {
-    const { parseSesEvent } = await import('@/domains/email/events');
-    return parseSesEvent(JSON.stringify(message));
+  async function targets(message: unknown) {
+    const { parseSesEvent, suppressionTargets } = await import('@/domains/email/events');
+    const parsed = parseSesEvent(JSON.stringify(message));
+    return parsed ? suppressionTargets(parsed) : null;
   }
 
   it('suppresses permanent bounces from configuration-set event publishing', async () => {
-    expect(
-      await parse({
-        eventType: 'Bounce',
-        mail: { messageId: 'm-1' },
-        bounce: {
-          bounceType: 'Permanent',
-          bouncedRecipients: [{ emailAddress: 'gone@example.org' }],
-        },
-      }),
-    ).toEqual({
-      messageId: 'm-1',
-      targets: [{ address: 'gone@example.org', kind: 'bounce' }],
+    const { parseSesEvent } = await import('@/domains/email/events');
+    const raw = {
+      eventType: 'Bounce',
+      mail: { messageId: 'm-1' },
+      bounce: {
+        bounceType: 'Permanent',
+        bouncedRecipients: [{ emailAddress: 'gone@example.org' }],
+      },
+    };
+    expect(parseSesEvent(JSON.stringify(raw))).toMatchObject({
+      notificationType: 'Bounce',
+      mail: { messageId: 'm-1' },
     });
+    expect(await targets(raw)).toEqual([{ address: 'gone@example.org', kind: 'bounce' }]);
   });
 
   it('suppresses complaints from identity notifications', async () => {
     expect(
-      await parse({
+      await targets({
         notificationType: 'Complaint',
         complaint: { complainedRecipients: [{ emailAddress: 'no@example.org' }] },
       }),
-    ).toEqual({ targets: [{ address: 'no@example.org', kind: 'complaint' }] });
+    ).toEqual([{ address: 'no@example.org', kind: 'complaint' }]);
   });
 
   it.each(['Transient', 'Undetermined'])('ignores %s bounces', async (bounceType) => {
     expect(
-      await parse({
+      await targets({
         eventType: 'Bounce',
         bounce: { bounceType, bouncedRecipients: [{ emailAddress: 'full@example.org' }] },
       }),
-    ).toEqual({ targets: [] });
+    ).toEqual([]);
   });
 
   it('acknowledges other event types without suppressing', async () => {
-    expect(await parse({ eventType: 'Delivery' })).toEqual({ targets: [] });
+    expect(await targets({ eventType: 'Delivery' })).toEqual([]);
   });
 
   it('rejects malformed messages', async () => {

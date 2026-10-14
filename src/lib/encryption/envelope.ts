@@ -1,58 +1,143 @@
 import {
-  randomBytes,
   createCipheriv,
   createDecipheriv,
+  randomBytes,
   timingSafeEqual,
 } from 'node:crypto';
 import { env } from '@/lib/env';
+import type { EncryptionContext } from './key-provider';
 
 /**
  * Application-level envelope encryption for sensitive fields at rest.
  *
- * Model: a fresh 256-bit Data Encryption Key (DEK) is generated per value and
- * used to AES-256-GCM encrypt the plaintext. The DEK is then wrapped
- * (encrypted) by the Key Encryption Key (KEK) derived from
- * `ENCRYPTION_MASTER_KEY`. Only the wrapped DEK is stored, so rotating the
- * master key never requires re-encrypting every value's ciphertext.
+ * Version 2: a fresh 256-bit data key encrypts the value with AES-256-GCM.
+ * KMS (or the local provider) wraps that data key under the tenant CMK.
+ * Additional authenticated data binds the ciphertext to its table, column,
+ * row and organisation, so a swapped row or a swapped tenant fails closed.
  *
- * We use only established primitives from `node:crypto` — AES-256-GCM provides
- * confidentiality AND integrity (the auth tag). No bespoke cryptography. GCM
- * nonces are 96-bit random values; because each DEK is single-use, nonce reuse
- * under a given key cannot occur.
- *
- * `keyVersion` is stamped into every field so the correct KEK can be selected
- * during a rotation window.
+ * Version 1 is the previous single-master-key format. The reader below exists
+ * only so those values can be migrated. New writes are version 2 and go
+ * through `scopeFor`. Version 1 has no tenant binding and no AAD.
  */
 
 const ALGO = 'aes-256-gcm';
-const KEY_BYTES = 32; // 256-bit
-const IV_BYTES = 12; // 96-bit GCM nonce
-const TAG_BYTES = 16; // 128-bit GCM auth tag
+const KEY_BYTES = 32;
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
+export const ENVELOPE_VERSION = 2 as const;
 
-/** Serialised, storage-safe encrypted field. All binary parts are base64. */
-export interface EncryptedField {
-  /** Master/KEK version used to wrap the DEK — supports key rotation. */
-  v: number;
-  /** GCM nonce for the ciphertext. */
-  iv: string;
-  /** GCM auth tag for the ciphertext. */
-  tag: string;
-  /** DEK wrapped by the KEK, itself an AES-256-GCM blob: iv|tag|ciphertext. */
-  wrappedDek: string;
-  /** The value ciphertext. */
-  ciphertext: string;
+/** Field coordinates bound into AES-GCM additional authenticated data. */
+export interface FieldBinding {
+  readonly table: string;
+  readonly column: string;
+  readonly rowId: string;
 }
 
-/** Load and validate the master KEK. Must be exactly 32 bytes, base64. */
+/** Legacy ciphertext. `v` here was the old master-key version, usually 1. */
+export interface EncryptedFieldV1 {
+  readonly v: number;
+  readonly iv: string;
+  readonly tag: string;
+  readonly wrappedDek: string;
+  readonly ciphertext: string;
+}
+
+/** Current ciphertext. `kid` is `${keyArn}#${keyVersion}`. */
+export interface EncryptedFieldV2 {
+  readonly v: typeof ENVELOPE_VERSION;
+  readonly kid: string;
+  readonly ctx: EncryptionContext;
+  readonly iv: string;
+  readonly tag: string;
+  readonly wrappedDek: string;
+  readonly ciphertext: string;
+}
+
+export type EncryptedField = EncryptedFieldV1 | EncryptedFieldV2;
+
+export function isEnvelopeV2(field: EncryptedField): field is EncryptedFieldV2 {
+  if (field.v !== ENVELOPE_VERSION) return false;
+  if (!('kid' in field) || typeof field.kid !== 'string' || field.kid.length === 0) {
+    return false;
+  }
+  return 'ctx' in field && field.ctx != null && typeof field.ctx === 'object';
+}
+
+export function kidFor(keyArn: string, keyVersion: number): string {
+  return `${keyArn}#${keyVersion}`;
+}
+
+export function parseKid(kid: string): { arn: string; version: number } {
+  const split = kid.lastIndexOf('#');
+  if (split <= 0 || split === kid.length - 1) {
+    throw new Error('Malformed key id');
+  }
+  const version = Number(kid.slice(split + 1));
+  if (!Number.isInteger(version) || version < 1) throw new Error('Malformed key id');
+  return { arn: kid.slice(0, split), version };
+}
+
+/** Length-prefixed so a value cannot shift the field boundary. */
+export function fieldAad(binding: FieldBinding, orgId: string): Buffer {
+  const parts = [binding.table, binding.column, binding.rowId, orgId];
+  if (parts.some((part) => part.length === 0)) {
+    throw new Error('Field binding is incomplete');
+  }
+  const body = parts
+    .map((part) => `${Buffer.byteLength(part, 'utf8')}:${part}`)
+    .join('|');
+  return Buffer.from(`blakpath-aad-v2|${body}`, 'utf8');
+}
+
+export function sealField(
+  plaintext: string,
+  dek: Buffer,
+  aad: Buffer,
+): { iv: string; tag: string; ciphertext: string } {
+  if (dek.length !== KEY_BYTES) throw new Error('Data key must be 32 bytes');
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv(ALGO, dek, iv);
+  cipher.setAAD(aad);
+  const data = Buffer.concat([
+    cipher.update(Buffer.from(plaintext, 'utf8')),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return {
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    ciphertext: data.toString('base64'),
+  };
+}
+
+export function openField(
+  field: Pick<EncryptedFieldV2, 'iv' | 'tag' | 'ciphertext'>,
+  dek: Buffer,
+  aad: Buffer,
+): string {
+  if (dek.length !== KEY_BYTES) throw new Error('Data key must be 32 bytes');
+  const decipher = createDecipheriv(ALGO, dek, Buffer.from(field.iv, 'base64'));
+  decipher.setAAD(aad);
+  decipher.setAuthTag(Buffer.from(field.tag, 'base64'));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(field.ciphertext, 'base64')),
+    decipher.final(),
+  ]);
+  return plaintext.toString('utf8');
+}
+
 function masterKey(): Buffer {
-  const key = Buffer.from(env.ENCRYPTION_MASTER_KEY, 'base64');
+  const raw = env.ENCRYPTION_MASTER_KEY;
+  if (!raw) {
+    throw new Error('ENCRYPTION_MASTER_KEY is required to read version 1 ciphertext');
+  }
+  const key = Buffer.from(raw, 'base64');
   if (key.length !== KEY_BYTES) {
     throw new Error('ENCRYPTION_MASTER_KEY must decode to exactly 32 bytes');
   }
   return key;
 }
 
-/** AES-256-GCM encrypt, returning the concatenated iv|tag|ciphertext buffer. */
 function gcmEncrypt(
   key: Buffer,
   plaintext: Buffer,
@@ -60,11 +145,9 @@ function gcmEncrypt(
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALGO, key, iv);
   const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return { iv, tag, data };
+  return { iv, tag: cipher.getAuthTag(), data };
 }
 
-/** AES-256-GCM decrypt; throws on auth-tag mismatch (tamper detection). */
 function gcmDecrypt(key: Buffer, iv: Buffer, tag: Buffer, data: Buffer): Buffer {
   const decipher = createDecipheriv(ALGO, key, iv);
   decipher.setAuthTag(tag);
@@ -72,65 +155,59 @@ function gcmDecrypt(key: Buffer, iv: Buffer, tag: Buffer, data: Buffer): Buffer 
 }
 
 /**
- * Encrypt a plaintext string into an `EncryptedField`. A new DEK is minted for
- * every call. Returns a structure safe to persist in a column.
+ * Migration-only writer. Production writes go through `scopeFor`.
+ * Kept so tests and a one-shot migration can still produce version 1 blobs.
  */
-export function encryptField(plaintext: string): EncryptedField {
+export function encryptFieldV1(plaintext: string): EncryptedFieldV1 {
   const kek = masterKey();
   const dek = randomBytes(KEY_BYTES);
-
-  // 1. Encrypt the value under the single-use DEK.
   const value = gcmEncrypt(dek, Buffer.from(plaintext, 'utf8'));
-
-  // 2. Wrap the DEK under the KEK as its own GCM blob (iv|tag|ciphertext).
   const wrap = gcmEncrypt(kek, dek);
-  const wrappedDek = Buffer.concat([wrap.iv, wrap.tag, wrap.data]);
-
-  // Best-effort scrub of the raw DEK from memory.
   dek.fill(0);
-
   return {
-    v: env.ENCRYPTION_KEY_VERSION,
+    v: 1,
     iv: value.iv.toString('base64'),
     tag: value.tag.toString('base64'),
-    wrappedDek: wrappedDek.toString('base64'),
+    wrappedDek: Buffer.concat([wrap.iv, wrap.tag, wrap.data]).toString('base64'),
     ciphertext: value.data.toString('base64'),
   };
 }
 
-/**
- * Decrypt an `EncryptedField` back to its plaintext string. Any tampering with
- * the ciphertext, tag, iv, or wrapped DEK causes an authentication failure and
- * throws — corrupted or forged data is never silently returned.
- */
-export function decryptField(field: EncryptedField): string {
+/** Platform-key sealer kept for invitation tokens and webhook secrets. */
+export function encryptField(plaintext: string): EncryptedFieldV1 {
+  return encryptFieldV1(plaintext);
+}
+
+/** Migration-only reader. No AAD and no tenant check. Do not use for new data. */
+export function decryptFieldV1(field: EncryptedFieldV1): string {
   const kek = masterKey();
-
   const wrapped = Buffer.from(field.wrappedDek, 'base64');
-  if (wrapped.length < IV_BYTES + TAG_BYTES) {
-    throw new Error('Malformed wrapped DEK');
-  }
-  const wrapIv = wrapped.subarray(0, IV_BYTES);
-  const wrapTag = wrapped.subarray(IV_BYTES, IV_BYTES + TAG_BYTES);
-  const wrapData = wrapped.subarray(IV_BYTES + TAG_BYTES);
-
-  // 1. Unwrap the DEK (throws if the wrapped DEK was tampered with).
-  const dek = gcmDecrypt(kek, wrapIv, wrapTag, wrapData);
+  if (wrapped.length < IV_BYTES + TAG_BYTES) throw new Error('Malformed wrapped DEK');
+  const dek = gcmDecrypt(
+    kek,
+    wrapped.subarray(0, IV_BYTES),
+    wrapped.subarray(IV_BYTES, IV_BYTES + TAG_BYTES),
+    wrapped.subarray(IV_BYTES + TAG_BYTES),
+  );
   try {
-    if (dek.length !== KEY_BYTES) {
-      throw new Error('Unwrapped DEK has invalid length');
-    }
-    // 2. Decrypt the value (throws if the ciphertext/tag/iv was tampered with).
-    const plaintext = gcmDecrypt(
+    if (dek.length !== KEY_BYTES) throw new Error('Unwrapped DEK has invalid length');
+    return gcmDecrypt(
       dek,
       Buffer.from(field.iv, 'base64'),
       Buffer.from(field.tag, 'base64'),
       Buffer.from(field.ciphertext, 'base64'),
-    );
-    return plaintext.toString('utf8');
+    ).toString('utf8');
   } finally {
     dek.fill(0);
   }
+}
+
+/** Opens a platform-key envelope. Tenant envelopes must go through `scopeFor`. */
+export function decryptField(field: EncryptedField): string {
+  if (isEnvelopeV2(field)) {
+    throw new Error('decryptField only opens version 1 envelopes');
+  }
+  return decryptFieldV1(field);
 }
 
 /**

@@ -1,3 +1,5 @@
+import { migrationRoleIssue } from '@/db/migration-url';
+
 /** Pure production configuration checks used by the executable release gate. */
 
 export interface ReadinessIssue {
@@ -88,13 +90,6 @@ function validateEmailSender(environment: ProductionEnvironment): ReadinessIssue
       message: 'must be an address on the verified production sending domain',
     });
   }
-  const webhookSecret = environment.EMAIL_WEBHOOK_SECRET;
-  if (!webhookSecret || webhookSecret.length < 32 || PLACEHOLDER.test(webhookSecret)) {
-    issues.push({
-      key: 'EMAIL_WEBHOOK_SECRET',
-      message: 'must be a non-placeholder secret of at least 32 characters',
-    });
-  }
   return issues;
 }
 
@@ -106,6 +101,12 @@ export function validateProductionReadiness(
 
   if (environment.NODE_ENV !== 'production') {
     issues.push({ key: 'NODE_ENV', message: 'must be production' });
+  }
+  if ((environment.PILOT_BOOTSTRAP_TOKEN ?? '').trim() !== '') {
+    issues.push({
+      key: 'PILOT_BOOTSTRAP_TOKEN',
+      message: 'must be unset in production',
+    });
   }
   for (const key of ['APP_REGION', 'S3_REGION'] as const) {
     if (environment[key] !== 'ap-southeast-2') {
@@ -128,6 +129,34 @@ export function validateProductionReadiness(
   ) {
     issues.push({ key: 'DATABASE_URL', message: 'must enforce TLS with sslmode' });
   }
+  const appRole = environment.AUDIT_DB_APP_ROLE || 'blakpath_app';
+  if (database && decodeURIComponent(database.username) !== appRole) {
+    issues.push({
+      key: 'DATABASE_URL',
+      message: 'must connect as the application role, not the migration owner',
+    });
+  }
+  const migration = addRequiredUrl(
+    issues,
+    environment,
+    'DATABASE_MIGRATION_URL',
+    'postgres:',
+  );
+  if (
+    migration &&
+    !['require', 'verify-ca', 'verify-full'].includes(
+      migration.searchParams.get('sslmode') ?? '',
+    )
+  ) {
+    issues.push({
+      key: 'DATABASE_MIGRATION_URL',
+      message: 'must enforce TLS with sslmode',
+    });
+  }
+  const roleIssue = migrationRoleIssue(environment);
+  if (roleIssue && environment.DATABASE_MIGRATION_URL) {
+    issues.push({ key: 'DATABASE_MIGRATION_URL', message: roleIssue });
+  }
   addRequiredUrl(issues, environment, 'REDIS_URL', 'rediss:');
 
   if (environment.S3_ENDPOINT) {
@@ -139,14 +168,33 @@ export function validateProductionReadiness(
       message: 'static S3 credentials must be unset; use a workload role',
     });
   }
-  if (
-    !/^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i.test(
-      environment.S3_KMS_KEY_ID ?? '',
-    )
-  ) {
+  const kmsKeyArn = /^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i;
+  if (!kmsKeyArn.test(environment.S3_KMS_KEY_ID ?? '')) {
     issues.push({
       key: 'S3_KMS_KEY_ID',
       message: 'must reference a customer-managed ap-southeast-2 KMS key',
+    });
+  }
+  if (!environment.S3_BUCKET_AUDIT_ANCHORS) {
+    issues.push({
+      key: 'S3_BUCKET_AUDIT_ANCHORS',
+      message: 'must name the object-lock audit anchor bucket',
+    });
+  }
+  if (environment.AUDIT_ANCHOR_OBJECT_LOCK !== 'true') {
+    issues.push({
+      key: 'AUDIT_ANCHOR_OBJECT_LOCK',
+      message: 'must be true so anchor puts use compliance retention',
+    });
+  }
+  if (
+    !/^arn:aws:kms:ap-southeast-2:\d{12}:key\/[0-9a-f-]+$/i.test(
+      environment.AUDIT_ANCHOR_SIGNING_KEY_ID ?? '',
+    )
+  ) {
+    issues.push({
+      key: 'AUDIT_ANCHOR_SIGNING_KEY_ID',
+      message: 'must reference a customer-managed ap-southeast-2 KMS signing key',
     });
   }
 
@@ -161,6 +209,13 @@ export function validateProductionReadiness(
 
   issues.push(...validateEmailSender(environment));
 
+  const originSecret = environment.ORIGIN_VERIFY_SECRET;
+  if (!originSecret || originSecret.length < 32 || PLACEHOLDER.test(originSecret)) {
+    issues.push({
+      key: 'ORIGIN_VERIFY_SECRET',
+      message: 'must be a non-placeholder secret of at least 32 characters',
+    });
+  }
   const authSecret = environment.BETTER_AUTH_SECRET;
   if (!authSecret || authSecret.length < 32 || PLACEHOLDER.test(authSecret)) {
     issues.push({
@@ -168,17 +223,47 @@ export function validateProductionReadiness(
       message: 'must be a non-placeholder secret of at least 32 characters',
     });
   }
-  const encryptionKey = environment.ENCRYPTION_MASTER_KEY;
-  let decodedLength = 0;
-  try {
-    decodedLength = encryptionKey ? Buffer.from(encryptionKey, 'base64').length : 0;
-  } catch {
-    decodedLength = 0;
-  }
-  if (!encryptionKey || decodedLength !== 32 || PLACEHOLDER.test(encryptionKey)) {
+  if (environment.ENCRYPTION_LOCAL_KEY) {
     issues.push({
-      key: 'ENCRYPTION_MASTER_KEY',
-      message: 'must be a non-placeholder base64-encoded 32-byte key',
+      key: 'ENCRYPTION_LOCAL_KEY',
+      message: 'local encryption provider is refused in production',
+    });
+  }
+  if (environment.KMS_ENDPOINT) {
+    issues.push({
+      key: 'KMS_ENDPOINT',
+      message: 'local KMS endpoint is refused in production',
+    });
+  }
+  if (!kmsKeyArn.test(environment.PLATFORM_KMS_KEY_ARN ?? '')) {
+    issues.push({
+      key: 'PLATFORM_KMS_KEY_ARN',
+      message: 'must reference a customer-managed ap-southeast-2 KMS key',
+    });
+  }
+  const onCall = environment.OPERATOR_ONCALL_EMAIL;
+  if (!onCall || !onCall.includes('@') || PLACEHOLDER.test(onCall)) {
+    issues.push({
+      key: 'OPERATOR_ONCALL_EMAIL',
+      message: 'must be a real on-call email address',
+    });
+  }
+
+  const webhookSecret = environment.EMAIL_WEBHOOK_SECRET;
+  if (!webhookSecret || webhookSecret.length < 16 || PLACEHOLDER.test(webhookSecret)) {
+    issues.push({
+      key: 'EMAIL_WEBHOOK_SECRET',
+      message: 'must be a non-placeholder secret of at least 16 characters',
+    });
+  }
+  if (
+    !/^arn:aws:sns:ap-southeast-2:\d{12}:[A-Za-z0-9_-]+$/.test(
+      environment.EMAIL_SNS_TOPIC_ARN ?? '',
+    )
+  ) {
+    issues.push({
+      key: 'EMAIL_SNS_TOPIC_ARN',
+      message: 'must be an ap-southeast-2 SNS topic ARN',
     });
   }
 

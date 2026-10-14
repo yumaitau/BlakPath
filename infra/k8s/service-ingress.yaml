@@ -18,11 +18,22 @@ metadata:
   name: blakpath
   namespace: blakpath
   annotations:
+    # Replace ACCOUNT_ID, CERT_ID, TRUST_STORE_ID and WEB_ACL_ID from the
+    # origin-edge stack outputs before apply. HTTP:80 only redirects to 443.
+    # The trust store must hold the zone-level or per-hostname Authenticated
+    # Origin Pull CA, not the certificate shared by every Cloudflare account.
+    # Cloudflare SSL/TLS mode for the zone is Full (strict). See docs/eks-runbook.md.
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-southeast-2:ACCOUNT_ID:certificate/CERT_ID
     alb.ingress.kubernetes.io/healthcheck-path: /api/ready
     alb.ingress.kubernetes.io/inbound-cidrs: 173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/load-balancer-attributes: routing.http.drop_invalid_header_fields.enabled=true,routing.http.xff_header_processing.mode=remove
+    alb.ingress.kubernetes.io/mutual-authentication: '[{"port":443,"mode":"verify","trustStore":"arn:aws:elasticloadbalancing:ap-southeast-2:ACCOUNT_ID:truststore/blakpath-cloudflare-aop/TRUST_STORE_ID","ignoreClientCertificateExpiry":false}]'
     alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
     alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:ap-southeast-2:ACCOUNT_ID:regional/webacl/blakpath-origin/WEB_ACL_ID
 spec:
   ingressClassName: alb
   rules:

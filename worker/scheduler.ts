@@ -13,16 +13,20 @@ import { getQueue, QueueName, type TenantJob } from '@/lib/queues';
  * only emitted once even when multiple workers begin at the same time. We
  * reconcile the scheduler ids against the active-organisation list so a
  * suspended or closed organisation cannot keep receiving maintenance jobs.
+ * Key health is the same shape: one DescribeKey and canary decrypt per active
+ * tenant, every `KEY_HEALTH_INTERVAL_MS`.
  */
 
 const SCHEDULER_PREFIX = 'bp:scheduled:';
 const PAGE_SIZE = 100;
 
+type ScheduledJobData = TenantJob & { platformChain?: boolean };
+
 type ScheduledQueue = {
   upsertJobScheduler(
     id: string,
     repeat: { every: number },
-    template: { name: string; data: TenantJob },
+    template: { name: string; data: ScheduledJobData },
   ): Promise<unknown>;
   getJobSchedulers(
     start?: number,
@@ -36,6 +40,7 @@ export interface SchedulerIntervals {
   auditVerifyMs: number;
   retentionSweepMs: number;
   reminderSweepMs?: number;
+  keyHealthMs?: number;
 }
 
 export interface ReconcileSchedulesInput {
@@ -43,14 +48,24 @@ export interface ReconcileSchedulesInput {
   auditQueue: ScheduledQueue;
   retentionQueue: ScheduledQueue;
   reminderQueue?: ScheduledQueue;
+  keyHealthQueue?: ScheduledQueue;
   intervals: SchedulerIntervals;
+  /** Also schedule the platform (null organisation) chain. */
+  includePlatformChain?: boolean;
 }
 
 export interface ReconcileSchedulesResult {
   auditSchedulers: number;
   retentionSchedulers: number;
   reminderSchedulers: number;
+  keyHealthSchedulers: number;
   removedSchedulers: number;
+}
+
+function scheduledJobName(queueName: QueueName): string {
+  if (queueName === QueueName.AuditVerify) return 'verify';
+  if (queueName === QueueName.KeyHealth) return 'check';
+  return 'sweep';
 }
 
 /** Stable, namespaced scheduler id for one queue and one tenant. */
@@ -78,10 +93,14 @@ async function reconcileQueue(
   queueName: QueueName,
   organisationIds: readonly string[],
   every: number,
+  protectedIds: readonly string[] = [],
 ): Promise<number> {
-  const wanted = new Set(
-    organisationIds.map((organisationId) => tenantSchedulerId(queueName, organisationId)),
-  );
+  const wanted = new Set([
+    ...organisationIds.map((organisationId) =>
+      tenantSchedulerId(queueName, organisationId),
+    ),
+    ...protectedIds,
+  ]);
 
   await Promise.all(
     organisationIds.map((organisationId) => {
@@ -90,7 +109,7 @@ async function reconcileQueue(
         id,
         { every },
         {
-          name: queueName === QueueName.AuditVerify ? 'verify' : 'sweep',
+          name: scheduledJobName(queueName),
           // The scheduler id is a stable, non-PII correlation value. Each job
           // remains tenant-bound and can safely be retried by BullMQ.
           data: { organisationId, correlationId: id },
@@ -119,34 +138,61 @@ export async function reconcileTenantSchedules(
   input: ReconcileSchedulesInput,
 ): Promise<ReconcileSchedulesResult> {
   const organisationIds = [...new Set(input.organisationIds)].filter(Boolean);
-  const [auditRemoved, retentionRemoved, reminderRemoved] = await Promise.all([
-    reconcileQueue(
-      input.auditQueue,
-      QueueName.AuditVerify,
-      organisationIds,
-      input.intervals.auditVerifyMs,
-    ),
-    reconcileQueue(
-      input.retentionQueue,
-      QueueName.Retention,
-      organisationIds,
-      input.intervals.retentionSweepMs,
-    ),
-    input.reminderQueue
-      ? reconcileQueue(
-          input.reminderQueue,
-          QueueName.Reminder,
-          organisationIds,
-          input.intervals.reminderSweepMs ?? 900_000,
-        )
-      : Promise.resolve(0),
-  ]);
+  const platformId = tenantSchedulerId(QueueName.AuditVerify, 'platform');
+  if (input.includePlatformChain) {
+    await input.auditQueue.upsertJobScheduler(
+      platformId,
+      { every: input.intervals.auditVerifyMs },
+      {
+        name: 'verify',
+        data: {
+          organisationId: 'platform',
+          correlationId: platformId,
+          platformChain: true,
+        },
+      },
+    );
+  }
+  const [auditRemoved, retentionRemoved, reminderRemoved, keyHealthRemoved] =
+    await Promise.all([
+      reconcileQueue(
+        input.auditQueue,
+        QueueName.AuditVerify,
+        organisationIds,
+        input.intervals.auditVerifyMs,
+        input.includePlatformChain ? [platformId] : [],
+      ),
+      reconcileQueue(
+        input.retentionQueue,
+        QueueName.Retention,
+        organisationIds,
+        input.intervals.retentionSweepMs,
+      ),
+      input.reminderQueue
+        ? reconcileQueue(
+            input.reminderQueue,
+            QueueName.Reminder,
+            organisationIds,
+            input.intervals.reminderSweepMs ?? 900_000,
+          )
+        : Promise.resolve(0),
+      input.keyHealthQueue
+        ? reconcileQueue(
+            input.keyHealthQueue,
+            QueueName.KeyHealth,
+            organisationIds,
+            input.intervals.keyHealthMs ?? 300_000,
+          )
+        : Promise.resolve(0),
+    ]);
 
   return {
     auditSchedulers: organisationIds.length,
     retentionSchedulers: organisationIds.length,
     reminderSchedulers: input.reminderQueue ? organisationIds.length : 0,
-    removedSchedulers: auditRemoved + retentionRemoved + reminderRemoved,
+    keyHealthSchedulers: input.keyHealthQueue ? organisationIds.length : 0,
+    removedSchedulers:
+      auditRemoved + retentionRemoved + reminderRemoved + keyHealthRemoved,
   };
 }
 
@@ -162,11 +208,14 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
     auditQueue: getQueue(QueueName.AuditVerify),
     retentionQueue: getQueue(QueueName.Retention),
     reminderQueue: getQueue(QueueName.Reminder),
+    keyHealthQueue: getQueue(QueueName.KeyHealth),
     intervals: {
       auditVerifyMs: env.AUDIT_VERIFY_INTERVAL_MS,
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
       reminderSweepMs: env.REMINDER_SWEEP_INTERVAL_MS,
+      keyHealthMs: env.KEY_HEALTH_INTERVAL_MS,
     },
+    includePlatformChain: true,
   });
 }
 

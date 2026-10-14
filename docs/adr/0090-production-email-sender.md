@@ -46,7 +46,9 @@ roles, is the only production sender.
   Mailpit catch-all. It is unauthenticated, and `sendEmail` refuses it when
   `NODE_ENV=production`.
 - Every message carries `SES_CONFIGURATION_SET`. The set publishes `BOUNCE`
-  and `COMPLAINT` events to SNS, which posts to `POST /api/email/events`.
+  and `COMPLAINT` events to SNS. A forwarder adds the
+  `x-email-webhook-secret` header and posts to `POST /api/email/events`, which
+  checks the SNS signature and the pinned `EMAIL_SNS_TOPIC_ARN`.
   Permanent bounces and complaints are suppressed as address hashes. Transient
   bounces are ignored so a full mailbox does not lock someone out.
 - Mail is sent from a subdomain identity, `blakpath.yumait.au`, with Easy DKIM,
@@ -88,8 +90,8 @@ the release gate. There must still be exactly one production sender.
 - SES has no idempotency key. If a worker job fails after SES accepted the
   message, the retry can send a duplicate. A duplicate invitation or
   notification is acceptable. A lost one is not.
-- The SNS subscription carries the webhook secret as a query value because SNS
-  cannot send custom headers. Rotate `EMAIL_WEBHOOK_SECRET` and the
-  subscription together.
+- SNS cannot send custom headers and the app rejects a secret in the query
+  string, so a forwarder in front of the route adds `x-email-webhook-secret`.
+  Rotate `EMAIL_WEBHOOK_SECRET` in the app and the forwarder together.
 - Self-hosted deployments outside AWS need SES API access or a new ADR. There
   is no generic SMTP relay path in production.
