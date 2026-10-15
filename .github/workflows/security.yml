@@ -170,4 +170,3 @@ jobs:
           image: blakpath:ci
           format: spdx-json
           output-file: sbom.spdx.json
-
