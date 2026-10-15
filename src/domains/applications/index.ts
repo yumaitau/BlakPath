@@ -59,6 +59,7 @@ export {
   getApplicationCaseRecord,
   listApplicationParticipants,
   listApplications,
+  listRegisterAssignees,
   recordApplicationTransitionAudit,
   transitionApplication,
   updateIntake,
@@ -66,8 +67,10 @@ export {
   type ApplicationAssignmentRow,
   type ApplicationCaseRecord,
   type ApplicationDetail,
+  type ApplicationListResult,
   type ApplicationNoteRow,
   type ApplicationParticipant,
   type ApplicationRow,
   type ApplicationStatusHistoryRow,
+  type RegisterAssignee,
 } from './service';

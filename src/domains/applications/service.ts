@@ -1,4 +1,14 @@
-import { and, desc, eq, exists, isNull, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  isNull,
+  notInArray,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import type { Database } from '@/db/client';
 import {
@@ -45,6 +55,7 @@ import {
   sealApplicationFields,
   sealNoteBody,
 } from '@/lib/encryption/tenant-fields';
+import { decodeApplicationCursor, encodeApplicationCursor } from './cursor';
 import { canReadApplication, readsAllApplications } from './policies';
 import {
   addNoteSchema,
@@ -123,6 +134,22 @@ export interface ApplicationParticipant {
   readonly name: string;
   readonly email: string;
 }
+
+/** A staff member the register may offer in the assignee filter. */
+export interface RegisterAssignee {
+  readonly userId: string;
+  readonly name: string;
+}
+
+export interface ApplicationListResult {
+  readonly items: ApplicationRow[];
+  readonly limit: number;
+  readonly offset: number;
+  readonly nextCursor: string | null;
+}
+
+/** Roles that do not hold a case. Kept out of the assignee filter. */
+const NON_ASSIGNEE_ROLE_SLUGS = ['applicant', 'applicant-representative'] as const;
 
 /** Assert a row was returned from an insert/update `.returning()`. */
 function must<T>(row: T | undefined, what: string): T {
@@ -326,6 +353,27 @@ export async function listApplicationParticipants(): Promise<ApplicationParticip
         memberships.organisationId,
         eq(memberships.status, 'active'),
         eq(roles.slug, 'applicant'),
+      ),
+    )
+    .orderBy(users.name);
+}
+
+/** Active staff the register can filter by. Requires `application:read-any`. */
+export async function listRegisterAssignees(): Promise<RegisterAssignee[]> {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'application:read-any');
+  const scope = currentScope();
+  return scope.db
+    .selectDistinct({ userId: users.id, name: users.name })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
+    .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
+    .where(
+      scope.where(
+        memberships.organisationId,
+        eq(memberships.status, 'active'),
+        notInArray(roles.slug, [...NON_ASSIGNEE_ROLE_SLUGS]),
       ),
     )
     .orderBy(users.name);
@@ -787,14 +835,23 @@ export async function transitionApplication(
  * List applications within the tenant. Actors with `application:read-any` see
  * every application; everyone else sees only applications they are the
  * applicant on or actively assigned to.
+ *
+ * Text search is an equality lookup on the tenant blind index (reference, full
+ * name, or one whole name word), then a keyset page on `(created_at, id)`
+ * descending. Results stay in record order. Search does not rank or score a
+ * person.
  */
 export async function listApplications(
   rawInput: ListApplicationsInput = {},
-): Promise<{ items: ApplicationRow[]; limit: number; offset: number }> {
+): Promise<ApplicationListResult> {
   const ctx = requireTenantContext();
   const subject = subjectFromContext(ctx);
   const input = listApplicationsSchema.parse(rawInput);
   const scope = currentScope();
+  const position = input.cursor ? decodeApplicationCursor(input.cursor) : null;
+  if (input.cursor && !position) {
+    throw new Error('Invalid page cursor.');
+  }
 
   const filters: Array<SQL | undefined> = [isNull(applications.deletedAt)];
   if (input.status) filters.push(eq(applications.status, input.status));
@@ -803,6 +860,13 @@ export async function listApplications(
   }
   if (input.applicantUserId) {
     filters.push(eq(applications.applicantUserId, input.applicantUserId));
+  }
+  if (position) {
+    // Row comparison at Postgres precision: created_at is microseconds, so
+    // the cursor carries the exact text value rather than a JS Date.
+    filters.push(
+      sql`(${applications.createdAt}, ${applications.id}) < (${position.createdAt}::timestamptz, ${position.id}::uuid)`,
+    );
   }
   if (input.q) {
     const mac = await applicationSearchMac(scope.organisationId, input.q);
@@ -850,18 +914,34 @@ export async function listApplications(
     );
   }
 
-  const items = await scope.db
-    .select()
+  const offset = position ? 0 : input.offset;
+  const rows = await scope.db
+    .select({
+      row: applications,
+      cursorAt: sql<string>`to_char(${applications.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+    })
     .from(applications)
     .where(scope.where(applications.organisationId, ...filters))
-    .orderBy(desc(applications.createdAt))
-    .limit(input.limit)
-    .offset(input.offset);
+    .orderBy(desc(applications.createdAt), desc(applications.id))
+    .limit(input.limit + 1)
+    .offset(offset);
+
+  const hasMore = rows.length > input.limit;
+  const page = hasMore ? rows.slice(0, input.limit) : rows;
+  const last = page.at(-1);
+  const nextCursor =
+    hasMore && last
+      ? encodeApplicationCursor({ createdAt: last.cursorAt, id: last.row.id })
+      : null;
 
   return {
-    items: await openApplicationRows(scope.organisationId, items),
+    items: await openApplicationRows(
+      scope.organisationId,
+      page.map((entry) => entry.row),
+    ),
     limit: input.limit,
-    offset: input.offset,
+    offset,
+    nextCursor,
   };
 }
 
