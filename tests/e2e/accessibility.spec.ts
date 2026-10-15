@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations, expectVisibleFocus } from './helpers/accessibility';
 import {
   selectDevelopmentOrganisation,
@@ -22,8 +23,10 @@ test('public and authentication journeys meet automated WCAG checks', async ({
     ['/', 'A clearer path'],
     ['/accessibility', 'Accessibility'],
     ['/privacy', 'Privacy'],
+    ['/key-custody', 'Key custody'],
     ['/support', 'Support'],
     ['/organisations', 'Find an organisation'],
+    ['/organisations/dev-org/apply', 'Start an application'],
     ['/verify', 'Check a certificate'],
     ['/sign-in', 'Sign in'],
     ['/sign-up', 'BlakPath is invite-only'],
@@ -36,7 +39,7 @@ test('public and authentication journeys meet automated WCAG checks', async ({
 test('organisation selection and core staff journeys meet automated WCAG checks', async ({
   page,
 }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   await signIn(page);
   await expect(
     page.getByRole('heading', { name: 'Choose an organisation' }),
@@ -64,11 +67,58 @@ test('organisation selection and core staff journeys meet automated WCAG checks'
   await auditRoute(page, '/board', 'Work board');
   await auditRoute(page, '/forms', 'Forms');
   await auditRoute(page, '/notifications', 'Notifications');
+  await auditRoute(page, '/reports', 'Reports');
+  await auditRoute(page, '/imports', 'Imports');
+  await auditRoute(page, '/consents', 'Consents');
+  await auditRoute(page, '/representatives', 'Representatives');
+  await auditRoute(page, '/settings/api-keys', 'API keys');
+  await auditRoute(page, '/settings/webhooks', 'Webhooks');
+  await auditRoute(page, '/settings/sso', 'Single sign-on');
+  await auditRoute(page, '/settings/retention', 'Retention');
 
   await page.goto('/dashboard');
   const notifications = page.getByRole('button', { name: /^Notifications,/ });
   await notifications.click();
   await expect(page.getByRole('region', { name: 'Notifications' })).toBeVisible();
+  await expectNoWcagViolations(page);
+});
+
+test('keyboard users can use organisation tool screens', async ({ page }) => {
+  test.setTimeout(90_000);
+  await signInAndSelectOrganisation(page);
+
+  const tools = page.getByRole('navigation', { name: 'Organisation tools' });
+  await expect(tools.getByRole('link', { name: 'API keys' })).toBeVisible();
+  await expect(tools.getByRole('link', { name: 'Retention' })).toBeVisible();
+  await expect(tools.getByRole('link', { name: 'Consents' })).toBeVisible();
+
+  const controls = [
+    ['/reports', 'Reports', 'Report'],
+    ['/imports', 'Imports', 'Applications to import'],
+    ['/consents', 'Consents', 'Account ID of the person'],
+    ['/representatives', 'Representatives', 'Account ID of the person being represented'],
+    ['/settings/api-keys', 'API keys', 'Key name'],
+    ['/settings/webhooks', 'Webhooks', 'Endpoint URL'],
+    ['/settings/sso', 'Single sign-on', 'Provider key'],
+    ['/settings/retention', 'Retention', 'Policy record type'],
+  ] as const;
+
+  for (const [path, heading, label] of controls) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+    const control = page.getByLabel(label);
+    await control.focus();
+    await expectVisibleFocus(page);
+    await expectNoWcagViolations(page);
+  }
+
+  await page.goto('/imports');
+  const lines = page.getByLabel('Applications to import');
+  await lines.focus();
+  await page.keyboard.type('Keyboard Import Person');
+  await page.getByRole('button', { name: 'Check import' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('status')).toContainText('Nothing was created');
   await expectNoWcagViolations(page);
 });
 
@@ -97,7 +147,10 @@ test('keyboard users can navigate menus, board work and public forms', async ({
 
   await page.goto('/board');
   const title = `Keyboard task ${Date.now()}`;
-  await page.getByRole('button', { name: 'Add task' }).focus();
+  // Action buttons stay disabled (unfocusable) until the page has hydrated.
+  const addTask = page.getByRole('button', { name: 'Add task' });
+  await expect(addTask).toBeEnabled();
+  await addTask.focus();
   await page.keyboard.press('Enter');
   const titleInput = page.getByLabel('What needs to be done?');
   await expect(titleInput).toBeFocused();
@@ -148,7 +201,9 @@ test('keyboard users can navigate menus, board work and public forms', async ({
 
   await page.goto(publicUrl);
   const response = page.getByLabel('Your response');
-  await page.getByRole('button', { name: 'Submit' }).focus();
+  const submit = page.getByRole('button', { name: 'Submit' });
+  await expect(submit).toBeEnabled();
+  await submit.focus();
   await page.keyboard.press('Enter');
   await expect(
     page.getByRole('alert').filter({ hasText: 'Some answers need another look' }),

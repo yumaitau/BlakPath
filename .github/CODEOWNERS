@@ -1,0 +1,21 @@
+# Security-sensitive paths. A change here needs a code owner's review once the
+# main ruleset requires approvals (see docs/branch-protection.md).
+/.github/                     @jusso-dev
+/infra/                       @jusso-dev
+/Dockerfile                   @jusso-dev
+/src/db/migrations/           @jusso-dev
+/src/db/audit-guard.ts        @jusso-dev
+/src/lib/auth/                @jusso-dev
+/src/lib/encryption/          @jusso-dev
+/src/lib/key-ceremony/        @jusso-dev
+/src/lib/kms/                 @jusso-dev
+/src/lib/permissions/         @jusso-dev
+/src/lib/tenancy/             @jusso-dev
+/src/lib/http/                @jusso-dev
+/src/domains/audit/           @jusso-dev
+/src/domains/organisation-keys/ @jusso-dev
+
+# Licence and governance documents.
+/LICENSE                      @jusso-dev
+/SECURITY.md                  @jusso-dev
+/CONTRIBUTING.md              @jusso-dev

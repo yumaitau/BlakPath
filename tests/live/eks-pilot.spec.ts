@@ -1,5 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { expectNoWcagViolations } from '../e2e/helpers/accessibility';
+import { watchForPageErrors } from '../e2e/helpers/page-errors';
 
 /**
  * Live EKS pilot journey. Runs against the deployed stack
@@ -10,12 +11,6 @@ import { expectNoWcagViolations } from '../e2e/helpers/accessibility';
 
 const EMAIL = process.env.PILOT_EMAIL ?? '';
 const PASSWORD = process.env.PILOT_PASSWORD ?? '';
-
-function watchForPageErrors(page: Page): Error[] {
-  const errors: Error[] = [];
-  page.on('pageerror', (error) => errors.push(error));
-  return errors;
-}
 
 test.beforeEach(async () => {
   test.skip(!EMAIL || !PASSWORD, 'PILOT_EMAIL/PILOT_PASSWORD required for live run.');

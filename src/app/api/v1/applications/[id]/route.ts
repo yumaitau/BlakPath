@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { apiErrorResponse, withApiKey } from '@/lib/http/api-route';
+import { withApiKey } from '@/lib/http/api-route';
 import { getApplication } from '@/domains/applications';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * GET /api/v1/applications/[id] — fetch one application via API key.
@@ -10,24 +11,20 @@ import { getApplication } from '@/domains/applications';
  */
 export const dynamic = 'force-dynamic';
 
-export async function GET(
+export const GET = tenantHandler(async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const { application } = await withApiKey(request, () => getApplication(id));
-    return NextResponse.json({
-      id: application.id,
-      reference: application.reference,
-      applicantName: application.applicantName,
-      status: application.status,
-      priority: application.priority,
-      submittedAt: application.submittedAt,
-      decidedAt: application.decidedAt,
-      createdAt: application.createdAt,
-    });
-  } catch (error) {
-    return apiErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const { application } = await withApiKey(request, () => getApplication(id));
+  return NextResponse.json({
+    id: application.id,
+    reference: application.reference,
+    applicantName: application.applicantName,
+    status: application.status,
+    priority: application.priority,
+    submittedAt: application.submittedAt,
+    decidedAt: application.decidedAt,
+    createdAt: application.createdAt,
+  });
+});

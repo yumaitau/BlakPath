@@ -1,6 +1,23 @@
-import { relations } from 'drizzle-orm';
-import { boolean, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
-import { primaryId, refId, rowVersion, timestamps } from './_helpers';
+import { relations, sql } from 'drizzle-orm';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
+import { users } from './auth';
+import {
+  organisationId as organisationIdCol,
+  primaryId,
+  refId,
+  rowVersion,
+  timestamps,
+} from './_helpers';
 import { organisationStatus } from './enums';
 
 /**
@@ -28,6 +45,11 @@ export const organisations = pgTable(
     abn: text('abn'),
     slug: text('slug').notNull(),
     status: organisationStatus('status').notNull().default('draft'),
+    /**
+     * Operator's free-text reason for the last status change. Mutable, so it
+     * can be corrected or erased; the audit trail stores a code only.
+     */
+    statusReason: text('status_reason'),
     /** Data-residency region. Australian residency: ap-southeast-2. */
     region: text('region').notNull().default('ap-southeast-2'),
     /** Whether the public may start an application with this organisation. */
@@ -72,9 +94,30 @@ export const organisationSettings = pgTable(
     escalationContacts: jsonb('escalation_contacts'),
     /** Onboarding readiness checklist state. */
     readinessChecklist: jsonb('readiness_checklist'),
+    /**
+     * Idle timeout for staff sessions in this organisation, in seconds.
+     * Allowed range is 30–60 minutes. This only ends a session; it does not
+     * score, rank, or decide identity.
+     */
+    staffIdleTimeoutSeconds: integer('staff_idle_timeout_seconds')
+      .notNull()
+      .default(45 * 60),
+    /**
+     * Identifier of the signed services agreement. Together with
+     * `agreementSignedAt` this is a human attestation that counsel's agreement
+     * is signed. The document itself is not stored here.
+     */
+    agreementReference: text('agreement_reference'),
+    agreementSignedAt: timestamp('agreement_signed_at', { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [uniqueIndex('organisation_settings_org_unique').on(table.organisationId)],
+  (table) => [
+    uniqueIndex('organisation_settings_org_unique').on(table.organisationId),
+    check(
+      'organisation_settings_staff_idle_range',
+      sql`${table.staffIdleTimeoutSeconds} BETWEEN 1800 AND 3600`,
+    ),
+  ],
 );
 
 /** A DNS domain claimed by an organisation (for email-domain-based routing). */
@@ -100,6 +143,7 @@ export const organisationDomains = pgTable(
  *
  * `aiFeatures` defaults to false and MUST stay off unless a human explicitly
  * enables it — no AI capability may ever score, rank, or infer Aboriginality.
+ * Turning it on for a tenant also requires a row in `ai_governance_approvals`.
  */
 export const featureFlags = pgTable(
   'feature_flags',
@@ -121,6 +165,32 @@ export const featureFlags = pgTable(
   ],
 );
 
+/**
+ * Governance approval recorded when an organisation administrator turns on
+ * `aiFeatures`. Append-only: disabling the flag does not delete the history.
+ * External tool access stays closed unless both this record and the flag exist.
+ */
+export const aiGovernanceApprovals = pgTable(
+  'ai_governance_approvals',
+  {
+    id: primaryId(),
+    organisationId: organisationIdCol().references(() => organisations.id, {
+      onDelete: 'cascade',
+    }),
+    /** Council minute, resolution or other approval identifier. */
+    reference: text('reference').notNull(),
+    /** What was approved, in the organisation's own words. */
+    statement: text('statement').notNull(),
+    approvedByUserId: refId('approved_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    /** True only when the administrator passed a step-up check. */
+    stepUpVerified: boolean('step_up_verified').notNull(),
+    ...timestamps,
+  },
+  (table) => [index('ai_governance_approvals_org_idx').on(table.organisationId)],
+);
+
 export const organisationsRelations = relations(organisations, ({ one, many }) => ({
   settings: one(organisationSettings, {
     fields: [organisations.id],
@@ -128,6 +198,7 @@ export const organisationsRelations = relations(organisations, ({ one, many }) =
   }),
   domains: many(organisationDomains),
   featureFlags: many(featureFlags),
+  aiGovernanceApprovals: many(aiGovernanceApprovals),
 }));
 
 export const organisationSettingsRelations = relations(
@@ -153,3 +224,17 @@ export const featureFlagsRelations = relations(featureFlags, ({ one }) => ({
     references: [organisations.id],
   }),
 }));
+
+export const aiGovernanceApprovalsRelations = relations(
+  aiGovernanceApprovals,
+  ({ one }) => ({
+    organisation: one(organisations, {
+      fields: [aiGovernanceApprovals.organisationId],
+      references: [organisations.id],
+    }),
+    approvedBy: one(users, {
+      fields: [aiGovernanceApprovals.approvedByUserId],
+      references: [users.id],
+    }),
+  }),
+);

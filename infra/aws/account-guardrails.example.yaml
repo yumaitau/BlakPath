@@ -26,7 +26,10 @@ Parameters:
   EvidenceKmsKeyArn:
     Type: String
     AllowedPattern: '^arn:(aws|aws-cn|aws-us-gov):kms:[a-z0-9-]+:[0-9]{12}:(key|alias)/.+$'
-    Description: CMK that encrypts both BlakPath buckets (alias/blakpath-prod-evidence).
+    Description: >-
+      Bucket default CMK for both BlakPath buckets (alias/blakpath-prod-evidence).
+      Tenant objects use per-object SSE-KMS with each tenant's own CMK; this
+      template grants nothing on those keys.
   ConfigRoleArn:
     Type: String
     AllowedPattern: '^arn:(aws|aws-cn|aws-us-gov):iam::[0-9]{12}:role/.+'
@@ -266,6 +269,7 @@ Resources:
                   - logs:PutLogEvents
                 Resource: !GetAtt TrailLogGroup.Arn
 
+  # trivy:ignore:AWS-0015 KMSKeyId is SecurityLogsKey (a CMK) via !GetAtt, which Trivy cannot resolve.
   AccountTrail:
     Type: AWS::CloudTrail::Trail
     DependsOn:

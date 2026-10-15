@@ -6,31 +6,26 @@ import {
   listAssignableRoles,
   listManagedMembers,
 } from '@/domains/memberships';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import { requireRecentAuth, STEP_UP_WINDOWS } from '@/lib/auth/session';
+import { tenantHandler } from '@/lib/http/error-response';
 
 const addMemberSchema = z.object({
   email: z.email(),
   roleId: z.uuid(),
 });
 
-export async function GET(): Promise<Response> {
-  try {
-    const [members, roles] = await withRequestTenant(async () =>
-      Promise.all([listManagedMembers(), listAssignableRoles()]),
-    );
-    return NextResponse.json({ members, roles });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
-export async function POST(request: NextRequest): Promise<Response> {
-  try {
-    await requireRecentAuth(STEP_UP_WINDOWS.privileged);
-    const body = addMemberSchema.parse(await request.json().catch(() => null));
-    const member = await withRequestTenant(() => addMember(body));
-    return NextResponse.json({ member }, { status: 201 });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const GET = tenantHandler(async function GET(): Promise<Response> {
+  const [members, roles] = await withRequestTenant(async () =>
+    Promise.all([listManagedMembers(), listAssignableRoles()]),
+  );
+  return NextResponse.json({ members, roles });
+});
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
+  await requireRecentAuth(STEP_UP_WINDOWS.privileged);
+  const body = addMemberSchema.parse(await request.json().catch(() => null));
+  const member = await withRequestTenant(() => addMember(body));
+  return NextResponse.json({ member }, { status: 201 });
+});

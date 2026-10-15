@@ -32,3 +32,27 @@ export const declareConflictSchema = z.object({
   reason: z.string().trim().max(2000).optional(),
 });
 export type DeclareConflictInput = z.input<typeof declareConflictSchema>;
+
+/** A person records whether a member was in the room. */
+export const recordAttendanceSchema = z.object({
+  userId: z.uuid(),
+  present: z.boolean(),
+  note: z.string().trim().max(2000).optional(),
+});
+export type RecordAttendanceInput = z.input<typeof recordAttendanceSchema>;
+
+/**
+ * A person attests whether quorum was present. `present` is their record,
+ * not a count of attendance rows.
+ */
+export const attestQuorumSchema = z.object({
+  present: z.boolean(),
+  note: z.string().trim().max(2000).optional(),
+});
+export type AttestQuorumInput = z.input<typeof attestQuorumSchema>;
+
+/** Minutes text entered by a person. */
+export const recordMinutesSchema = z.object({
+  minutes: z.string().trim().min(1).max(20000),
+});
+export type RecordMinutesInput = z.input<typeof recordMinutesSchema>;
