@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
+import { staffDownload, staffJson } from '@/components/staff-tools/request';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,6 +27,38 @@ export interface RegisterParticipant {
   email: string;
 }
 
+export interface RegisterAssignee {
+  userId: string;
+  name: string;
+}
+
+export interface RegisterFilters {
+  q: string;
+  status: string;
+  assignee: string;
+  cursor: string;
+}
+
+export interface RegisterExportRequest {
+  id: string;
+  status: string;
+  createdAt: string;
+  rowCount: number | null;
+  from: string | null;
+  to: string | null;
+  applicationStatus: string | null;
+}
+
+function registerHref(filters: RegisterFilters, cursor?: string): string {
+  const params = new URLSearchParams();
+  if (filters.q) params.set('q', filters.q);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.assignee) params.set('assignee', filters.assignee);
+  if (cursor) params.set('cursor', cursor);
+  const query = params.toString();
+  return query ? `/applications?${query}` : '/applications';
+}
+
 function label(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -33,14 +67,25 @@ function label(value: string): string {
 export function ApplicationRegister({
   applications,
   participants,
+  assignees,
+  exports,
+  statuses,
+  filters,
+  nextCursor,
+  currentUserId,
   canCreate,
-  query = '',
+  canExport,
 }: {
   applications: RegisterApplication[];
   participants: RegisterParticipant[];
+  assignees: RegisterAssignee[];
+  exports: RegisterExportRequest[];
+  statuses: readonly string[];
+  filters: RegisterFilters;
+  nextCursor: string | null;
+  currentUserId: string;
   canCreate: boolean;
-  /** Current blind-index query, echoed into the search form. */
-  query?: string;
+  canExport: boolean;
 }) {
   const router = useRouter();
   const [name, setName] = useState('');
@@ -48,7 +93,22 @@ export function ApplicationRegister({
   const [applicantUserId, setApplicantUserId] = useState('');
   const [busy, setBusy] = useState(false);
   const hydrated = useHydrated();
+  const stepUp = useStepUp();
   const [error, setError] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+
+  const assigneeOptions =
+    assignees.length > 0
+      ? assignees
+      : currentUserId
+        ? [{ userId: currentUserId, name: 'Assigned to me' }]
+        : [];
+  const filtered = applications;
+  const hasFilters = Boolean(
+    filters.q || filters.status || filters.assignee || filters.cursor,
+  );
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -85,8 +145,57 @@ export function ApplicationRegister({
     }
   }
 
+  async function download(id: string) {
+    if (exportBusy) return;
+    setExportBusy(true);
+    setExportError(null);
+    try {
+      await staffDownload(`/api/reports/exports/${id}/download`, () => stepUp.request());
+    } catch (caught) {
+      setExportError(
+        caught instanceof Error ? caught.message : 'That file could not be downloaded.',
+      );
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function requestExport(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (exportBusy) return;
+    setExportBusy(true);
+    setExportError(null);
+    setExportMessage(null);
+    const form = new FormData(event.currentTarget);
+    const status = String(form.get('status') ?? '');
+    const from = String(form.get('from') ?? '');
+    const to = String(form.get('to') ?? '');
+    try {
+      await staffJson(
+        '/api/reports/exports',
+        'POST',
+        {
+          type: 'applications',
+          ...(status ? { status } : {}),
+          ...(from ? { from } : {}),
+          ...(to ? { to } : {}),
+        },
+        () => stepUp.request(),
+      );
+      setExportMessage('Export requested. The file will appear below when it is ready.');
+      router.refresh();
+    } catch (caught) {
+      setExportError(
+        caught instanceof Error ? caught.message : 'We could not start that export.',
+      );
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-8">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div>
           <p className="text-muted-foreground text-sm font-medium">Case register</p>
@@ -176,29 +285,86 @@ export function ApplicationRegister({
               Results are limited to cases you are allowed to view.
             </p>
           </div>
-          <form method="get" action="/applications" className="w-full sm:w-72">
-            <Label htmlFor="application-search" className="sr-only">
-              Search applications
-            </Label>
-            <Input
-              id="application-search"
-              name="q"
-              defaultValue={query}
-              placeholder="Search by name or reference"
-            />
-          </form>
+          <div className="flex w-full flex-col gap-3 sm:max-w-xl">
+            <form method="get" action="/applications">
+              <Label htmlFor="application-search" className="sr-only">
+                Search applications
+              </Label>
+              <Input
+                id="application-search"
+                name="q"
+                defaultValue={filters.q}
+                maxLength={200}
+                placeholder="Search by name or reference"
+              />
+              {filters.status ? (
+                <input type="hidden" name="status" value={filters.status} />
+              ) : null}
+              {filters.assignee ? (
+                <input type="hidden" name="assignee" value={filters.assignee} />
+              ) : null}
+              <p className="text-muted-foreground mt-1 text-xs">
+                Matches a full reference, a full name, or one whole word of a name.
+              </p>
+            </form>
+            <form
+              method="get"
+              action="/applications"
+              className="flex flex-col gap-3 sm:flex-row"
+            >
+              {filters.q ? <input type="hidden" name="q" value={filters.q} /> : null}
+              <div className="grid flex-1 gap-1">
+                <Label htmlFor="application-status">Status</Label>
+                <select
+                  id="application-status"
+                  name="status"
+                  defaultValue={filters.status}
+                  className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+                >
+                  <option value="">Any status</option>
+                  {statuses.map((status) => (
+                    <option key={status} value={status}>
+                      {label(status)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid flex-1 gap-1">
+                <Label htmlFor="application-assignee">Assignee</Label>
+                <select
+                  id="application-assignee"
+                  name="assignee"
+                  defaultValue={filters.assignee}
+                  className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+                >
+                  <option value="">Anyone</option>
+                  {assigneeOptions.map((person) => (
+                    <option key={person.userId} value={person.userId}>
+                      {person.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end">
+                <Button type="submit" variant="secondary">
+                  Apply
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
 
-        {applications.length === 0 ? (
+        {filtered.length === 0 ? (
           <Card>
             <CardContent className="text-muted-foreground py-8 text-sm">
-              No applications match this search. Start a new application when someone has
-              asked your organisation for support.
+              {hasFilters
+                ? 'No applications match this search.'
+                : 'No applications yet. Start a new application when someone has asked your organisation for support.'}
             </CardContent>
           </Card>
         ) : (
           <ul className="border-border divide-border divide-y overflow-hidden rounded-lg border">
-            {applications.map((application) => (
+            {filtered.map((application) => (
               <li key={application.id}>
                 <Link
                   href={`/applications/${application.id}`}
@@ -223,7 +389,112 @@ export function ApplicationRegister({
             ))}
           </ul>
         )}
+
+        {filters.cursor || nextCursor ? (
+          <nav aria-label="Application pages" className="flex gap-4 text-sm">
+            {filters.cursor ? (
+              <Link href={registerHref(filters)} className="text-primary underline">
+                First page
+              </Link>
+            ) : null}
+            {nextCursor ? (
+              <Link
+                href={registerHref(filters, nextCursor)}
+                className="text-primary underline"
+              >
+                Next page
+              </Link>
+            ) : null}
+          </nav>
+        ) : null}
       </section>
+
+      {canExport ? (
+        <section
+          aria-labelledby="application-export-heading"
+          className="flex flex-col gap-4"
+        >
+          <div>
+            <h2 id="application-export-heading" className="text-lg font-semibold">
+              Export applications
+            </h2>
+            <p className="text-muted-foreground text-sm">
+              Download a CSV of applications in a date range and status. Empty dates
+              include every day. The file lists records your organisation holds.
+            </p>
+          </div>
+          {exportError ? (
+            <Alert tone="destructive" title="We couldn’t start the export">
+              {exportError}
+            </Alert>
+          ) : null}
+          {exportMessage ? <Alert title="Export requested">{exportMessage}</Alert> : null}
+          <form
+            className="flex flex-col gap-4 sm:flex-row sm:items-end"
+            onSubmit={requestExport}
+          >
+            <div className="grid gap-1">
+              <Label htmlFor="export-from">From</Label>
+              <Input id="export-from" name="from" type="date" />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="export-to">To</Label>
+              <Input id="export-to" name="to" type="date" />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="export-status">Status</Label>
+              <select
+                id="export-status"
+                name="status"
+                defaultValue={filters.status}
+                className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+              >
+                <option value="">Any status</option>
+                {statuses.map((status) => (
+                  <option key={status} value={status}>
+                    {label(status)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button type="submit" variant="secondary" disabled={!hydrated || exportBusy}>
+              {exportBusy ? 'Requesting…' : 'Export CSV'}
+            </Button>
+          </form>
+          {exports.length > 0 ? (
+            <ul className="text-muted-foreground flex flex-col gap-2 text-sm">
+              {exports.map((request) => (
+                <li key={request.id} className="flex flex-wrap items-baseline gap-x-3">
+                  <span className="text-foreground font-medium">
+                    {label(request.status)}
+                  </span>
+                  <span>
+                    {request.applicationStatus
+                      ? label(request.applicationStatus)
+                      : 'Any status'}
+                    {request.from || request.to
+                      ? `, ${request.from ?? '…'} to ${request.to ?? '…'}`
+                      : ''}
+                  </span>
+                  {request.rowCount !== null ? (
+                    <span>{request.rowCount} rows</span>
+                  ) : null}
+                  {request.status === 'ready' ? (
+                    <button
+                      type="button"
+                      className="text-primary underline disabled:opacity-60"
+                      disabled={!hydrated || exportBusy}
+                      onClick={() => void download(request.id)}
+                    >
+                      Download
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
