@@ -191,8 +191,10 @@ export type AuditAction =
   // Teams, groups, clients (council tenant model).
   | 'team.created'
   | 'team.member_added'
+  | 'team.member_removed'
   | 'group.created'
   | 'group.member_added'
+  | 'group.member_removed'
   | 'client.created'
   | 'client.assigned'
   // Meeting-pack access (panel materials).

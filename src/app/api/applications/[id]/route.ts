@@ -13,10 +13,15 @@ import { tenantHandler } from '@/lib/http/error-response';
 const mutationSchema = z.discriminatedUnion('operation', [
   z.object({
     operation: z.literal('update_intake'),
-    applicantName: z.string().trim().min(1).max(200),
-    priority: z.enum(['low', 'normal', 'high']),
+    applicantName: z.string().trim().min(1).max(200).optional(),
+    priority: z.enum(['low', 'normal', 'high']).optional(),
+    clientId: z.uuid().optional(),
   }),
   z.object({ operation: z.literal('assign_self') }),
+  z.object({
+    operation: z.literal('assign'),
+    assigneeUserId: z.uuid(),
+  }),
   z.object({
     operation: z.literal('transition'),
     action: z.enum([
@@ -53,11 +58,16 @@ export const PATCH = tenantHandler(async function PATCH(
         return updateIntake(id, {
           applicantName: input.applicantName,
           priority: input.priority,
+          clientId: input.clientId,
         });
       case 'assign_self':
         return assignApplication(id, {
           assigneeUserId: ctx.userId,
           roleContext: 'case-officer',
+        });
+      case 'assign':
+        return assignApplication(id, {
+          assigneeUserId: input.assigneeUserId,
         });
       case 'transition':
         return transitionApplication(id, input.action, { note: input.note });
