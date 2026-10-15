@@ -1,0 +1,17 @@
+# Turn on the EKS Auto Mode / VPC CNI network policy controller.
+#
+# Merge this key into the existing ConfigMap. Do not replace that object if
+# it already has other data keys:
+#   kubectl -n kube-system patch configmap amazon-vpc-cni --type merge \
+#     -p '{"data":{"enable-network-policy-controller":"true"}}'
+#
+# Leave the shared NodeClass at networkPolicy: DefaultAllow. DefaultDeny on
+# that class would drop every pod on the node pool, not just blakpath.
+# Optional on the same NodeClass: networkPolicyEventLogs: Enabled.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amazon-vpc-cni
+  namespace: kube-system
+data:
+  enable-network-policy-controller: 'true'

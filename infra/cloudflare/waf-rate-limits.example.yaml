@@ -1,0 +1,55 @@
+# Example only. A human applies this in the Cloudflare account.
+# Do not call the Cloudflare API from automation for this file.
+#
+# These rules are an outer layer. They are slightly looser than the app limits
+# in docs/rate-limits.md and count only ip.src. The app also counts a token
+# or credential id.
+#
+# Precondition: the origin load balancer inbound-cidrs stay limited to
+# Cloudflare ranges (infra/k8s/service-ingress.yaml). cf-connecting-ip is
+# trusted only while that is true. Do not widen those CIDRs.
+
+zone: blakpath.yumait.au
+period: 60
+characteristics:
+  - ip.src
+action: block
+mitigation_timeout: 60
+
+rules:
+  - description: Auth sign-in
+    expression: '(http.host eq "blakpath.yumait.au" and http.request.uri.path contains "/api/auth/sign-in")'
+    requests_per_period: 20
+  - description: Auth password reset request
+    expression: '(http.host eq "blakpath.yumait.au" and (http.request.uri.path contains "/api/auth/request-password-reset" or http.request.uri.path contains "/api/auth/forget-password"))'
+    requests_per_period: 10
+  - description: Auth password reset confirm
+    expression: '(http.host eq "blakpath.yumait.au" and http.request.uri.path contains "/api/auth/reset-password")'
+    requests_per_period: 15
+  - description: Invitation account creation
+    expression: '(http.host eq "blakpath.yumait.au" and http.request.uri.path eq "/api/membership-invitations/create-account")'
+    requests_per_period: 15
+  - description: Public form submit
+    expression: '(http.host eq "blakpath.yumait.au" and starts_with(http.request.uri.path, "/api/public/forms/"))'
+    requests_per_period: 60
+  - description: Public form page
+    expression: '(http.host eq "blakpath.yumait.au" and starts_with(http.request.uri.path, "/form/"))'
+    requests_per_period: 120
+  - description: Certificate verify page
+    expression: '(http.host eq "blakpath.yumait.au" and starts_with(http.request.uri.path, "/verify/"))'
+    requests_per_period: 90
+  - description: Invitation accept
+    expression: '(http.host eq "blakpath.yumait.au" and http.request.uri.path eq "/api/membership-invitations/accept")'
+    requests_per_period: 30
+  - description: Public API
+    expression: '(http.host eq "blakpath.yumait.au" and starts_with(http.request.uri.path, "/api/v1/"))'
+    requests_per_period: 300
+  - description: MCP
+    expression: '(http.host eq "blakpath.yumait.au" and http.request.uri.path eq "/api/mcp")'
+    requests_per_period: 120
+  - description: SCIM
+    expression: '(http.host eq "blakpath.yumait.au" and starts_with(http.request.uri.path, "/api/scim/"))'
+    requests_per_period: 80
+  - description: Email events
+    expression: '(http.host eq "blakpath.yumait.au" and http.request.uri.path eq "/api/email/events")'
+    requests_per_period: 90

@@ -44,6 +44,11 @@ Vault `blakpath-production` is encrypted with a BlakPath CMK and locked in
 Deleting a row, object or tenant from the live system does not delete the
 copies inside existing recovery points.
 
+Tenant key deletion: sealed database fields in RDS recovery points stay
+ciphertext under the tenant CMK. S3 recovery points are re-encrypted under the
+vault CMK, so deleting a tenant key does not shred that tenant's objects in
+them before expiry. This is an open decision (`infra/aws/README.md`).
+
 Worst case after a live delete: **90 days**. The daily snapshot that still
 contains the data expires 90 days after that snapshot was taken. The 35-day
 continuous window is shorter, so the daily snapshot sets the maximum. After

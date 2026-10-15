@@ -1,10 +1,10 @@
 # Evidence scanning design
 
-> **Status: design for Phase 3.** The tables and worker jobs described here are
-> planned, not yet implemented. This document records the intended secure upload
-> lifecycle so it is built correctly when the Evidence domain lands. The
-> configuration it relies on already exists (`S3_BUCKET_EVIDENCE`,
-> `S3_BUCKET_QUARANTINE`, `CLAMAV_HOST`, `CLAMAV_PORT` in `src/lib/env.ts`).
+> **Status: implemented.** Uploads, quarantine, scanning and promotion follow
+> this lifecycle (`src/domains/evidence/service.ts`, `worker/processors.ts`).
+> Retry, dead-letter and sweep behaviour is in **Recovery** below. Configuration
+> lives in `src/lib/env.ts` (`S3_BUCKET_EVIDENCE`, `S3_BUCKET_QUARANTINE`,
+> `CLAMAV_HOST`, `CLAMAV_PORT`, and the `EVIDENCE_*` sweep settings).
 
 Supporting evidence is the most sensitive data an applicant shares. Uploads are
 therefore treated as **untrusted and potentially hostile** until proven clean.
@@ -65,8 +65,8 @@ sequenceDiagram
     W-->>App: Notify uploader (safe, non-technical message)
   else scanner unavailable / error
     W->>DB: status stays quarantined (held)
-    W->>DB: audit(evidence.scan_deferred, failure)
-    Note over W,AV: FAIL-SECURE — never promote, retry with backoff
+    W->>DB: audit(evidence.scan_failed, failure)
+    Note over W,AV: FAIL-SECURE — never promote, retry with capped backoff
   end
 
   Note over U,E: Later — download
@@ -90,16 +90,60 @@ Only `clean` objects can be presigned for download, and only to a caller with
 
 ## Validation & hardening
 
-- **Pre-upload:** enforce allow-listed content types and a maximum size before
-  minting the presigned PUT.
-- **Post-upload (worker):** verify the real content type from magic bytes
-  (`file-type`) against the declared type — reject spoofed extensions before
-  scanning.
+- **Pre-upload:** enforce allow-listed content types and a maximum size (25 MiB)
+  before minting the presigned PUT. The upload form checks type and size in the
+  browser first, with plain-language errors, but the server is authoritative.
+- **Signed PUT:** the presigned URL signs `Content-Type` and `Content-Length`
+  (the presigner leaves `Content-Type` unsigned unless asked), so S3 refuses a
+  PUT whose type or size differs from the declaration.
+- **Post-upload (worker):** `HeadObject` first — the stored size must equal the
+  declared size and stay within the cap, or the upload is rejected
+  (`rejected:size`). Every later read and the promotion copy are pinned to that
+  `ETag`, so a re-upload cannot swap bytes between checks.
+- **Content type (worker):** verify the real content type from magic bytes
+  (`file-type`, streamed) against the declared type — reject spoofed extensions
+  before scanning. Known container equivalences are accepted: a legacy `.doc`
+  is detected as an MS Compound File (`application/x-cfb`) and is accepted as
+  `application/msword` only when the file name ends in `.doc`; HEIC and HEIF
+  share a container and are interchangeable. Unidentifiable bytes are rejected.
 - **Scanning:** stream the object to ClamAV (`INSTREAM`) at
-  `CLAMAV_HOST:CLAMAV_PORT`; do not load whole files into app memory.
-- **Retries:** scan jobs use BullMQ retry with backoff. A scanner outage causes
-  retries, not promotion; persistent failures are dead-lettered and alerted while
-  the file remains quarantined.
+  `CLAMAV_HOST:CLAMAV_PORT` in 64 KiB frames with socket backpressure, hashing
+  (SHA-256) on the way; whole files are never loaded into app memory.
+- **Promotion:** the copy into the evidence bucket replaces the object metadata
+  (`MetadataDirective: REPLACE`) and sets `Content-Type` to the verified type,
+  never the client-declared one.
+- **Retries:** a `malware-scan` job uses 24 attempts and exponential backoff
+  from 2 seconds, capped at 10 minutes (`src/lib/queues/scan-policy.ts`). A
+  scanner outage causes retries, not promotion. The capped schedule still has
+  attempts left after a 10 minute ClamAV gap, so the same job finishes
+  `clean` or `infected` once the scanner is back.
+- **Dead letter and redrive:** a scan that exhausts those attempts is copied to
+  the `malware-scan-dlq` holding queue (no worker consumes it) and the
+  `queue_job_exhausted` signal fires. The per-tenant sweep
+  (`EVIDENCE_SCAN_SWEEP_INTERVAL_MS`, default 5 minutes) redrives each dead
+  letter onto `malware-scan` with a **fresh job id** — the failed id stays
+  reserved for 7 days — and writes `evidence.scan_requeued`. The same sweep
+  re-queues a `quarantined` row older than
+  `EVIDENCE_QUARANTINE_REQUEUE_AFTER_MS` (default 10 minutes) when no scan is
+  active, waiting or delayed. The object stays quarantined until a scan settles
+  it. `pending` uploads older than 24 hours are rejected
+  (`expired:pending`).
+- **Complete checks the object.** `completeUpload` calls `HeadObject` on the
+  quarantine key and returns HTTP 409, leaving the row `pending`, when the
+  object is missing or its size does not match the declaration.
+- **Missing quarantine object is terminal.** If the quarantine object is gone
+  and the evidence bucket already holds the promoted copy at the declared
+  size (a crash between copy+delete and the status update), the scan hashes
+  that copy and marks the row `clean`. With nothing promoted, the row is
+  `rejected` (`rejected:missing-object`) instead of retrying a 404 forever.
+- **Tenant key pause.** A scan or sweep for a tenant whose key is not
+  `active` is moved to delayed by the worker's tenant-key gate (no attempt is
+  spent). A key that goes non-active mid-scan pauses the job the same way, so
+  a key incident never dead-letters or settles evidence.
+- **Backlog metric.** Each sweep logs `signal=evidence_quarantine_backlog` with
+  `quarantinedCount`, `oldestQuarantinedAgeSeconds`, `dlqDepth` and `redriven`.
+  The CloudWatch alarm `blakpath-oldest-quarantined-age` pages when the oldest
+  age reaches 30 minutes. See `infra/aws/operational-alerts.example.yaml`.
 - **Cleanup:** on promotion, the quarantine copy is deleted so unscanned/raw bytes
   don't linger. Infected objects are removed or hard-held for investigation, never
   left addressable.

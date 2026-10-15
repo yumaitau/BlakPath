@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { env } from '@/lib/env';
+import { postgresClientOptions } from './postgres-options';
 import * as schema from './schema';
 
 /**
@@ -15,14 +16,21 @@ const globalForDb = globalThis as unknown as {
   __blakpathSql?: ReturnType<typeof postgres>;
 };
 
+const poolMax =
+  env.BLAKPATH_PROCESS === 'worker'
+    ? env.DATABASE_WORKER_POOL_MAX
+    : env.DATABASE_POOL_MAX;
+
 const client =
   globalForDb.__blakpathSql ??
-  postgres(env.DATABASE_URL, {
-    max: env.DATABASE_POOL_MAX,
-    idle_timeout: 20,
-    connect_timeout: 10,
-    prepare: true,
-  });
+  postgres(
+    env.DATABASE_URL,
+    postgresClientOptions({
+      role: env.BLAKPATH_PROCESS,
+      poolMax,
+      databaseUrl: env.DATABASE_URL,
+    }),
+  );
 
 if (env.NODE_ENV !== 'production') {
   globalForDb.__blakpathSql = client;

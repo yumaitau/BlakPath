@@ -22,8 +22,7 @@ Generate the required secrets before first run:
 ```bash
 # .env: BETTER_AUTH_SECRET
 openssl rand -base64 48
-# .env: ENCRYPTION_MASTER_KEY (base64-encoded 32-byte key)
-openssl rand -base64 32
+# Dev envelope encryption uses the local provider. No master key required.
 ```
 
 ### Services
@@ -101,8 +100,8 @@ not positively passed. There is no operational bypass — do not add one.
 
 ```bash
 # Build production images
-docker build --target runner -t blakpath:latest .
-docker build --target worker -t blakpath-worker:latest .
+docker build --target runner -t blakpath:0.1.0 .
+docker build --target worker -t blakpath-worker:0.1.0 .
 ```
 
 ---
