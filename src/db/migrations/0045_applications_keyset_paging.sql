@@ -1,0 +1,3 @@
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "applications_org_created_id_idx" ON "applications" USING btree ("organisation_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "applications_org_status_created_id_idx" ON "applications" USING btree ("organisation_id","status","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "applications_org_assignee_created_id_idx" ON "applications" USING btree ("organisation_id","current_assignee_user_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);
