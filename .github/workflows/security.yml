@@ -170,10 +170,3 @@ jobs:
           image: blakpath:ci
           format: spdx-json
           output-file: sbom.spdx.json
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sbom-spdx-json
-          path: sbom.spdx.json
-          retention-days: 90
