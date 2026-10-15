@@ -153,9 +153,13 @@ mints a new session and retries the action. It does not sign the person out.
 
 The mapped routes are evidence download, report export create and download,
 certificate revoke and re-issue, meeting pack read, API key create, webhook create, SSO provider create,
-retention hold release, retention policy delete, and break-glass deny and
-revoke. Certificate signing, break-glass approval and activation, and
-membership changes are gated the same way.
+retention hold release, retention policy delete, and break-glass request,
+activate, approve, deny, revoke and review. Certificate signing and membership
+changes are gated the same way.
+
+Break-glass reads during a live grant use the operator session (with staff MFA)
+plus the grant's own expiry. The step-up window is 5 minutes and a grant may
+last up to 8 hours, so those reads do not ask for step-up again.
 
 Re-authentication stamps `lastAuthenticatedAt` on the new session.
 

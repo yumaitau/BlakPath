@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { STEP_UP_ROUTES } from '@/lib/auth/step-up-policy';
 import { requirePlatformOperator } from '@/lib/http/platform-route';
 import { activateBreakGlass } from '@/domains/break-glass';
 import { tenantHandler } from '@/lib/http/error-response';
@@ -11,7 +12,9 @@ export const POST = tenantHandler(async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const { userId } = await requirePlatformOperator();
+  const { userId } = await requirePlatformOperator(
+    STEP_UP_ROUTES['POST /api/break-glass/[id]/activate'],
+  );
   const { id } = await params;
   const row = await activateBreakGlass({
     requestId: id,
