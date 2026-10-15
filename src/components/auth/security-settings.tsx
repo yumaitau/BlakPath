@@ -99,10 +99,15 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
     setError(null);
     setBusy(true);
 
-    const { data, error: enableError } = await twoFactor.enable({ password });
+    const { data, error: enableError } = await twoFactor.enable({
+      password,
+      method: 'totp',
+    });
     setBusy(false);
 
-    if (enableError || !data) {
+    // Only authenticator-app enrolment is supported; any other method in the
+    // response is unexpected, so fail closed rather than show a partial setup.
+    if (enableError || !data || data.method !== 'totp') {
       setError(
         'We couldn’t start two-step verification. Check your password and try again.',
       );

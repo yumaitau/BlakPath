@@ -43,6 +43,9 @@ const nextConfig: NextConfig = {
     'bullmq',
     '@pdf-lib/fontkit',
     'qrcode',
+    // Instrumentations patch Node's own `require` at runtime and resolve
+    // optional framework files dynamically; bundling them breaks both.
+    '@opentelemetry/auto-instrumentations-node',
   ],
   experimental: {
     // Server Actions are used sparingly; keep body limits tight.
