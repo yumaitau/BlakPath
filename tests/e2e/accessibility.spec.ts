@@ -75,6 +75,7 @@ test('organisation selection and core staff journeys meet automated WCAG checks'
   await auditRoute(page, '/settings/webhooks', 'Webhooks');
   await auditRoute(page, '/settings/sso', 'Single sign-on');
   await auditRoute(page, '/settings/retention', 'Retention');
+  await auditRoute(page, '/settings/organisation', 'Organisation settings');
 
   await page.goto('/dashboard');
   const notifications = page.getByRole('button', { name: /^Notifications,/ });
