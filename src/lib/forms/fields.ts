@@ -200,8 +200,7 @@ export function draftIsCurrent(
 }
 
 export type DraftParseResult =
-  | { success: true; data: Record<string, unknown> }
-  | { success: false };
+  { success: true; data: Record<string, unknown> } | { success: false };
 
 function isBlankDraftValue(value: unknown): boolean {
   if (value === null || value === undefined || value === '') return true;

@@ -49,12 +49,7 @@ export interface HashableAuditEvent {
 
 /** A JSON-serialisable value used in metadata after redaction. */
 export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 /**
  * Keys that must NEVER be recorded in audit metadata, regardless of allowlist.

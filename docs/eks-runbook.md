@@ -523,6 +523,22 @@ refuses in production.
 4. Record date, operator, source, target, elapsed RTO, verification result
    outside restored environment.
 
+## Cluster guardrails
+
+Deploy `infra/aws/eks-guardrails.example.yaml` in `ap-southeast-2` before the
+namespace holds production records. It creates `alias/blakpath-eks-secrets` and
+the log group `/aws/eks/<cluster>/cluster` (365-day retention). It does not
+create a cluster.
+
+The live cluster then has to match `infra/aws/eks-cluster-guardrails.json`:
+control-plane logs `api`, `audit`, `authenticator`, `controllerManager` and
+`scheduler`; deletion protection on; secrets envelope encryption with that CMK.
+Commands and the irreversible-key warning are in `infra/aws/README.md`.
+
+On `yumait-prod` these changes affect every team. Coordinate before
+changing the shared cluster; the target is the dedicated cluster in
+`docs/adr/0001-dedicated-cluster.md`.
+
 ## ClamAV
 
 `infra/k8s/clamav.yaml` runs two non-root scanner pods. Each has a signature
