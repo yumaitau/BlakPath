@@ -331,6 +331,13 @@ Record who rotated, when, and which keys. Do not record the values.
   `alias/blakpath-prod-evidence`. Per-object SSE-KMS uses the tenant CMK.
   Certificates and exports are objects in the evidence bucket. MinIO exists
   for local dev only and does not send SSE headers.
+- S3 lifecycle: apply `infra/aws/s3-lifecycle/{evidence,quarantine}-bucket.json`
+  (exports 7 days, quarantine 2 days, noncurrent versions 30 days, stale
+  multipart 1 day) and verify with `get-bucket-lifecycle-configuration`. The
+  worker Pod Identity role also needs the `ExportLifecycle` statement from
+  `infra/aws/workload-roles.example.yaml` (tagging, multipart abort, version
+  delete on `*/exports/*`) before this release deploys. See
+  `infra/aws/README.md`.
 - S3 audit-anchor bucket: created with Object Lock compliance retention
   (see `infra/aws/audit-anchor-bucket.example.yaml`). The worker may put and
   read objects. It must not be granted delete or governance bypass. Web tasks

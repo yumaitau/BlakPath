@@ -10,6 +10,7 @@ import {
   ListObjectVersionsCommand,
   type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Readable } from 'node:stream';
 import { getOrganisationKey } from '@/domains/organisation-keys';
@@ -17,6 +18,7 @@ import { TenantKeyUnavailableError } from '@/lib/encryption/errors';
 import { parseKeyArn } from '@/lib/encryption/key-provider';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/observability/logger';
+import { lifecycleTagging, type LifecycleClass } from './lifecycle';
 
 /**
  * S3-compatible object storage.
@@ -407,6 +409,48 @@ export async function putObjectBytes(params: {
       ...encryption,
     }),
   );
+}
+
+/** S3's minimum multipart part size; also bounds streamed-upload memory. */
+const STREAM_PART_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Stream a tenant body of unknown length to a bucket (e.g. a generated
+ * export). Small bodies go up as one PUT; larger ones as a multipart upload
+ * holding at most a couple of parts in memory. A failed multipart upload is
+ * aborted so no orphaned parts remain. The object is sealed with the tenant
+ * CMK (SSE-KMS, bucket keys off) and the tenant key must be active (fail
+ * closed). A `lifecycle` class tags the object so the bucket's lifecycle rules
+ * expire it (see `./lifecycle`).
+ */
+export async function uploadObjectStream(params: {
+  bucket: string;
+  key: string;
+  body: Readable;
+  contentType: string;
+  organisationId: string;
+  lifecycle?: LifecycleClass;
+}): Promise<void> {
+  assertOwnedKey(params.organisationId, params.key);
+  const kmsKeyArn = await requireActiveTenantKey(params.organisationId);
+  const encryption = tenantSseEnabled() ? tenantObjectSse(kmsKeyArn) : undefined;
+  const upload = new Upload({
+    client: s3,
+    params: {
+      Bucket: params.bucket,
+      Key: params.key,
+      Body: params.body,
+      ContentType: params.contentType,
+      // Tag at creation (PUT / CreateMultipartUpload) so the object is never
+      // briefly untagged and outside its lifecycle rule.
+      ...(params.lifecycle ? { Tagging: lifecycleTagging(params.lifecycle) } : {}),
+      ...encryption,
+    },
+    partSize: STREAM_PART_BYTES,
+    queueSize: 2,
+    leavePartsOnError: false,
+  });
+  await upload.done();
 }
 
 /**

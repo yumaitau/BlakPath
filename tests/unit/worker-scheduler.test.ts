@@ -10,6 +10,7 @@ vi.mock('@/lib/queues', () => ({
     Webhook: 'webhook',
     KeyHealth: 'key-health',
     MalwareScan: 'malware-scan',
+    Export: 'export',
   },
   getQueue: vi.fn(),
 }));
@@ -112,6 +113,7 @@ describe('tenant maintenance scheduler', () => {
       webhookSweepSchedulers: 0,
       keyHealthSchedulers: 0,
       scanSchedulers: 0,
+      exportSchedulers: 0,
       removedSchedulers: 2,
     });
   });
@@ -253,6 +255,34 @@ describe('tenant maintenance scheduler', () => {
       tenantSchedulerId(QueueName.MalwareScan, 'suspended-org'),
     ]);
     expect(report.scanSchedulers).toBe(1);
+    expect(report.removedSchedulers).toBe(1);
+  });
+
+  it('schedules export maintenance sweeps when an export queue is supplied', async () => {
+    const staleExport = tenantSchedulerId(QueueName.Export, 'closed-org');
+    const exportQueue = fakeQueue([staleExport]);
+    const report = await reconcileTenantSchedules({
+      organisationIds: ['org-a'],
+      auditQueue: fakeQueue(),
+      retentionQueue: fakeQueue(),
+      exportQueue,
+      intervals: {
+        auditVerifyMs: 60_000,
+        retentionSweepMs: 120_000,
+        exportSweepMs: 300_000,
+      },
+    });
+    expect(exportQueue.upserts).toEqual([
+      {
+        id: tenantSchedulerId(QueueName.Export, 'org-a'),
+        every: 300_000,
+        name: 'sweep',
+        organisationId: 'org-a',
+        attempts: 3,
+      },
+    ]);
+    expect(exportQueue.removed).toEqual([staleExport]);
+    expect(report.exportSchedulers).toBe(1);
     expect(report.removedSchedulers).toBe(1);
   });
 });
