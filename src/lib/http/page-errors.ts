@@ -27,10 +27,7 @@ import { TenantContextError } from '@/lib/tenancy/context';
  */
 
 export type PageErrorKind =
-  | 'unauthenticated'
-  | 'no-organisation'
-  | 'forbidden'
-  | 'unexpected';
+  'unauthenticated' | 'no-organisation' | 'forbidden' | 'unexpected';
 
 export function classifyPageError(error: unknown): PageErrorKind {
   if (error instanceof UnauthenticatedError) return 'unauthenticated';
