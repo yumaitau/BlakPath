@@ -25,6 +25,7 @@ import {
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { listMeetingsForApplication } from '@/domains/meetings/service';
+import { notifyWorkflowEvent } from '@/domains/notifications/dispatch';
 import { emitWebhookEventSafe } from '@/domains/webhooks';
 import { openDecisionRows, sealRationale } from '@/lib/encryption/tenant-fields';
 import {
@@ -194,6 +195,18 @@ export async function proposeDecision(
     );
     return created;
   });
+
+  await notifyWorkflowEvent({
+    organisationId: ctx.organisationId,
+    correlationId: ctx.correlationId,
+    event: {
+      kind: 'vote_open',
+      applicationId,
+      decisionId: stored.id,
+      actorUserId: ctx.userId,
+    },
+  });
+
   const [row] = await openDecisionRows(scope.organisationId, [stored]);
   return expectRow(row, 'decision');
 }

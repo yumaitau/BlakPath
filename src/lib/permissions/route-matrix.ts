@@ -358,6 +358,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('DELETE', '/api/calendar/events/[id]', anyOf(['calendar:delete-any'])),
   route('POST', '/api/calendar/events/[id]/attendees', anyOf(['calendar:update-any'])),
   route('POST', '/api/calendar/events/[id]/invite', anyOf(['calendar:update-any'])),
+  route('POST', '/api/calendar/events/[id]/reminders', anyOf(['calendar:update-any'])),
   route('POST', '/api/calendar/import', anyOf(['meeting:create']), {
     body: { ics: 'BEGIN:VCALENDAR' },
   }),
@@ -404,6 +405,9 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowRole: 'intake-officer',
     allowProbe: true,
     body: { displayName: 'Matrix Client' },
+  }),
+  route('PATCH', '/api/clients/[id]', anyOf(['client:assign-team']), {
+    body: { assignedTeamId: FAKE_ID },
   }),
   route('GET', '/api/consents', anyOf(CONSENT_READ), {
     allowRole: 'applicant',
@@ -492,6 +496,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
     body: { slug: 'matrix-group', name: 'Matrix group' },
   }),
+  route('GET', '/api/groups/[id]/members', anyOf(TEAM_READ)),
+  route('POST', '/api/groups/[id]/members', anyOf(['group:manage']), {
+    body: { userId: FAKE_ID },
+  }),
+  route('DELETE', '/api/groups/[id]/members/[userId]', anyOf(['group:manage'])),
   route('GET', '/api/health', { kind: 'public' }, { skipProbe: true }),
   route('POST', '/api/imports/applications', anyOf(['application:create'])),
   route('GET', '/api/keys', anyOf(['tenant:configure']), {
@@ -595,6 +604,25 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       allowRole: 'applicant',
       allowProbe: true,
       body: { all: true },
+    },
+  ),
+  route(
+    'GET',
+    '/api/notifications/email',
+    { kind: 'member' },
+    {
+      allowRole: 'applicant',
+      allowProbe: true,
+    },
+  ),
+  route(
+    'PATCH',
+    '/api/notifications/email',
+    { kind: 'member' },
+    {
+      allowRole: 'applicant',
+      allowProbe: true,
+      body: { emailNotifications: true },
     },
   ),
   route('POST', '/api/organisation/activation', anyOf(['tenant:configure'])),
@@ -820,6 +848,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
     body: { slug: 'matrix-team', name: 'Matrix team' },
   }),
+  route('GET', '/api/teams/[id]/members', anyOf(TEAM_READ)),
+  route('POST', '/api/teams/[id]/members', anyOf(['team:manage']), {
+    body: { userId: FAKE_ID },
+  }),
+  route('DELETE', '/api/teams/[id]/members/[userId]', anyOf(['team:manage'])),
   route('GET', '/api/v1/applications', { kind: 'api-key' }),
   route('GET', '/api/v1/applications/[id]', { kind: 'api-key' }),
   route('GET', '/api/webhooks', anyOf(['tenant:configure']), {
@@ -846,9 +879,6 @@ export const UNROUTED_PERMISSIONS = {
     'Included in the break-glass read bundle. Download checks evidence:download.',
   'break-glass:request':
     'The platform-operator template grants it. Request and activate check users.isPlatformOperator, not this key.',
-  'group:manage':
-    'addGroupMember has no route. Group list uses team:manage or membership:manage; create uses group:create.',
-  'client:assign-team': 'assignClient has no route.',
   'mcp:read':
     'API-key scope. POST /api/mcp authenticates the key, then hasMcpScope checks the key permissions. No session route checks it.',
   'mcp:read-pii':

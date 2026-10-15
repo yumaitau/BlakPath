@@ -3,6 +3,7 @@ import {
   ApplicationRegister,
   type RegisterApplication,
   type RegisterAssignee,
+  type RegisterClient,
   type RegisterExportRequest,
   type RegisterParticipant,
 } from '@/components/applications/application-register';
@@ -15,6 +16,7 @@ import {
 } from '@/domains/applications';
 import { listApplicationsSchema } from '@/domains/applications/schemas';
 import { listExports, readStoredExportFilters } from '@/domains/reporting';
+import { listClients } from '@/domains/teams';
 import {
   isTenantKeyUnavailable,
   TENANT_KEY_UNAVAILABLE_MESSAGE,
@@ -49,6 +51,7 @@ export default async function ApplicationsPage({
 
   let applications: RegisterApplication[] = [];
   let participants: RegisterParticipant[] = [];
+  let clients: RegisterClient[] = [];
   let assignees: RegisterAssignee[] = [];
   let exports: RegisterExportRequest[] = [];
   let canCreate = false;
@@ -63,17 +66,23 @@ export default async function ApplicationsPage({
       const mayCreate = ctx.permissions.has('application:create');
       const mayExport = ctx.permissions.has('report:export');
       const mayListAssignees = ctx.permissions.has('application:read-any');
-      const [listed, linkedApplicants, assigneeRows, exportRows] = await Promise.all([
-        listApplications(parsed.data),
-        mayCreate ? listApplicationParticipants() : Promise.resolve([]),
-        mayListAssignees ? listRegisterAssignees() : Promise.resolve([]),
-        mayExport ? listExports() : Promise.resolve([]),
-      ]);
+      const mayListClients =
+        ctx.permissions.has('client:read-any') ||
+        ctx.permissions.has('client:read-assigned');
+      const [listed, linkedApplicants, assigneeRows, exportRows, clientRows] =
+        await Promise.all([
+          listApplications(parsed.data),
+          mayCreate ? listApplicationParticipants() : Promise.resolve([]),
+          mayListAssignees ? listRegisterAssignees() : Promise.resolve([]),
+          mayExport ? listExports() : Promise.resolve([]),
+          mayCreate && mayListClients ? listClients() : Promise.resolve([]),
+        ]);
       return {
         listed,
         linkedApplicants,
         assigneeRows,
         exportRows,
+        clientRows,
         mayCreate,
         mayExport,
         userId: ctx.userId,
@@ -81,6 +90,10 @@ export default async function ApplicationsPage({
     });
     participants = loaded.linkedApplicants;
     assignees = loaded.assigneeRows;
+    clients = loaded.clientRows.map((client) => ({
+      id: client.id,
+      displayName: client.displayName,
+    }));
     canCreate = loaded.mayCreate;
     canExport = loaded.mayExport;
     currentUserId = loaded.userId;
@@ -150,6 +163,7 @@ export default async function ApplicationsPage({
       <ApplicationRegister
         applications={applications}
         participants={participants}
+        clients={clients}
         assignees={assignees}
         exports={exports}
         statuses={APPLICATION_STATUSES}

@@ -10,8 +10,7 @@
 export type MeetingLinkFailure = 'meeting_required' | 'not_on_agenda' | 'meeting_changed';
 
 export type MeetingLinkResult =
-  | { ok: true; meetingId: string | null }
-  | { ok: false; reason: MeetingLinkFailure };
+  { ok: true; meetingId: string | null } | { ok: false; reason: MeetingLinkFailure };
 
 export function resolveMeetingLink(input: {
   requestedMeetingId?: string | null | undefined;

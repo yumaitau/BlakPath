@@ -11,6 +11,7 @@ import {
   applicationStatusHistory,
   applications,
   certificateTemplates,
+  clients,
   evidenceRequests,
   memberships,
   membershipRoles,
@@ -19,6 +20,8 @@ import {
   permissions,
   rolePermissions,
   roles,
+  teamMemberships,
+  teams,
   users,
 } from '@/db/schema';
 import {
@@ -27,6 +30,7 @@ import {
 } from '@/domains/certificates/template';
 import { PERMISSION_SEED } from '@/lib/permissions/catalog';
 import { SYSTEM_ROLES, SYSTEM_ROLE_SEED } from '@/lib/permissions/roles';
+import { DEV_TEAM_FIXTURE, DEV_TENANT_B } from '@/db/seeds/dev-tenants';
 
 /**
  * Idempotent database seed.
@@ -109,6 +113,134 @@ async function seedRolePermissions(roleIdBySlug: Map<string, string>): Promise<v
   }
   console.info(`[seed] role→permission grants ensured (${grants} pairs checked)`);
 }
+
+async function ensureCredentialUser(input: {
+  email: string;
+  name: string;
+  password: string;
+}): Promise<string> {
+  const [existingUser] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, input.email))
+    .limit(1);
+  if (existingUser) return existingUser.id;
+  const userId = uuidv7();
+  await db.insert(users).values({
+    id: userId,
+    name: input.name,
+    email: input.email,
+    emailVerified: true,
+  });
+  await db.insert(accounts).values({
+    id: uuidv7(),
+    userId,
+    providerId: 'credential',
+    accountId: userId,
+    password: await argon2Hash(input.password, ARGON2_OPTIONS),
+  });
+  return userId;
+}
+
+/**
+ * Staff fixture user: credential login plus the development passkey, so the
+ * second-factor gate lets the browser suite into the workspace.
+ */
+async function ensureStaffUser(input: {
+  email: string;
+  name: string;
+  password: string;
+}): Promise<string> {
+  const userId = await ensureCredentialUser(input);
+  await ensureDevPasskey(userId);
+  return userId;
+}
+
+/** Insert one fixture application with its applicant name sealed like the services do. */
+async function ensureSealedApplication(input: {
+  id: string;
+  organisationId: string;
+  reference: string;
+  applicantName: string;
+  clientId: string;
+}): Promise<void> {
+  const [existing] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(eq(applications.id, input.id))
+    .limit(1);
+  if (existing) return;
+  const { sealApplicationFields } = await import('@/lib/encryption/tenant-fields');
+  const sealed = await sealApplicationFields(input.organisationId, input.id, {
+    applicantName: input.applicantName,
+    reference: input.reference,
+  });
+  if (!sealed.applicantName) throw new Error('Seed applicant name was not sealed');
+  await db.insert(applications).values({
+    id: input.id,
+    organisationId: input.organisationId,
+    reference: input.reference,
+    applicantName: sealed.applicantName,
+    referenceBidx: sealed.referenceBidx,
+    applicantNameBidx: sealed.applicantNameBidx,
+    applicantNameTokenBidx: sealed.applicantNameTokenBidx,
+    clientId: input.clientId,
+    status: 'draft',
+  });
+}
+
+async function ensureActiveMembership(
+  organisationId: string,
+  userId: string,
+): Promise<string> {
+  const [existingMembership] = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      and(eq(memberships.organisationId, organisationId), eq(memberships.userId, userId)),
+    )
+    .limit(1);
+  if (existingMembership) {
+    await db
+      .update(memberships)
+      .set({ status: 'active' })
+      .where(eq(memberships.id, existingMembership.id));
+    return existingMembership.id;
+  }
+  const membershipId = uuidv7();
+  await db.insert(memberships).values({
+    id: membershipId,
+    organisationId,
+    userId,
+    status: 'active',
+  });
+  return membershipId;
+}
+
+async function grantRoles(
+  membershipId: string,
+  slugs: readonly string[],
+  roleIdBySlug: Map<string, string>,
+): Promise<void> {
+  for (const slug of slugs) {
+    const roleId = roleIdBySlug.get(slug);
+    if (!roleId) continue;
+    await db
+      .insert(membershipRoles)
+      .values({ id: uuidv7(), membershipId, roleId })
+      .onConflictDoNothing({
+        target: [membershipRoles.membershipId, membershipRoles.roleId],
+      });
+  }
+}
+
+const DEVELOPMENT_ROLES = [
+  'organisation-admin',
+  'intake-officer',
+  'case-officer',
+  'committee-chair',
+  'records-officer',
+] as const;
 
 /**
  * Local bootstrap accounts that hold staff roles need a registered passkey so
@@ -216,14 +348,7 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
   // confined to the non-production bootstrap; production memberships must keep
   // the documented separation of duties and are assigned explicitly by an
   // organisation administrator.
-  const developmentRoles = [
-    'organisation-admin',
-    'intake-officer',
-    'case-officer',
-    'committee-chair',
-    'records-officer',
-  ] as const;
-  for (const slug of developmentRoles) {
+  for (const slug of DEVELOPMENT_ROLES) {
     const roleId = roleIdBySlug.get(slug);
     if (roleId) {
       await db
@@ -269,7 +394,7 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
   console.info(`         org:      dev-org (${organisationId})`);
   console.info(`         login:    ${adminEmail}`);
   console.info(`         password: ${devPassword}`);
-  console.info(`         roles:    ${developmentRoles.join(', ')}`);
+  console.info(`         roles:    ${DEVELOPMENT_ROLES.join(', ')}`);
 
   // A verified account with no membership lets the browser suite exercise the
   // administrator's add/role/suspend/restore/revoke lifecycle without reaching
@@ -364,6 +489,9 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
     adminUserId: userId,
     applicantRoleId: roleIdBySlug.get('applicant'),
   });
+
+  await seedSecondCouncil(roleIdBySlug);
+  await seedTeamReadFixture(roleIdBySlug, organisationId);
 }
 
 /**
@@ -578,6 +706,147 @@ async function seedApplicantPortalFixture(input: {
 
   console.info(`         applicant: ${applicantEmail} / ${applicantPassword}`);
   console.info('         portal:    APP-OWN-CASE (own) and APP-OTHER-CASE (not theirs)');
+}
+
+/**
+ * Second council with its own admin and one application. E2E isolation checks
+ * use these ids; the admin is not a member of the development organisation.
+ */
+async function seedSecondCouncil(roleIdBySlug: Map<string, string>): Promise<void> {
+  await db
+    .insert(organisations)
+    .values({
+      id: DEV_TENANT_B.organisationId,
+      legalName: DEV_TENANT_B.legalName,
+      slug: DEV_TENANT_B.slug,
+      status: 'active',
+      publicApplicationsOpen: false,
+    })
+    .onConflictDoNothing({ target: organisations.slug });
+
+  const [orgRow] = await db
+    .select({ id: organisations.id })
+    .from(organisations)
+    .where(eq(organisations.slug, DEV_TENANT_B.slug))
+    .limit(1);
+  const organisationId = orgRow?.id ?? DEV_TENANT_B.organisationId;
+  const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+  await ensureOrganisationKey(organisationId);
+
+  const userId = await ensureStaffUser({
+    email: DEV_TENANT_B.adminEmail,
+    name: 'Second Council Admin',
+    password: DEV_TENANT_B.adminPassword,
+  });
+  const membershipId = await ensureActiveMembership(organisationId, userId);
+  await grantRoles(membershipId, DEVELOPMENT_ROLES, roleIdBySlug);
+
+  await db
+    .insert(clients)
+    .values({
+      id: DEV_TENANT_B.clientId,
+      organisationId,
+      displayName: DEV_TENANT_B.clientName,
+    })
+    .onConflictDoNothing({ target: clients.id });
+
+  await ensureSealedApplication({
+    id: DEV_TENANT_B.applicationId,
+    organisationId,
+    reference: DEV_TENANT_B.applicationReference,
+    applicantName: DEV_TENANT_B.applicantName,
+    clientId: DEV_TENANT_B.clientId,
+  });
+
+  console.info(`[seed] second council ensured: ${DEV_TENANT_B.slug} (${organisationId})`);
+  console.info(`         login:    ${DEV_TENANT_B.adminEmail}`);
+}
+
+/**
+ * One team-scoped application in the primary council, plus two case officers:
+ * one on the team, one not. Proves assigned read versus unassigned deny.
+ */
+async function seedTeamReadFixture(
+  roleIdBySlug: Map<string, string>,
+  organisationId: string,
+): Promise<void> {
+  await db
+    .insert(teams)
+    .values({
+      id: DEV_TEAM_FIXTURE.teamId,
+      organisationId,
+      slug: DEV_TEAM_FIXTURE.teamSlug,
+      name: DEV_TEAM_FIXTURE.teamName,
+    })
+    .onConflictDoNothing({ target: [teams.organisationId, teams.slug] });
+
+  const [teamRow] = await db
+    .select({ id: teams.id })
+    .from(teams)
+    .where(
+      and(
+        eq(teams.organisationId, organisationId),
+        eq(teams.slug, DEV_TEAM_FIXTURE.teamSlug),
+      ),
+    )
+    .limit(1);
+  const teamId = teamRow?.id;
+  if (!teamId) return;
+
+  const assignedUserId = await ensureStaffUser({
+    email: DEV_TEAM_FIXTURE.assignedEmail,
+    name: 'E2E Case Officer',
+    password: DEV_TEAM_FIXTURE.assignedPassword,
+  });
+  const unassignedUserId = await ensureStaffUser({
+    email: DEV_TEAM_FIXTURE.unassignedEmail,
+    name: 'E2E Unassigned Officer',
+    password: DEV_TEAM_FIXTURE.unassignedPassword,
+  });
+
+  const assignedMembershipId = await ensureActiveMembership(
+    organisationId,
+    assignedUserId,
+  );
+  const unassignedMembershipId = await ensureActiveMembership(
+    organisationId,
+    unassignedUserId,
+  );
+  await grantRoles(assignedMembershipId, ['case-officer'], roleIdBySlug);
+  await grantRoles(unassignedMembershipId, ['case-officer'], roleIdBySlug);
+
+  await db
+    .insert(teamMemberships)
+    .values({
+      id: uuidv7(),
+      organisationId,
+      teamId,
+      userId: assignedUserId,
+      role: 'member',
+    })
+    .onConflictDoNothing({
+      target: [teamMemberships.teamId, teamMemberships.userId],
+    });
+
+  await db
+    .insert(clients)
+    .values({
+      id: DEV_TEAM_FIXTURE.clientId,
+      organisationId,
+      displayName: DEV_TEAM_FIXTURE.clientName,
+      assignedTeamId: teamId,
+    })
+    .onConflictDoNothing({ target: clients.id });
+
+  await ensureSealedApplication({
+    id: DEV_TEAM_FIXTURE.applicationId,
+    organisationId,
+    reference: DEV_TEAM_FIXTURE.applicationReference,
+    applicantName: DEV_TEAM_FIXTURE.applicantName,
+    clientId: DEV_TEAM_FIXTURE.clientId,
+  });
+
+  console.info(`[seed] team read fixture ensured: ${DEV_TEAM_FIXTURE.teamSlug}`);
 }
 
 async function main(): Promise<void> {

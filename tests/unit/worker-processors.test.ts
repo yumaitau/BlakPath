@@ -16,6 +16,11 @@ const deps = vi.hoisted(() => ({
   processEvidenceScan: vi.fn(async () => undefined),
   processWebhookDelivery: vi.fn(async () => undefined),
   processExport: vi.fn(async () => undefined),
+  processExportMaintenance: vi.fn(async () => ({
+    expired: 0,
+    requeued: 0,
+    abandoned: 0,
+  })),
   processRetentionSweep: vi.fn(async () => undefined),
   processReminderSweep: vi.fn(async () => undefined),
   processOrganisationKeyRewrap: vi.fn(async (): Promise<unknown> => null),
@@ -44,7 +49,10 @@ vi.mock('@/domains/evidence', () => ({ processEvidenceScan: deps.processEvidence
 vi.mock('@/domains/webhooks', () => ({
   processWebhookDelivery: deps.processWebhookDelivery,
 }));
-vi.mock('@/domains/reporting', () => ({ processExport: deps.processExport }));
+vi.mock('@/domains/reporting', () => ({
+  processExport: deps.processExport,
+  processExportMaintenance: deps.processExportMaintenance,
+}));
 vi.mock('@/domains/retention', () => ({
   processRetentionSweep: deps.processRetentionSweep,
 }));
@@ -279,6 +287,7 @@ describe('worker processors', () => {
           emailedAt: null,
         },
       ],
+      [{ emailNotifications: true }],
       [],
     );
     await PROCESSORS[QueueName.Notification](
@@ -286,6 +295,26 @@ describe('worker processors', () => {
       asLogger(log),
     );
     expect(deps.sendEmail).not.toHaveBeenCalled();
+
+    // The member turned the email copy off after the job was queued.
+    script.results.push(
+      [
+        {
+          id: 'note-1',
+          userId: 'user-1',
+          title: 'Update',
+          body: 'Body',
+          emailedAt: null,
+        },
+      ],
+      [{ emailNotifications: false }],
+    );
+    await PROCESSORS[QueueName.Notification](
+      job({ notificationId: 'note-1' }),
+      asLogger(log),
+    );
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+    expect(deps.markEmailed).not.toHaveBeenCalled();
 
     script.results.push(
       [
@@ -297,6 +326,7 @@ describe('worker processors', () => {
           emailedAt: null,
         },
       ],
+      [{ emailNotifications: true }],
       [{ email: 'person@council.example', name: 'Person' }],
     );
     await PROCESSORS[QueueName.Notification](
@@ -392,6 +422,13 @@ describe('worker processors', () => {
       correlationId: 'corr-1',
       exportRequestId: 'exp-1',
     });
+
+    await PROCESSORS[QueueName.Export](job({}, 'sweep'), asLogger(log));
+    expect(deps.processExportMaintenance).toHaveBeenCalledWith({
+      organisationId: 'org-1',
+      correlationId: 'corr-1',
+    });
+    expect(deps.processExport).toHaveBeenCalledTimes(1);
 
     deps.processWebhookDelivery.mockRejectedValueOnce(new Error('endpoint down'));
     await expect(

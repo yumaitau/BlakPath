@@ -227,14 +227,19 @@ manifest is `infra/k8s/service-ingress.yaml`. The example stack is
   `/blakpath/production/runtime` outside namespace `blakpath` must fail with
   AccessDenied. Delete that check object. Do not print Secret data.
 - Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
-  Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
+  Secrets Manager folder and is the account default EBS key.
   `alias/blakpath-prod-evidence` is the bucket default for both S3 buckets.
   Objects written for a tenant use that tenant's CMK, with S3 Bucket Keys
-  off, so HeadObject shows the tenant key ARN. RDS uses its provisioned key.
-  No AWS-managed default keys in the secret path. The key policy keeps
+  off, so HeadObject shows the tenant key ARN. `alias/blakpath-rds` covers
+  RDS storage and Performance Insights; `alias/blakpath-elasticache` covers
+  Redis at rest (both from `infra/aws/data-tier.example.yaml`). These are
+  platform keys for the volume; tenant fields inside the database are still
+  sealed with the tenant key. No AWS-managed default keys in the secret or
+  data path. The key policy keeps
   account-root IAM delegation so the dedicated role's IAM allow works. Do not
   grant the shared External Secrets role on that key.
-- ElastiCache runs with transit and at-rest encryption. Redis holds
+- ElastiCache runs with transit encryption, an AUTH token, and at-rest
+  encryption. Redis holds
   ephemeral state only. Queue payloads are identifiers, never tenant field
   contents.
 - Set `OPERATOR_ONCALL_EMAIL` on the worker. Key-health state changes email
@@ -293,10 +298,16 @@ Record who rotated, when, and which keys. Do not record the values.
 
 ## Data services
 
-- RDS Postgres. `infra/aws/backup-plan.example.yaml` keeps 35-day continuous
-  point-in-time recovery and a 90-day daily snapshot in a compliance-locked
-  vault. Do not also enrol the instance in another continuous backup plan.
-  RDS Proxy in front for failover.
+- Source: `infra/aws/data-tier.example.yaml` (RDS Postgres and ElastiCache
+  Redis, private subnets, customer managed keys, `rds.force_ssl=1`, 21-day
+  backups, Redis AUTH and `noeviction`). It does not create the RDS Proxy.
+  Settings and apply steps: `docs/data-tier-capacity.md`. Apply it in
+  `ap-southeast-2`, then deploy the namespace through the CD pipeline (#57).
+  `/api/ready` is the post-deploy check.
+- RDS Postgres with point-in-time recovery. `infra/aws/backup-plan.example.yaml`
+  keeps 35-day continuous point-in-time recovery and a 90-day daily snapshot in
+  a compliance-locked vault. Do not also enrol the instance in another
+  continuous backup plan. RDS Proxy in front for failover.
   Two roles: `blakpath_migrator` (owner, migrate Job only) and
   `blakpath_app` (runtime DML). See `infra/postgres/audit-roles.sql`.
   Clients connect to the proxy hostname, not an IP and not a CNAME that is
@@ -315,13 +326,21 @@ Record who rotated, when, and which keys. Do not record the values.
 - Named prepared statements are off (`prepare: false`). RDS Proxy can multiplex
   the extended query protocol, but SQL `PREPARE`/`EXECUTE` still pins, and
   older proxies pinned named protocol statements. The client never issues those.
-- ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers. Not
-  in the backup plan.
+- ElastiCache Redis TLS and AUTH token, two nodes, Multi-AZ failover,
+  `maxmemory-policy noeviction`, snapshot retention 0. Ephemeral only:
+  queues, rate limits, schedulers. Not in the backup plan.
 - S3 evidence + quarantine buckets: block public access, enforce TLS,
   versioning on. Both buckets are in that backup plan. The bucket default CMK is
   `alias/blakpath-prod-evidence`. Per-object SSE-KMS uses the tenant CMK.
   Certificates and exports are objects in the evidence bucket. MinIO exists
   for local dev only and does not send SSE headers.
+- S3 lifecycle: apply `infra/aws/s3-lifecycle/{evidence,quarantine}-bucket.json`
+  (exports 7 days, quarantine 2 days, noncurrent versions 30 days, stale
+  multipart 1 day) and verify with `get-bucket-lifecycle-configuration`. The
+  worker Pod Identity role also needs the `ExportLifecycle` statement from
+  `infra/aws/workload-roles.example.yaml` (tagging, multipart abort, version
+  delete on `*/exports/*`) before this release deploys. See
+  `infra/aws/README.md`.
 - S3 audit-anchor bucket: created with Object Lock compliance retention
   (see `infra/aws/audit-anchor-bucket.example.yaml`). The worker may put and
   read objects. It must not be granted delete or governance bypass. Web tasks
@@ -512,6 +531,22 @@ Use a recovery point from the locked BlakPath vault, not an ad-hoc dump.
    is missing fails closed and that another tenant still reads.
 4. Record date, operator, source, target, elapsed RTO, verification result
    outside restored environment.
+
+## Cluster guardrails
+
+Deploy `infra/aws/eks-guardrails.example.yaml` in `ap-southeast-2` before the
+namespace holds production records. It creates `alias/blakpath-eks-secrets` and
+the log group `/aws/eks/<cluster>/cluster` (365-day retention). It does not
+create a cluster.
+
+The live cluster then has to match `infra/aws/eks-cluster-guardrails.json`:
+control-plane logs `api`, `audit`, `authenticator`, `controllerManager` and
+`scheduler`; deletion protection on; secrets envelope encryption with that CMK.
+Commands and the irreversible-key warning are in `infra/aws/README.md`.
+
+On `yumait-prod` these changes affect every team. Coordinate before
+changing the shared cluster; the target is the dedicated cluster in
+`docs/adr/0001-dedicated-cluster.md`.
 
 ## ClamAV
 

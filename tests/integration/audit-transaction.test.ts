@@ -209,12 +209,21 @@ integration('audit joins the business transaction', () => {
       status: 'active',
     });
     await organisationKeys.ensureOrganisationKey(orgId);
-    await db.insert(schema.memberships).values({
-      id: membershipId,
-      organisationId: orgId,
-      userId: actorId,
-      status: 'active',
-    });
+    // Assignees must hold an active membership of the tenant.
+    await db.insert(schema.memberships).values([
+      {
+        id: membershipId,
+        organisationId: orgId,
+        userId: actorId,
+        status: 'active',
+      },
+      {
+        id: uuidv7(),
+        organisationId: orgId,
+        userId: assigneeId,
+        status: 'active',
+      },
+    ]);
     await db.insert(schema.applications).values({
       id: applicationId,
       organisationId: orgId,

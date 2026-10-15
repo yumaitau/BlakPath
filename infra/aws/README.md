@@ -36,6 +36,10 @@ with resources owned by the production environment.
 - `backup-plan.example.yaml` creates one CMK-encrypted backup vault, locks it
   in compliance mode, and backs up RDS plus the evidence and quarantine buckets.
   Failed, aborted and expired backup jobs page the same on-call topic.
+- `data-tier.example.yaml` is the RDS Postgres and ElastiCache Redis stack:
+  private subnets, customer managed keys, `rds.force_ssl=1`, Redis AUTH and
+  `noeviction`. It does not create the RDS Proxy. Settings and the apply steps
+  are in `docs/data-tier-capacity.md`. Deploy it only in `ap-southeast-2`.
 - `origin-edge.example.yaml` requests the origin ACM certificate, a regional
   WAFv2 web ACL (managed IP reputation, common, known-bad-inputs and SQLi rule
   groups) and the Authenticated Origin Pull trust store. Copy its outputs into
@@ -50,6 +54,19 @@ with resources owned by the production environment.
   (compliance) bucket. Key and bucket policies deny the workload account and
   every principal outside the vault account; an Access Analyzer gives the
   evidence. See [`docs/key-escrow-runbook.md`](../../docs/key-escrow-runbook.md).
+- `account-guardrails.example.yaml` is the account detective baseline for this
+  Region: Security Hub (FSBP v1.0.0 and CIS AWS Foundations Benchmark v5.0.0),
+  a Config recorder for every supported resource type, IAM Access Analyzer
+  (external access and unused access), GuardDuty S3 and RDS protection, and a
+  CloudTrail trail encrypted with `alias/blakpath-security-logs`, delivered to
+  CloudWatch Logs, with S3 data events limited to the BlakPath evidence and
+  quarantine buckets. The trail is multi-Region so calls outside
+  `ap-southeast-2` are visible; the log bucket stays in this Region.
+- `eks-guardrails.example.yaml` creates `alias/blakpath-eks-secrets` and the
+  `/aws/eks/<cluster>/cluster` log group. It does not create a cluster.
+  `eks-cluster-guardrails.json` is the control-plane setting to apply to the
+  existing cluster: all five log types, deletion protection, and secrets
+  envelope encryption with that CMK.
 
 Network boundaries expected by these templates:
 
@@ -72,9 +89,50 @@ Network boundaries expected by these templates:
   have the client key grant again before the application can decrypt. Apply
   the template before expecting HeadObject to succeed against a real tenant key.
 
+## Object lifecycle (`s3-lifecycle/`)
+
+`s3-lifecycle/*.json` are `PutBucketLifecycleConfiguration` documents for the
+two buckets. Apply each with the bucket's owning tooling (or
+`aws s3api put-bucket-lifecycle-configuration --bucket <name>
+--lifecycle-configuration file://infra/aws/s3-lifecycle/<file>.json`), then
+confirm with `aws s3api get-bucket-lifecycle-configuration --bucket <name>`.
+Applying replaces any existing rules on that bucket, so merge first if the
+bucket already carries rules.
+
+| Bucket     | Rule                            | Effect                                                                                                                                         |
+| ---------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| evidence   | `expire-exports`                | Objects tagged `blakpath-lifecycle=export` (every generated CSV export) expire 7 days after creation; their noncurrent versions 1 day later.   |
+| evidence   | `expire-noncurrent-versions`    | Noncurrent versions of anything else expire after 30 days; expired delete markers are removed; incomplete multipart uploads abort after 1 day. |
+| quarantine | `expire-abandoned-uploads`      | Anything left in quarantine 2 days (abandoned or never-scanned uploads) expires; noncurrent versions 1 day later; stale multipart aborts.      |
+| quarantine | `remove-expired-delete-markers` | Cleans up the delete markers the rule above leaves behind.                                                                                     |
+
+S3 lifecycle filters cannot wildcard (`*/exports/*`) because every key starts
+with the organisation id, so exports are selected by an object tag the worker
+sets at upload time (`src/lib/storage/lifecycle.ts`; a unit test pins the two
+together). The export rule is a backstop: the worker's export maintenance sweep
+normally purges every version of an expired export within
+`EXPORT_SWEEP_INTERVAL_MS` and marks the request `expired`.
+
+Reconcile the 30-day noncurrent window with AWS Backup before applying: backup
+recovery points are independent copies, so expiring noncurrent versions does not
+shorten backup retention, but it does bound how long an overwritten or deleted
+evidence object can be recovered from the bucket itself. Keep it at or below the
+retention period the privacy policy promises for deleted records.
+
+The worker role needs `s3:PutObjectTagging`, `s3:AbortMultipartUpload`,
+`s3:DeleteObject` and `s3:DeleteObjectVersion` on export keys (statement
+`ExportLifecycle` in `workload-roles.example.yaml`); version listing is
+already granted by `RetentionVersionList`. Exports stay SSE-KMS under the
+tenant CMK, so multipart completion uses the existing `TenantObjectSse` grant.
+
+## Release check
+
 Run `pnpm release:check` inside the exact web and worker images before
 promoting a release. It deliberately rejects static S3 credentials; the AWS SDK
 uses the Pod Identity role through its default credential provider chain.
+
+Nothing in this directory is applied by the application or by CI. An account
+owner deploys it.
 
 ## Backup vault
 
@@ -127,3 +185,97 @@ Recovery points show up in `list-protected-resources` only after the first
 successful job. Alarm response, the test fire, and that check are in
 `docs/operations-runbook.md`. Deleting the CloudFormation stack retains the
 vault; compliance mode would reject deleting it while recovery points exist.
+## Account guardrails
+
+Deploy `account-guardrails.example.yaml` in `ap-southeast-2` only. Pass the
+existing evidence bucket, quarantine bucket, bucket default CMK
+(`alias/blakpath-prod-evidence`), and the Config
+service-linked role ARN
+`arn:aws:iam::ACCOUNT_ID:role/aws-service-role/config.amazonaws.com/AWSServiceRoleForConfig`.
+Create that role first if it is missing. Do not create a second one.
+
+One Config recorder, one delivery channel, one GuardDuty detector and one
+Security Hub subscription can exist in the Region. One trail should record
+management events. If any of those already exist, import them into the stack
+or change them to match this template. A second management trail doubles cost
+and leaves the old trail without KMS and CloudWatch delivery.
+
+`EnableS3MalwareProtection` defaults to `false`. Set it to `true` only as a
+second scanner signal. ClamAV still decides whether an object is promoted.
+GuardDuty tags (`GuardDutyMalwareScanStatus`) must not promote or reject
+evidence. The plans tag objects and add a validation object in each bucket.
+The malware role can decrypt only the bucket default CMK. Tenant objects are
+SSE-KMS under each tenant's own CMK (`organisation_keys`, often in the client
+account), so GuardDuty cannot read them and reports them as not scanned. Do not
+widen the role to `kms:Decrypt` on `*` or add it to tenant key policies to make
+those scans pass; that would give another principal plaintext under a
+customer-held key. ClamAV is the only scanner for tenant objects.
+
+If `OnCallTopicArn` is set, allow `events.amazonaws.com` to `sns:Publish` to
+that topic. The first Security Hub import can notify for every open critical.
+Triage those by hand; do not auto-close them. Findings are account posture.
+They do not score, rank or decide Aboriginality.
+
+After deploy, confirm:
+
+- the Config recorder is recording and `AllSupported` is true, including
+  global resource types in this Region only;
+- the trail is logging, `KMSKeyId` is the key behind `alias/blakpath-security-logs`,
+  CloudWatch Logs delivery is on, and data events cover both BlakPath buckets;
+- Security Hub shows FSBP v1.0.0 and CIS v5.0.0.
+
+If trail delivery fails with `AccessControlListNotSupported`, remove the
+`s3:x-amz-acl` condition from `AWSCloudTrailWrite` and update the stack. The
+bucket uses BucketOwnerEnforced.
+
+### Security Hub baseline record
+
+Wait until both standards show a score, then write this outside the account
+(the release record, not this repository):
+
+| Field                          | Value                                             |
+| ------------------------------ | ------------------------------------------------- |
+| Date (UTC)                     |                                                   |
+| Region                         | ap-southeast-2                                    |
+| Standards                      | FSBP v1.0.0, CIS AWS Foundations Benchmark v5.0.0 |
+| Security score                 |                                                   |
+| Critical / High / Medium / Low |                                                   |
+| Config recorder                | recording, all supported types                    |
+
+Triage every critical before calling the baseline done:
+
+| Finding ID | Title | Resource | Decision                       | Owner | Notes |
+| ---------- | ----- | -------- | ------------------------------ | ----- | ----- |
+|            |       |          | fix, accept, or false positive |       |       |
+
+A decision needs a person and a written reason. Accepting a finding does not
+change how BlakPath records identity.
+
+## EKS guardrails
+
+Deploy `eks-guardrails.example.yaml` with the existing cluster name. Then,
+against that cluster only:
+
+```bash
+aws eks update-cluster-config \
+  --region ap-southeast-2 \
+  --name "$CLUSTER_NAME" \
+  --deletion-protection \
+  --logging '{"clusterLogging":[{"types":["api","audit","authenticator","controllerManager","scheduler"],"enabled":true}]}'
+
+aws eks associate-encryption-config \
+  --region ap-southeast-2 \
+  --cluster-name "$CLUSTER_NAME" \
+  --encryption-config "[{\"resources\":[\"secrets\"],\"provider\":{\"keyArn\":\"$SECRETS_KEY_ARN\"}}]"
+```
+
+`$SECRETS_KEY_ARN` is the `EksSecretsKeyArn` output (`alias/blakpath-eks-secrets`
+is the alias). Kubernetes 1.28 and later already envelope-encrypts API data
+with an AWS-owned key. This associates the BlakPath CMK. Association is
+irreversible. Deleting the key leaves the cluster unrecoverable. If the API
+rejects the association because a CMK is already set, keep the existing key
+and do not create another cluster. After a successful association, rewrite
+existing Kubernetes secrets so new data keys use the CMK.
+
+`eks-cluster-guardrails.json` is that desired state. It is not a cluster
+create document.

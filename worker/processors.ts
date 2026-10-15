@@ -5,11 +5,11 @@ import { QueueName, type TenantJob } from '@/lib/queues';
 import { processEvidenceScan } from '@/domains/evidence';
 import { sweepEvidenceScans } from '@/domains/evidence/sweep';
 import { processWebhookDelivery, sweepStaleWebhookDeliveries } from '@/domains/webhooks';
-import { processExport } from '@/domains/reporting';
+import { processExport, processExportMaintenance } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
 import { scopeFor } from '@/db/tenant-db';
-import { notifications, users } from '@/db/schema';
+import { memberships, notifications, users } from '@/db/schema';
 import {
   deliverInvitationEmail,
   invitationKindFromJobName,
@@ -21,6 +21,7 @@ import {
   runBackfillBatch,
 } from '@/lib/encryption/backfill';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
+import { wantsNotificationEmail } from '@/domains/notifications/workflow';
 import { processOrganisationKeyRewrap } from '@/domains/organisation-keys/rewrap-job';
 import { isPlatformAuditJob, processAuditVerifyJob } from './audit-verify';
 import { acceptTenantJob } from './tenant-job';
@@ -157,6 +158,25 @@ const notificationProcessor: ProcessorFn = async (job, logger) => {
     return;
   }
 
+  const preferenceRows = await scope.db
+    .select({ emailNotifications: memberships.emailNotifications })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.userId, notification.userId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .limit(1);
+  if (!wantsNotificationEmail(preferenceRows[0]?.emailNotifications)) {
+    logger.info(
+      { jobId: job.id, organisationId },
+      'notification email skipped — member has not asked for a copy',
+    );
+    return;
+  }
+
   const userRows = await scope.db
     .select({ email: users.email, name: users.name })
     .from(users)
@@ -225,11 +245,17 @@ const webhookProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Export processor. Assembles the requested report as CSV, stores it, and marks
- * the request ready (or failed). A malformed payload is dropped, not retried.
+ * Export processor. `generate` jobs assemble the requested report as CSV, store
+ * it, and mark the request ready (or failed); a malformed payload is dropped,
+ * not retried. Scheduled `sweep` jobs expire past-window exports and recover
+ * exports stranded by a dead worker.
  */
 const exportProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
+  if (job.name === 'sweep') {
+    await processExportMaintenance({ organisationId, correlationId });
+    return;
+  }
   const exportRequestId = (job.data as { exportRequestId?: unknown }).exportRequestId;
   if (typeof exportRequestId !== 'string' || exportRequestId.length === 0) {
     logger.error({ jobId: job.id }, 'export job missing exportRequestId — dropping');
@@ -279,14 +305,18 @@ const encryptionBackfillProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Reminder processor. Dispatches due calendar reminders for the tenant as
- * notifications (email copies queued by the notification system). Idempotent
- * per reminder row: dispatched rows are marked sent.
+ * Reminder processor. Dispatches due calendar reminders, then overdue evidence
+ * requests, for the tenant. Both paths record in-app notices and queue an email
+ * copy only when the member has asked for one. Each source is idempotent: a
+ * calendar reminder is marked sent, and an evidence request is claimed once.
  */
 const reminderProcessor: ProcessorFn = async (job) => {
   const { organisationId, correlationId } = job.data;
   const { processReminderSweep } = await import('@/domains/calendar/service');
   await processReminderSweep({ organisationId, correlationId });
+  const { processOverdueEvidenceSweep } =
+    await import('@/domains/notifications/dispatch');
+  await processOverdueEvidenceSweep({ organisationId, correlationId });
 };
 
 /**

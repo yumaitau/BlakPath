@@ -128,8 +128,7 @@ type Signoff = typeof disposalAuthoritySignoffs.$inferSelect;
 
 /** Coded audit reasons. Never free text. */
 type SweepAuditReason =
-  | 'retention.action_failed'
-  | `retention.purge_blocked.${SweepBlockReason}`;
+  'retention.action_failed' | `retention.purge_blocked.${SweepBlockReason}`;
 
 interface Cursor {
   at: Date;
