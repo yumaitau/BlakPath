@@ -83,6 +83,15 @@ never mount the migrator secret.
 - [ ] Enable the EKS Auto Mode network policy controller and apply
       `infra/k8s/network-policy.yaml`. A pod outside `blakpath` must not reach
       BlakPath ports. Steps and the allow list are in `docs/eks-runbook.md`.
+- [ ] Deploy `infra/aws/account-guardrails.example.yaml` in `ap-southeast-2`
+      (or align the existing Config recorder, CloudTrail trail, GuardDuty
+      detector, Security Hub standards and Access Analyzer to it). Config must
+      be recording every supported resource type in that Region.
+- [ ] Record the Security Hub score and triage every critical finding by hand.
+      The blank record is in `infra/aws/README.md`. Findings are account posture
+      and do not decide identity.
+- [ ] Apply the EKS control-plane logs, deletion protection and secrets CMK in
+      `infra/aws/eks-cluster-guardrails.json`.
 
 ## Signals and response
 
@@ -111,7 +120,9 @@ Alert on:
 - failed or dead-lettered email, export, retention and webhook jobs;
 - failed backup jobs or restore-drill failures;
 - sustained 5xx/readiness failures;
-- ClamAV signature age above 48 hours.
+- ClamAV signature age above 48 hours;
+- GuardDuty findings at severity 7 or higher, and new critical Security Hub
+  findings, when `OnCallTopicArn` is set on the account guardrails stack.
 
 The stable log signals are `queue_job_exhausted`, `audit_integrity_failure`,
 `clamav_unavailable`, `clamav_signature_age`, `evidence_quarantine_backlog`
