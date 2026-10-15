@@ -1,0 +1,390 @@
+# BlakPath data tier for ap-southeast-2. Deployment input, not a CI apply.
+# Settings and apply steps: docs/data-tier-capacity.md. Connection budget:
+# src/db/connection-budget.ts and docs/eks-runbook.md.
+#
+# The RDS Proxy in front of this instance is not created here.
+# Redis holds queues and rate limits only. Snapshot retention is 0.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath RDS Postgres and ElastiCache Redis in private subnets
+  (ap-southeast-2). Customer managed keys, not aws/rds.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC. This template does not create a network.
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two private subnets in different AZs. No public subnets.
+  WebSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the web pods (or the shared node group).
+  WorkerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: >-
+      Security group of the worker pods. Pass the web group again when web and
+      worker share one group; the duplicate ingress rule is skipped.
+  JobSecurityGroupId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^sg-[0-9a-f]{8,17}$'
+    Description: >-
+      Security group for migrate and seed Jobs when it is neither the web nor
+      the worker group. Leave empty otherwise.
+  SecretsKmsKeyArn:
+    Type: String
+    AllowedPattern: '^arn:aws:kms:ap-southeast-2:[0-9]{12}:key/[0-9a-fA-F-]+$'
+    Description: >-
+      CMK for Secrets Manager values (alias/blakpath-app-secrets). Not an
+      AWS-managed secrets key. The workload does not read this stack's secrets
+      directly; copy URLs into /blakpath/production/runtime.
+  DbInstanceClass:
+    Type: String
+    Default: db.m7g.large
+    Description: >-
+      Non-burstable default. Any class must leave the RDS default
+      max_connections at or above RDS_MAX_CONNECTIONS in
+      src/db/connection-budget.ts (2 GiB or more).
+  PostgresEngineVersion:
+    Type: String
+    Default: '16.15'
+    Description: PostgreSQL 16 minor available in ap-southeast-2. Family stays postgres16.
+  RedisNodeType:
+    Type: String
+    Default: cache.m7g.large
+    Description: Default is the capacity-note node. Keep two nodes and noeviction.
+  RedisEngineVersion:
+    Type: String
+    Default: '7.1'
+    Description: Redis OSS 7.x. The parameter group family is redis7.
+
+Rules:
+  OnlyApSoutheast2:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'ap-southeast-2']
+        AssertDescription: Deploy this stack only in ap-southeast-2.
+
+Conditions:
+  WorkerSgDistinct: !Not [!Equals [!Ref WorkerSecurityGroupId, !Ref WebSecurityGroupId]]
+  HasJobSg: !Not [!Equals [!Ref JobSecurityGroupId, '']]
+  JobSgIsWeb: !Equals [!Ref JobSecurityGroupId, !Ref WebSecurityGroupId]
+  JobSgIsWorker: !Equals [!Ref JobSecurityGroupId, !Ref WorkerSecurityGroupId]
+  AddJobIngress: !And
+    - !Condition HasJobSg
+    - !Not [!Condition JobSgIsWeb]
+    - !Not [!Condition JobSgIsWorker]
+
+Resources:
+  RdsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: BlakPath RDS storage and Performance Insights. Not aws/rds.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountIam
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+      Tags:
+        - Key: app
+          Value: blakpath
+        - Key: component
+          Value: rds
+
+  RdsKeyAlias:
+    Type: AWS::KMS::Alias
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AliasName: alias/blakpath-rds
+      TargetKeyId: !Ref RdsKey
+
+  RedisKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: BlakPath ElastiCache at-rest encryption. Ephemeral data only.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountIam
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+      Tags:
+        - Key: app
+          Value: blakpath
+        - Key: component
+          Value: elasticache
+
+  RedisKeyAlias:
+    Type: AWS::KMS::Alias
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AliasName: alias/blakpath-elasticache
+      TargetKeyId: !Ref RedisKey
+
+  RedisAuthSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: /blakpath/production/redis-auth
+      Description: >-
+        ElastiCache AUTH token for blakpath-redis. Redis is ephemeral.
+        Do not put tenant records in it.
+      KmsKeyId: !Ref SecretsKmsKeyArn
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":""}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      GroupDescription: BlakPath Postgres from application security groups only
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: No outbound traffic
+      Tags:
+        - Key: app
+          Value: blakpath
+
+  DbIngressWeb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref WebSecurityGroupId
+      Description: Web pods
+
+  DbIngressWorker:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WorkerSgDistinct
+    Properties:
+      GroupId: !Ref DbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref WorkerSecurityGroupId
+      Description: Worker pods
+
+  DbIngressJobs:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: AddJobIngress
+    Properties:
+      GroupId: !Ref DbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref JobSecurityGroupId
+      Description: Migrate and seed Jobs
+
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      GroupDescription: BlakPath Redis from application security groups only
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: No outbound traffic
+      Tags:
+        - Key: app
+          Value: blakpath
+
+  RedisIngressWeb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RedisSecurityGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      SourceSecurityGroupId: !Ref WebSecurityGroupId
+      Description: Web pods
+
+  RedisIngressWorker:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: WorkerSgDistinct
+    Properties:
+      GroupId: !Ref RedisSecurityGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      SourceSecurityGroupId: !Ref WorkerSecurityGroupId
+      Description: Worker pods
+
+  RedisIngressJobs:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: AddJobIngress
+    Properties:
+      GroupId: !Ref RedisSecurityGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      SourceSecurityGroupId: !Ref JobSecurityGroupId
+      Description: Migrate and seed Jobs
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DBSubnetGroupDescription: BlakPath private subnets for Postgres
+      SubnetIds: !Ref PrivateSubnetIds
+      Tags:
+        - Key: app
+          Value: blakpath
+
+  PostgresParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      # max_connections stays at the instance-class default (connection budget).
+      Description: BlakPath Postgres force SSL
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: '1'
+      Tags:
+        - Key: app
+          Value: blakpath
+
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: blakpath-postgres
+      Engine: postgres
+      EngineVersion: !Ref PostgresEngineVersion
+      DBInstanceClass: !Ref DbInstanceClass
+      DBName: blakpath
+      MasterUsername: blakpath
+      ManageMasterUserPassword: true
+      MasterUserSecretKmsKeyId: !Ref SecretsKmsKeyArn
+      AllocatedStorage: 100
+      MaxAllocatedStorage: 500
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !GetAtt RdsKey.Arn
+      MultiAZ: true
+      PubliclyAccessible: false
+      DeletionProtection: true
+      BackupRetentionPeriod: 21
+      CopyTagsToSnapshot: true
+      PreferredBackupWindow: '16:00-17:00'
+      PreferredMaintenanceWindow: 'sun:17:00-sun:18:00'
+      EnablePerformanceInsights: true
+      PerformanceInsightsKMSKeyId: !GetAtt RdsKey.Arn
+      PerformanceInsightsRetentionPeriod: 7
+      DBParameterGroupName: !Ref PostgresParameterGroup
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      EnableCloudwatchLogsExports:
+        - postgresql
+      AutoMinorVersionUpgrade: true
+      AllowMajorVersionUpgrade: false
+      Tags:
+        - Key: app
+          Value: blakpath
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: BlakPath private subnets for Redis
+      SubnetIds: !Ref PrivateSubnetIds
+      Tags:
+        - Key: app
+          Value: blakpath
+
+  RedisParameterGroup:
+    Type: AWS::ElastiCache::ParameterGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: BullMQ requires noeviction. Cluster mode stays off.
+      CacheParameterGroupFamily: redis7
+      Properties:
+        maxmemory-policy: noeviction
+      Tags:
+        - Key: app
+          Value: blakpath
+
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    DependsOn: RedisAuthSecret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ReplicationGroupId: blakpath-redis
+      ReplicationGroupDescription: BlakPath ephemeral Redis (queues and rate limits)
+      Engine: redis
+      EngineVersion: !Ref RedisEngineVersion
+      CacheNodeType: !Ref RedisNodeType
+      # Two nodes, cluster mode off. BullMQ uses one primary URL.
+      NumCacheClusters: 2
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
+      TransitEncryptionEnabled: true
+      AtRestEncryptionEnabled: true
+      KmsKeyId: !GetAtt RedisKey.Arn
+      # Name, not ARN: secret ARNs contain colons and break the dynamic-reference parser.
+      AuthToken: '{{resolve:secretsmanager:/blakpath/production/redis-auth:SecretString:password}}'
+      CacheParameterGroupName: !Ref RedisParameterGroup
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds:
+        - !Ref RedisSecurityGroup
+      Port: 6379
+      SnapshotRetentionLimit: 0
+      PreferredMaintenanceWindow: 'sun:18:00-sun:19:00'
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: app
+          Value: blakpath
+
+Outputs:
+  DbEndpointAddress:
+    Value: !GetAtt DbInstance.Endpoint.Address
+  DbEndpointPort:
+    Value: !GetAtt DbInstance.Endpoint.Port
+  RdsMasterSecretArn:
+    Description: >-
+      RDS-managed master password. Only for running
+      infra/postgres/audit-roles.sql. Runtime DATABASE_URL uses blakpath_app.
+    Value: !GetAtt DbInstance.MasterUserSecret.SecretArn
+  RdsKmsKeyArn:
+    Value: !GetAtt RdsKey.Arn
+  RedisPrimaryAddress:
+    Description: Primary endpoint. Do not point BullMQ at the reader.
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+  RedisPrimaryPort:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
+  RedisAuthSecretArn:
+    Description: AUTH token secret. REDIS_URL is rediss://:<password>@<primary>:6379
+    Value: !Ref RedisAuthSecret
+  RedisKmsKeyArn:
+    Value: !GetAtt RedisKey.Arn

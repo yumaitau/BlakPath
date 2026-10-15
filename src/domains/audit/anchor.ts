@@ -90,11 +90,7 @@ export interface AnchoredChainProbe {
 }
 
 export type SettleAuditChainStatus =
-  | 'empty'
-  | 'divergence'
-  | 'anchor_mismatch'
-  | 'anchored'
-  | 'already_anchored';
+  'empty' | 'divergence' | 'anchor_mismatch' | 'anchored' | 'already_anchored';
 
 export interface SettleAuditChainResult {
   readonly status: SettleAuditChainStatus;

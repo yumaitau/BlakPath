@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
+import { DEV_TEAM_FIXTURE, DEV_TENANT_B } from '@/db/seeds/dev-tenants';
 
 /**
  * Runs only where a real disposable Postgres database is deliberately enabled
@@ -78,5 +79,52 @@ integration('development seed', () => {
       'organisation-admin',
       'records-officer',
     ]);
+
+    const secondCouncil = await db
+      .select({ id: schema.organisations.id })
+      .from(schema.organisations)
+      .where(drizzle.eq(schema.organisations.slug, DEV_TENANT_B.slug));
+    expect(secondCouncil).toEqual([{ id: DEV_TENANT_B.organisationId }]);
+
+    const secondApplication = await db
+      .select({
+        id: schema.applications.id,
+        organisationId: schema.applications.organisationId,
+      })
+      .from(schema.applications)
+      .where(drizzle.eq(schema.applications.id, DEV_TENANT_B.applicationId));
+    expect(secondApplication).toEqual([
+      { id: DEV_TENANT_B.applicationId, organisationId: DEV_TENANT_B.organisationId },
+    ]);
+
+    const officerRoles = await db
+      .select({ email: schema.users.email, slug: schema.roles.slug })
+      .from(schema.membershipRoles)
+      .innerJoin(
+        schema.memberships,
+        drizzle.eq(schema.membershipRoles.membershipId, schema.memberships.id),
+      )
+      .innerJoin(schema.users, drizzle.eq(schema.memberships.userId, schema.users.id))
+      .innerJoin(schema.roles, drizzle.eq(schema.membershipRoles.roleId, schema.roles.id))
+      .where(
+        drizzle.and(
+          drizzle.eq(schema.memberships.organisationId, orgRows[0]?.id ?? ''),
+          drizzle.inArray(schema.users.email, [
+            DEV_TEAM_FIXTURE.assignedEmail,
+            DEV_TEAM_FIXTURE.unassignedEmail,
+          ]),
+        ),
+      );
+    expect(officerRoles.map((row) => `${row.email}:${row.slug}`).sort()).toEqual([
+      `${DEV_TEAM_FIXTURE.assignedEmail}:case-officer`,
+      `${DEV_TEAM_FIXTURE.unassignedEmail}:case-officer`,
+    ]);
+
+    const teamMembers = await db
+      .select({ email: schema.users.email })
+      .from(schema.teamMemberships)
+      .innerJoin(schema.users, drizzle.eq(schema.teamMemberships.userId, schema.users.id))
+      .where(drizzle.eq(schema.teamMemberships.teamId, DEV_TEAM_FIXTURE.teamId));
+    expect(teamMembers.map((row) => row.email)).toEqual([DEV_TEAM_FIXTURE.assignedEmail]);
   });
 });

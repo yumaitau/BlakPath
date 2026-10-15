@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath EKS customer-managed key and control-plane log group for
+  ap-southeast-2. Does not create or update a cluster. Pair with
+  eks-cluster-guardrails.json. Losing alias/blakpath-eks-secrets after it
+  is associated makes that cluster unrecoverable.
+
+Parameters:
+  ClusterName:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$'
+    Description: Existing EKS cluster name. Used only for the log group name.
+
+Rules:
+  SydneyOnly:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'ap-southeast-2']
+        AssertDescription: Deploy this stack only in ap-southeast-2.
+
+Resources:
+  EksSecretsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: >-
+        BlakPath EKS envelope encryption key. Do not schedule deletion while
+        a cluster uses it.
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowEksEnvelopeEncryption
+            Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - kms:DescribeKey
+              - kms:CreateGrant
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:CallerAccount: !Ref AWS::AccountId
+                kms:ViaService: !Sub 'eks.${AWS::Region}.amazonaws.com'
+
+  EksSecretsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/blakpath-eks-secrets
+      TargetKeyId: !Ref EksSecretsKey
+
+  ControlPlaneLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/eks/${ClusterName}/cluster'
+      RetentionInDays: 365
+
+Outputs:
+  EksSecretsKeyArn:
+    Value: !GetAtt EksSecretsKey.Arn
+  EksSecretsKeyAlias:
+    Value: !Ref EksSecretsKeyAlias
+  ControlPlaneLogGroupName:
+    Value: !Ref ControlPlaneLogGroup

@@ -106,7 +106,9 @@ plaintext in memory while it handles a request. See
 - **Mitigations:** every sensitive action — including **denials** — is audited
   with actor, acting role, session, correlation id and result. Recording and
   reviewing determinations, and issuing/revoking certificates, are all audited.
-  The hash chain makes the record non-repudiable.
+  The hash chain makes the record non-repudiable. CloudTrail and EKS
+  control-plane logs are the platform record of AWS and Kubernetes API calls.
+  They do not decide identity.
 
 ### Information disclosure
 
@@ -290,7 +292,9 @@ When something goes wrong, BlakPath **denies rather than exposes**:
 - **Scanner unavailable → quarantine holds.** If ClamAV is down, unreachable or
   errors, the uploaded file stays in the quarantine bucket and is **never
   promoted or served**. Availability of scanning is never traded for exposing an
-  unscanned file (`docs/evidence-scanning-design.md`).
+  unscanned file (`docs/evidence-scanning-design.md`). GuardDuty Malware
+  Protection for S3, when enabled, is a second signal only. Its object tag
+  never promotes or rejects evidence.
 - **No tenant context → refuse.** Tenant-touching code with no active verified
   context throws `TenantContextError`; it does not guess a tenant.
 - **Permission ambiguous → deny.** A missing or unresolved permission is a

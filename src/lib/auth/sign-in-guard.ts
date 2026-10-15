@@ -26,8 +26,7 @@ export const SIGN_IN_GUARD = {
 } as const;
 
 export type SignInDecision =
-  | { action: 'allow'; delayMs: number }
-  | { action: 'lock'; retryAfter: number };
+  { action: 'allow'; delayMs: number } | { action: 'lock'; retryAfter: number };
 
 export class SignInLockedError extends Error {
   readonly retryAfter: number;

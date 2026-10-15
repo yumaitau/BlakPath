@@ -1304,12 +1304,7 @@ export async function verifyCertificate(
 }
 
 export type HolderCheckStatus =
-  | 'match'
-  | 'no_match'
-  | 'unbound'
-  | 'not_found'
-  | 'rate_limited'
-  | 'invalid';
+  'match' | 'no_match' | 'unbound' | 'not_found' | 'rate_limited' | 'invalid';
 
 /**
  * Compare details a verifier typed with the sealed holder hashes.

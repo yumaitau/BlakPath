@@ -11,8 +11,7 @@ export const PORTAL_APPLICANT_EMAIL = 'applicant@blakpath.local';
 export const PORTAL_APPLICANT_PASSWORD = 'blakpath-dev-applicant-2026';
 
 let selectedAdminCookies:
-  | Awaited<ReturnType<ReturnType<Page['context']>['cookies']>>
-  | undefined;
+  Awaited<ReturnType<ReturnType<Page['context']>['cookies']>> | undefined;
 
 /**
  * Give each interactive sign-in its own documentation-only client address.
@@ -42,15 +41,36 @@ export async function isolateSignInClient(page: Page): Promise<void> {
   });
 }
 
-export async function signIn(page: Page): Promise<void> {
+export async function signInAs(
+  page: Page,
+  email: string,
+  password: string,
+): Promise<void> {
   await isolateSignInClient(page);
   await page.goto('/sign-in');
-  await page.getByLabel('Email').fill(ADMIN_EMAIL);
-  await page.getByLabel('Password').fill(ADMIN_PASSWORD);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page).toHaveURL(/\/(?:select-organisation|dashboard)$/, {
     timeout: 30_000,
   });
+}
+
+export async function selectOrganisation(
+  page: Page,
+  name: string | RegExp,
+): Promise<void> {
+  if (/\/dashboard$/.test(page.url())) {
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+    return;
+  }
+  await page.getByRole('button', { name }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+}
+
+export async function signIn(page: Page): Promise<void> {
+  await signInAs(page, ADMIN_EMAIL, ADMIN_PASSWORD);
 }
 
 export async function selectDevelopmentOrganisation(page: Page): Promise<void> {

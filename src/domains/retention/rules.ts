@@ -15,7 +15,9 @@ import type { DISPOSAL_CLASS_BY_RESOURCE, DISPOSAL_CLASS_INFO } from './disposal
  */
 
 type ForbiddenResource = {
-  [K in keyof typeof DISPOSAL_CLASS_BY_RESOURCE]: (typeof DISPOSAL_CLASS_INFO)[(typeof DISPOSAL_CLASS_BY_RESOURCE)[K]]['destructionForbidden'] extends true
+  [
+    K in keyof typeof DISPOSAL_CLASS_BY_RESOURCE
+  ]: (typeof DISPOSAL_CLASS_INFO)[(typeof DISPOSAL_CLASS_BY_RESOURCE)[K]]['destructionForbidden'] extends true
     ? K
     : never;
 }[keyof typeof DISPOSAL_CLASS_BY_RESOURCE];

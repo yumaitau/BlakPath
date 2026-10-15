@@ -252,10 +252,11 @@ export function ssoPlugin() {
 
 /** The slice of Better Auth's internal adapter used for account linking. */
 export interface SsoAccountStore {
-  findAccountByProviderId(
-    accountId: string,
-    providerId: string,
-  ): Promise<{ userId: string } | null>;
+  /** Exact (providerId, accountId) match; throws if the key is ambiguous. */
+  findAccountByKey(key: {
+    providerId: string;
+    accountId: string;
+  }): Promise<{ userId: string } | null>;
   findUserByEmail(
     email: string,
   ): Promise<{ user: { id: string; emailVerified: boolean } } | null>;
@@ -284,10 +285,10 @@ export async function resolveMember(
 ): Promise<string> {
   if (!idTokenSatisfiesMfa(identity.claims)) throw new SsoDenied('MFA_REQUIRED');
   const providerId = ssoAccountProviderId(binding.id);
-  const linked = await deps.accounts.findAccountByProviderId(
-    identity.subject,
+  const linked = await deps.accounts.findAccountByKey({
     providerId,
-  );
+    accountId: identity.subject,
+  });
   let userId = linked?.userId;
   if (!userId) {
     const email = identity.email?.trim().toLowerCase();
