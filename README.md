@@ -171,7 +171,7 @@ The app runs at <http://localhost:3000>.
 | `pnpm lint`           | ESLint                                        |
 | `pnpm test`           | Unit + integration tests (Vitest)             |
 | `pnpm test:e2e`       | End-to-end tests (Playwright)                 |
-| `pnpm test:e2e:smoke` | Smoke the production `runner` image           |
+| `pnpm test:e2e:smoke` | Smoke a running production image (staging)    |
 | `pnpm test:live`      | Full live-service Playwright verification     |
 | `pnpm test:restore`   | Backup, restore and recovery verification     |
 | `pnpm release:check`  | Validate production configuration and roles   |

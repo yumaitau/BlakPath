@@ -4,8 +4,8 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3000';
 
 /**
- * Smoke against an already running production `runner` container.
- * This config does not start `next dev`.
+ * Smoke against an already running production `runner` container, such as a
+ * staging deployment. This config does not start a server.
  */
 export default defineConfig({
   testDir: './tests/e2e-smoke',

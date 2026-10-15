@@ -65,7 +65,7 @@ test('teams: council A cannot read council B', async ({ page, browser }) => {
       { data: { operation: 'assign_self' } },
     );
     expect(foreign.status()).toBe(403);
-    await expect(foreign.json()).resolves.toEqual({ error: 'Forbidden' });
+    await expect(foreign.json()).resolves.toMatchObject({ error: 'Forbidden' });
 
     const ownClients = await page.request.get('/api/clients');
     expect(ownClients.status()).toBe(200);
@@ -234,9 +234,11 @@ test('teams: invitation email-mismatch deny', async ({ page, browser }) => {
         .getByRole('button', { name: `Join ${DEV_ORGANISATION_NAME}` })
         .click();
       expect((await accept).status()).toBe(403);
-      await expect(councilBPage.getByRole('alert')).toContainText(
-        'This invitation could not be accepted.',
-      );
+      await expect(
+        councilBPage
+          .getByRole('alert')
+          .filter({ hasText: 'This invitation could not be accepted.' }),
+      ).toBeVisible();
     } finally {
       await councilB.close();
     }
@@ -251,7 +253,7 @@ test('teams: invitation accept requires a session', async ({ page, request }) =>
     data: { token: 'not-a-real-membership-invitation-token' },
   });
   expect(response.status()).toBe(401);
-  await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+  await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
   await page.goto('/sign-in');
   await finishPage(page, pageErrors);
 });

@@ -4,8 +4,9 @@ Playwright, chromium, one worker. `pnpm test:e2e` runs `tests/e2e` against
 `next dev` locally. With `PLAYWRIGHT_SERVER=production` it serves an existing
 `pnpm build` output with `next start`; CI does that. `pnpm test:e2e:smoke`
 runs `tests/e2e-smoke` through `playwright.smoke.config.ts` against an already
-running production `runner` container. CI job `e2e-smoke` builds that image
-and starts it.
+running production `runner` image (set `PLAYWRIGHT_BASE_URL`). The image runs
+the production release gate at boot and refuses to start without real KMS, SES
+and managed S3, so point it at staging. CI does not run it.
 
 Helpers: `tests/e2e/helpers/auth.ts` (isolated client IP, Origin header,
 cookie reuse), `tests/e2e/helpers/accessibility.ts` (axe, WCAG 2.2 AA),

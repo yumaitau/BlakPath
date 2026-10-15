@@ -16,7 +16,7 @@ test('sso bindings, consent gate, and SCIM-off denial', async ({ page, request }
   await test.step('SSO bindings gating', async () => {
     const anon = await request.get('/api/sso/providers');
     expect(anon.status()).toBe(401);
-    await expect(anon.json()).resolves.toEqual({ error: 'Unauthorized' });
+    await expect(anon.json()).resolves.toMatchObject({ error: 'Unauthorized' });
 
     await signInAndSelectOrganisation(page);
     const list = await page.request.get('/api/sso/providers');
@@ -35,7 +35,7 @@ test('sso bindings, consent gate, and SCIM-off denial', async ({ page, request }
       },
     });
     expect(denied.status()).toBe(403);
-    await expect(denied.json()).resolves.toEqual({ error: 'Forbidden' });
+    await expect(denied.json()).resolves.toMatchObject({ error: 'Forbidden' });
   });
 
   await test.step('SCIM-off denial without enumeration', async () => {

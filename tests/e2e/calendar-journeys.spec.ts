@@ -43,8 +43,8 @@ test('calendar: create, views, attendees, reminder, reschedule, ICS, conflict', 
   moved.setDate(moved.getDate() + 1);
 
   await test.step('create event', async () => {
-    await page.getByLabel('Event title').fill(title);
-    await page.getByLabel('Start').fill(localDateTimeInput(start));
+    await page.getByLabel('Event title', { exact: true }).fill(title);
+    await page.getByLabel('Start', { exact: true }).fill(localDateTimeInput(start));
     await page.getByRole('button', { name: 'Create event' }).click();
     await expect(page.getByText('Event created. Refresh to see it.')).toBeVisible();
   });
@@ -65,8 +65,8 @@ test('calendar: create, views, attendees, reminder, reschedule, ICS, conflict', 
 
   await test.step('reschedule persists across reload', async () => {
     await page.getByRole('button', { name: 'Week', exact: true }).click();
-    await page.getByLabel('Event').selectOption({ label: title });
-    await page.getByLabel('New date').fill(localDateInput(moved));
+    await page.getByLabel('Event', { exact: true }).selectOption({ label: title });
+    await page.getByLabel('New date', { exact: true }).fill(localDateInput(moved));
     await page.getByRole('button', { name: 'Move event' }).click();
     await expect(page.getByText('Event moved. Refresh to see it.')).toBeVisible();
     await page.reload();
