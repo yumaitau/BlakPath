@@ -20,6 +20,7 @@ import { AuthorizationError } from '@/lib/permissions/errors';
 import { enqueueMalwareScan } from '@/lib/queues/malware-scan';
 import { logger } from '@/lib/observability/logger';
 import { queueNotification } from '@/domains/notifications';
+import { notifyWorkflowEvent } from '@/domains/notifications/dispatch';
 import {
   deleteObject,
   EVIDENCE_BUCKET,
@@ -713,6 +714,18 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
     });
   };
 
+  // Staff who work with evidence on this case hear that it is ready. A public
+  // form upload has no case yet, so nobody is told. The dispatcher logs and
+  // swallows its own failures, so the scan outcome stands.
+  const notifyEvidenceClean = async () => {
+    if (!row.applicationId) return;
+    await notifyWorkflowEvent({
+      organisationId,
+      correlationId,
+      event: { kind: 'evidence_clean', applicationId: row.applicationId, evidenceId },
+    });
+  };
+
   const rejectUpload = async (
     detected: string | null,
     scanResult: string,
@@ -782,6 +795,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
           reason: 'evidence.promoted_object_present',
         },
       );
+      await notifyEvidenceClean();
       return;
     }
     await settle(
@@ -949,6 +963,7 @@ export async function processEvidenceScan(input: ProcessScanInput): Promise<void
       result: 'success',
     },
   );
+  await notifyEvidenceClean();
   logger.debug(
     { organisationId, evidenceId, bucket: EVIDENCE_BUCKET },
     'evidence promoted',
