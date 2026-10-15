@@ -114,37 +114,42 @@ export async function createTask(rawInput: CreateTaskInput): Promise<TaskRow> {
   const position = await nextPositionInColumn(status);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(tasks)
-    .values(
-      scope.insertValues({
-        title: input.title,
-        status,
-        position,
-        createdByUserId: ctx.userId,
-        ...(input.description !== undefined ? { description: input.description } : {}),
-        ...(input.priority !== undefined ? { priority: input.priority } : {}),
-        ...(input.assigneeUserId !== undefined
-          ? { assigneeUserId: input.assigneeUserId }
-          : {}),
-        ...(input.applicationId !== undefined
-          ? { applicationId: input.applicationId }
-          : {}),
-        ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
-      }),
-    )
-    .returning();
-  const row = expectRow(inserted[0], 'task');
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(tasks)
+      .values(
+        scope.insertValues({
+          title: input.title,
+          status,
+          position,
+          createdByUserId: ctx.userId,
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.priority !== undefined ? { priority: input.priority } : {}),
+          ...(input.assigneeUserId !== undefined
+            ? { assigneeUserId: input.assigneeUserId }
+            : {}),
+          ...(input.applicationId !== undefined
+            ? { applicationId: input.applicationId }
+            : {}),
+          ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
+        }),
+      )
+      .returning();
+    const row = expectRow(inserted[0], 'task');
 
-  await recordAudit({
-    action: 'task.created',
-    resourceType: 'task',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { title: row.title }, allow: ['title'] },
+    await recordAudit(
+      {
+        action: 'task.created',
+        resourceType: 'task',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { title: row.title }, allow: ['title'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Edit a task's fields. */
@@ -160,33 +165,38 @@ export async function updateTask(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(tasks)
-    .set({
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.priority !== undefined ? { priority: input.priority } : {}),
-      ...(input.assigneeUserId !== undefined
-        ? { assigneeUserId: input.assigneeUserId }
-        : {}),
-      ...(input.applicationId !== undefined
-        ? { applicationId: input.applicationId }
-        : {}),
-      ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
-    })
-    .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
-    .returning();
-  const row = expectRow(updated[0], 'task');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(tasks)
+      .set({
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.priority !== undefined ? { priority: input.priority } : {}),
+        ...(input.assigneeUserId !== undefined
+          ? { assigneeUserId: input.assigneeUserId }
+          : {}),
+        ...(input.applicationId !== undefined
+          ? { applicationId: input.applicationId }
+          : {}),
+        ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
+      })
+      .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
+      .returning();
+    const row = expectRow(updated[0], 'task');
 
-  await recordAudit({
-    action: 'task.updated',
-    resourceType: 'task',
-    resourceId: id,
-    result: 'success',
-    after: { data: { title: row.title }, allow: ['title'] },
+    await recordAudit(
+      {
+        action: 'task.updated',
+        resourceType: 'task',
+        resourceId: id,
+        result: 'success',
+        after: { data: { title: row.title }, allow: ['title'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Assign a task to someone, or clear the assignee with `null`. */
@@ -202,25 +212,30 @@ export async function assignTask(
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(tasks)
-    .set({ assigneeUserId: input.assigneeUserId })
-    .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
-    .returning();
-  const row = expectRow(updated[0], 'task');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(tasks)
+      .set({ assigneeUserId: input.assigneeUserId })
+      .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
+      .returning();
+    const row = expectRow(updated[0], 'task');
 
-  await recordAudit({
-    action: 'task.assigned',
-    resourceType: 'task',
-    resourceId: id,
-    result: 'success',
-    after: {
-      data: { assigneeUserId: input.assigneeUserId },
-      allow: ['assigneeUserId'],
-    },
+    await recordAudit(
+      {
+        action: 'task.assigned',
+        resourceType: 'task',
+        resourceId: id,
+        result: 'success',
+        after: {
+          data: { assigneeUserId: input.assigneeUserId },
+          allow: ['assigneeUserId'],
+        },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Read one live task's position within the tenant, or undefined. */
@@ -261,22 +276,27 @@ export async function moveTask(id: string, rawInput: MoveTaskInput): Promise<Tas
   const position = positionBetween(before, after);
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(tasks)
-    .set({ status: input.status, position })
-    .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
-    .returning();
-  const row = expectRow(updated[0], 'task');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(tasks)
+      .set({ status: input.status, position })
+      .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
+      .returning();
+    const row = expectRow(updated[0], 'task');
 
-  await recordAudit({
-    action: 'task.moved',
-    resourceType: 'task',
-    resourceId: id,
-    result: 'success',
-    after: { data: { status: input.status }, allow: ['status'] },
+    await recordAudit(
+      {
+        action: 'task.moved',
+        resourceType: 'task',
+        resourceId: id,
+        result: 'success',
+        after: { data: { status: input.status }, allow: ['status'] },
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Mark a task done. */
@@ -288,21 +308,26 @@ export async function completeTask(id: string): Promise<TaskRow> {
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(tasks)
-    .set({ status: 'done' })
-    .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
-    .returning();
-  const row = expectRow(updated[0], 'task');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(tasks)
+      .set({ status: 'done' })
+      .where(scope.where(tasks.organisationId, eq(tasks.id, id)))
+      .returning();
+    const row = expectRow(updated[0], 'task');
 
-  await recordAudit({
-    action: 'task.completed',
-    resourceType: 'task',
-    resourceId: id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'task.completed',
+        resourceType: 'task',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+
+    return row;
   });
-
-  return row;
 }
 
 /** Soft-delete a task (removes it from the board; the row is retained). */
@@ -314,15 +339,20 @@ export async function deleteTask(id: string): Promise<void> {
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
 
   const scope = currentScope();
-  await scope.db
-    .update(tasks)
-    .set({ deletedAt: new Date() })
-    .where(scope.where(tasks.organisationId, eq(tasks.id, id)));
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .update(tasks)
+      .set({ deletedAt: new Date() })
+      .where(scope.where(tasks.organisationId, eq(tasks.id, id)));
 
-  await recordAudit({
-    action: 'task.deleted',
-    resourceType: 'task',
-    resourceId: id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'task.deleted',
+        resourceType: 'task',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }

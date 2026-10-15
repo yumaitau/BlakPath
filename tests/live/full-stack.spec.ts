@@ -22,11 +22,14 @@ async function signInApplicant(page: Page): Promise<void> {
   await page.getByLabel('Email').fill(APPLICANT_EMAIL);
   await page.getByLabel('Password').fill(APPLICANT_PASSWORD);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page).toHaveURL(/\/(?:select-organisation|dashboard)$/);
-  if (/\/select-organisation$/.test(page.url())) {
+  await expect(page).toHaveURL(/\/(?:select-organisation|portal)/);
+  if (/\/select-organisation/.test(page.url())) {
     await page.getByRole('button', { name: /BlakPath Development Organisation/ }).click();
   }
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/portal$/);
+  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toHaveCount(
+    0,
+  );
 }
 
 async function findMailpitMessage(
@@ -61,7 +64,8 @@ async function uploadEvidence(
   const applicantPage = await applicantContext.newPage();
   try {
     await signInApplicant(applicantPage);
-    await applicantPage.goto(applicationUrl);
+    const applicationId = new URL(applicationUrl).pathname.split('/').pop();
+    await applicantPage.goto(`/portal/${applicationId}`);
 
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -75,10 +79,9 @@ async function uploadEvidence(
     await applicantPage.getByRole('button', { name: 'Upload evidence' }).click();
     await expect(
       applicantPage.getByText(
-        'Evidence uploaded to quarantine. It cannot be opened until the scan is clean.',
+        'Your file has been sent. It is checked for safety before the organisation can open it.',
       ),
     ).toBeVisible();
-    await expect(applicantPage.getByText('Quarantined', { exact: true })).toBeVisible();
   } finally {
     await applicantContext.close();
   }

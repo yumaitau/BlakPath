@@ -3,11 +3,15 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { OrganisationPicker } from '@/components/tenancy/organisation-picker';
+import { OrganisationUnavailable } from '@/components/tenancy/organisation-unavailable';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { POST_SIGN_IN_PATH } from '@/lib/auth/landing';
+import { safeReturnTo, signInPath } from '@/lib/auth/return-to';
 import { getServerSession } from '@/lib/auth/session';
 import {
   getActiveOrganisationId,
+  hasUnavailableOrganisationMembership,
   listMembershipsForUser,
 } from '@/lib/tenancy/memberships';
 
@@ -15,8 +19,24 @@ export const metadata: Metadata = {
   title: 'Choose an organisation — BlakPath',
 };
 
-/** A pre-tenant route, intentionally outside the guarded staff route group. */
-export default async function SelectOrganisationPage() {
+/**
+ * A pre-tenant route, intentionally outside the guarded staff route group.
+ * `returnTo` (the page a fresh or expired session was heading for) is
+ * validated, then used as the destination once an organisation is chosen.
+ * `choose=1` shows the picker even when an organisation is already active.
+ */
+export default async function SelectOrganisationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ returnTo?: string | string[]; choose?: string }>;
+}) {
+  const { returnTo: requested, choose } = await searchParams;
+  // No requested page: /home sends applicant-only accounts to the portal and
+  // everyone else to the dashboard.
+  const returnTo = safeReturnTo(
+    typeof requested === 'string' ? requested : null,
+    POST_SIGN_IN_PATH,
+  );
   const session = await getServerSession();
   if (!session) {
     return (
@@ -26,7 +46,7 @@ export default async function SelectOrganisationPage() {
             <p>You need to sign in before choosing an organisation.</p>
             <div className="mt-4">
               <Button asChild variant="primary" size="sm">
-                <Link href="/sign-in">Sign in</Link>
+                <Link href={signInPath(returnTo)}>Sign in</Link>
               </Button>
             </div>
           </Alert>
@@ -38,10 +58,18 @@ export default async function SelectOrganisationPage() {
   const organisations = await listMembershipsForUser(session.user.id);
   const activeOrganisationId = getActiveOrganisationId(session);
   if (
+    choose !== '1' &&
     activeOrganisationId &&
     organisations.some((org) => org.organisationId === activeOrganisationId)
   ) {
-    redirect('/dashboard');
+    redirect(returnTo);
+  }
+
+  if (
+    organisations.length === 0 &&
+    (await hasUnavailableOrganisationMembership(session.user.id))
+  ) {
+    return <OrganisationUnavailable />;
   }
 
   return (
@@ -80,6 +108,7 @@ export default async function SelectOrganisationPage() {
                 slug: org.slug,
               }))}
               activeOrganisationId={activeOrganisationId}
+              returnTo={returnTo}
             />
           )}
         </div>

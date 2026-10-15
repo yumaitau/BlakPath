@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MIN_RETENTION_DAYS,
   RETENTION_RESOURCE_TYPES,
   dueForRetention,
   isExpired,
   isRetentionResourceType,
+  officialRecordBlocksDisposal,
   retentionCutoff,
 } from '@/domains/retention/rules';
 import { createPolicySchema, placeHoldSchema } from '@/domains/retention/schemas';
@@ -39,6 +41,11 @@ describe('dueForRetention (fail-safe on holds)', () => {
       dueForRetention({ recordDate: fresh, retentionDays: 30, isHeld: false, now }),
     ).toBe(false);
   });
+  it('never treats permanent retention as due', () => {
+    expect(
+      dueForRetention({ recordDate: old, retentionDays: null, isHeld: false, now }),
+    ).toBe(false);
+  });
 });
 
 describe('retention resource types + schemas', () => {
@@ -46,6 +53,7 @@ describe('retention resource types + schemas', () => {
     for (const t of RETENTION_RESOURCE_TYPES)
       expect(isRetentionResourceType(t)).toBe(true);
     expect(isRetentionResourceType('audit_event')).toBe(false);
+    expect(isRetentionResourceType('audit_chain')).toBe(false);
   });
 
   it('validates policy and hold input', () => {
@@ -54,13 +62,42 @@ describe('retention resource types + schemas', () => {
         resourceType: 'application',
         retentionDays: 365,
         action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: 'GA39 example',
+      }).success,
+    ).toBe(true);
+    // Longer than the old 10-year cap is a lawful keep, not a validation error.
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: 4000,
+        action: 'anonymise',
+        jurisdiction: 'vic',
       }).success,
     ).toBe(true);
     expect(
       createPolicySchema.safeParse({
-        resourceType: 'audit_event',
+        resourceType: 'certificate',
+        action: 'retain',
+        jurisdiction: 'qld',
+        retentionDays: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
         retentionDays: 365,
         action: 'purge',
+        jurisdiction: 'nsw',
+      }).success,
+    ).toBe(false);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'audit_chain',
+        retentionDays: 365,
+        action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: 'GA39 example',
       }).success,
     ).toBe(false);
     expect(
@@ -68,6 +105,40 @@ describe('retention resource types + schemas', () => {
         resourceType: 'application',
         retentionDays: 0,
         action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: 'GA39 example',
+      }).success,
+    ).toBe(false);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: MIN_RETENTION_DAYS - 1,
+        action: 'anonymise',
+        jurisdiction: 'nsw',
+      }).success,
+    ).toBe(false);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: MIN_RETENTION_DAYS,
+        action: 'anonymise',
+        jurisdiction: 'nsw',
+      }).success,
+    ).toBe(true);
+    expect(
+      createPolicySchema.safeParse({
+        resourceType: 'application',
+        retentionDays: MIN_RETENTION_DAYS,
+        action: 'purge',
+        jurisdiction: 'nsw',
+        authorityReference: '  ',
+      }).success,
+    ).toBe(false);
+    expect(
+      placeHoldSchema.safeParse({
+        resourceType: 'decision',
+        resourceId: '018f5b3a-0000-7000-8000-000000000000',
+        reason: 'litigation',
       }).success,
     ).toBe(false);
     expect(
@@ -77,5 +148,50 @@ describe('retention resource types + schemas', () => {
         reason: 'litigation',
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('official record disposal', () => {
+  it('refuses a decided or certified matter without a verified signed authority', () => {
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'decided',
+        hasFinalisedDecision: false,
+        hasIssuedCertificate: false,
+        authorityVerified: false,
+      }),
+    ).toBe(true);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'submitted',
+        hasFinalisedDecision: true,
+        hasIssuedCertificate: false,
+        authorityVerified: false,
+      }),
+    ).toBe(true);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'draft',
+        hasFinalisedDecision: false,
+        hasIssuedCertificate: true,
+        authorityVerified: false,
+      }),
+    ).toBe(true);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'decided',
+        hasFinalisedDecision: true,
+        hasIssuedCertificate: true,
+        authorityVerified: true,
+      }),
+    ).toBe(false);
+    expect(
+      officialRecordBlocksDisposal({
+        applicationStatus: 'withdrawn',
+        hasFinalisedDecision: false,
+        hasIssuedCertificate: false,
+        authorityVerified: false,
+      }),
+    ).toBe(false);
   });
 });

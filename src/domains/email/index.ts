@@ -1,6 +1,12 @@
 /**
- * Email domain — SES bounce/complaint suppressions.
- * Transport stays SMTP (SES SMTP interface in prod, Mailpit local);
- * SNS events land in suppressions via POST /api/email/events.
+ * Email domain — SES permanent-bounce and complaint suppressions.
+ * Production transport is the SES v2 API (Mailpit SMTP locally); the SES
+ * configuration set publishes events via SNS to POST /api/email/events.
+ * A platform operator clears one via POST /api/admin/email-suppressions.
  */
-export { hashAddress, isSuppressed, recordSuppression } from './service';
+export {
+  clearSuppression,
+  hashAddress,
+  isSuppressed,
+  recordSuppression,
+} from './service';

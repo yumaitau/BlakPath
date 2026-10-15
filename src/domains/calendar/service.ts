@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, lte, or } from 'drizzle-orm';
 import {
   calendarEventAttendees,
   calendarEventReminders,
@@ -7,6 +7,7 @@ import {
 } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
 import { expectRow } from '@/db/expect-row';
+import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -86,14 +87,22 @@ async function resourceConflicts(input: {
 /**
  * Whether this tenant hard-blocks resource double-booking. Tenant override
  * wins; platform default row (null organisation) next; absent = warn-only.
+ * The read is limited to this organisation and the platform default.
  */
-async function resourceHardBlock(): Promise<boolean> {
+export async function resourceHardBlock(): Promise<boolean> {
   const scope = currentScope();
   const rows = await scope.db
     .select()
     .from(featureFlags)
-    .where(eq(featureFlags.key, 'calendar-resource-hard-block'))
-    .limit(10);
+    .where(
+      and(
+        eq(featureFlags.key, 'calendar-resource-hard-block'),
+        or(
+          eq(featureFlags.organisationId, scope.organisationId),
+          isNull(featureFlags.organisationId),
+        ),
+      ),
+    );
   const orgRow = rows.find((r) => r.organisationId === scope.organisationId);
   if (orgRow) return orgRow.enabled;
   const platform = rows.find((r) => r.organisationId === null);
@@ -127,39 +136,45 @@ export async function createCalendarEvent(
     input.force,
     await resourceHardBlock(),
   );
-  const inserted = await scope.db
-    .insert(calendarEvents)
-    .values(
-      scope.insertValues({
-        title: input.title,
-        description: input.description ?? null,
-        location: input.location ?? null,
-        resource: input.resource ?? null,
-        startAt: input.startAt,
-        endAt: input.endAt ?? null,
-        allDay: input.allDay ?? false,
-        rrule: input.rrule ?? null,
-        exdate: input.exdate ?? null,
-        timezone: input.timezone ?? 'Australia/Sydney',
-        meetingId: input.meetingId ?? null,
-        createdByUserId: ctx.userId,
-        status: 'scheduled',
-      }),
-    )
-    .returning();
-  const event = expectRow(inserted[0], 'calendar event');
+  const event = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(calendarEvents)
+      .values(
+        scope.insertValues({
+          title: input.title,
+          description: input.description ?? null,
+          location: input.location ?? null,
+          resource: input.resource ?? null,
+          startAt: input.startAt,
+          endAt: input.endAt ?? null,
+          allDay: input.allDay ?? false,
+          rrule: input.rrule ?? null,
+          exdate: input.exdate ?? null,
+          timezone: input.timezone ?? 'Australia/Sydney',
+          meetingId: input.meetingId ?? null,
+          createdByUserId: ctx.userId,
+          status: 'scheduled',
+        }),
+      )
+      .returning();
+    const created = expectRow(inserted[0], 'calendar event');
+    await recordAudit(
+      {
+        action: 'calendar.created',
+        resourceType: 'calendar_event',
+        resourceId: created.id,
+        result: 'success',
+        after: { data: { title: created.title }, allow: ['title'] },
+      },
+      tx,
+    );
+    return created;
+  });
   const conflicts = await resourceConflicts({
     resource: event.resource,
     start: event.startAt,
     end: event.endAt,
     ignoreId: event.id,
-  });
-  await recordAudit({
-    action: 'calendar.created',
-    resourceType: 'calendar_event',
-    resourceId: event.id,
-    result: 'success',
-    after: { data: { title: event.title }, allow: ['title'] },
   });
   return { event, conflicts };
 }
@@ -223,34 +238,40 @@ export async function updateCalendarEvent(
     await resourceHardBlock(),
   );
   const scope = currentScope();
-  const updated = await scope.db
-    .update(calendarEvents)
-    .set({
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.location !== undefined ? { location: input.location } : {}),
-      ...(input.resource !== undefined ? { resource: input.resource } : {}),
-      ...(input.startAt !== undefined ? { startAt: input.startAt } : {}),
-      ...(input.endAt !== undefined ? { endAt: input.endAt } : {}),
-      ...(input.allDay !== undefined ? { allDay: input.allDay } : {}),
-      ...(input.rrule !== undefined ? { rrule: input.rrule } : {}),
-      ...(input.exdate !== undefined ? { exdate: input.exdate } : {}),
-      ...(input.status !== undefined ? { status: input.status } : {}),
-    })
-    .where(scope.where(calendarEvents.organisationId, eq(calendarEvents.id, id)))
-    .returning();
-  const event = expectRow(updated[0], 'calendar event');
+  const event = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(calendarEvents)
+      .set({
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.location !== undefined ? { location: input.location } : {}),
+        ...(input.resource !== undefined ? { resource: input.resource } : {}),
+        ...(input.startAt !== undefined ? { startAt: input.startAt } : {}),
+        ...(input.endAt !== undefined ? { endAt: input.endAt } : {}),
+        ...(input.allDay !== undefined ? { allDay: input.allDay } : {}),
+        ...(input.rrule !== undefined ? { rrule: input.rrule } : {}),
+        ...(input.exdate !== undefined ? { exdate: input.exdate } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+      })
+      .where(scope.where(calendarEvents.organisationId, eq(calendarEvents.id, id)))
+      .returning();
+    const saved = expectRow(updated[0], 'calendar event');
+    await recordAudit(
+      {
+        action: 'calendar.updated',
+        resourceType: 'calendar_event',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return saved;
+  });
   const conflicts = await resourceConflicts({
     resource: event.resource,
     start: event.startAt,
     end: event.endAt,
     ignoreId: event.id,
-  });
-  await recordAudit({
-    action: 'calendar.updated',
-    resourceType: 'calendar_event',
-    resourceId: id,
-    result: 'success',
   });
   return { event, conflicts };
 }
@@ -261,15 +282,20 @@ export async function deleteCalendarEvent(id: string): Promise<void> {
   const existing = await loadEvent(id);
   if (!existing) throw new AuthorizationError('POLICY_DENIED');
   const scope = currentScope();
-  await scope.db
-    .update(calendarEvents)
-    .set({ deletedAt: new Date() })
-    .where(scope.where(calendarEvents.organisationId, eq(calendarEvents.id, id)));
-  await recordAudit({
-    action: 'calendar.deleted',
-    resourceType: 'calendar_event',
-    resourceId: id,
-    result: 'success',
+  await scope.db.transaction(async (tx) => {
+    await tx
+      .update(calendarEvents)
+      .set({ deletedAt: new Date() })
+      .where(scope.where(calendarEvents.organisationId, eq(calendarEvents.id, id)));
+    await recordAudit(
+      {
+        action: 'calendar.deleted',
+        resourceType: 'calendar_event',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
   });
 }
 
@@ -316,27 +342,23 @@ export async function inviteAttendees(eventId: string): Promise<{ invited: numbe
       ),
     )
     .limit(100);
-  const { addJob, QueueName } = await import('@/lib/queues');
+  const { queueTenantEmail } = await import('@/lib/email/queue');
   let invited = 0;
   for (const a of attendees) {
     if (!a.email || a.userId) continue;
     const when = event.startAt.toISOString();
-    await addJob(
-      QueueName.Email,
-      'event-invite',
-      {
-        organisationId: scope.organisationId,
-        correlationId: ctx.correlationId,
-        to: a.email,
-        subject: `Invitation: ${event.title}`,
-        text: [
-          `You are invited: ${event.title}.`,
-          `When: ${when}${event.location ? ` at ${event.location}` : ''}.`,
-          'Sign in to BlakPath to respond.',
-        ].join('\n'),
-      },
-      { jobId: `event-invite:${a.id}` },
-    );
+    await queueTenantEmail({
+      organisationId: scope.organisationId,
+      correlationId: ctx.correlationId,
+      to: a.email,
+      subject: `Invitation: ${event.title}`,
+      text: [
+        `You are invited: ${event.title}.`,
+        `When: ${when}${event.location ? ` at ${event.location}` : ''}.`,
+        'Sign in to BlakPath to respond.',
+      ].join('\n'),
+      jobId: `event-invite:${a.id}`,
+    });
     invited += 1;
   }
   await recordAudit({
@@ -344,7 +366,8 @@ export async function inviteAttendees(eventId: string): Promise<{ invited: numbe
     resourceType: 'calendar_event',
     resourceId: eventId,
     result: 'success',
-    reason: `invited ${invited} attendee(s)`,
+    reason: 'calendar.attendees_invited',
+    after: { data: { invited }, allow: ['invited'] },
   });
   return { invited };
 }
@@ -411,25 +434,30 @@ export async function countUpcoming(): Promise<number> {
     }
     if (row.userId !== ctx.userId) throw new AuthorizationError('POLICY_DENIED');
   }
-  const updated = await scope.db
-    .update(calendarEventAttendees)
-    .set({ responseStatus })
-    .where(
-      scope.where(
-        calendarEventAttendees.organisationId,
-        eq(calendarEventAttendees.id, attendeeId),
-      ),
-    )
-    .returning();
-  const updatedRow = expectRow(updated[0], 'attendee');
-  await recordAudit({
-    action: 'calendar.updated',
-    resourceType: 'calendar_event',
-    resourceId: row.eventId,
-    result: 'success',
-    reason: `rsvp ${responseStatus}`,
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(calendarEventAttendees)
+      .set({ responseStatus })
+      .where(
+        scope.where(
+          calendarEventAttendees.organisationId,
+          eq(calendarEventAttendees.id, attendeeId),
+        ),
+      )
+      .returning();
+    const updatedRow = expectRow(updated[0], 'attendee');
+    await recordAudit(
+      {
+        action: 'calendar.updated',
+        resourceType: 'calendar_event',
+        resourceId: row.eventId,
+        result: 'success',
+        reason: auditReason('calendar.rsvp', responseStatus),
+      },
+      tx,
+    );
+    return updatedRow;
   });
-  return updatedRow;
 }
 
 /**

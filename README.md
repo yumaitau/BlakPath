@@ -3,7 +3,9 @@
 > **Public code. Open for audit.** This repository is public under
 > [`yumaitau`](https://github.com/yumaitau) so any community member, council,
 > auditor or researcher can read, review and verify exactly what the software
-> does. No hidden logic. No hidden determination. See
+> does. No hidden logic. No hidden determination. The source is licensed under
+> the GNU Affero General Public License, version 3 only
+> ([`LICENSE`](LICENSE)). See
 > [`docs/threat-model.md`](docs/threat-model.md),
 > [`docs/privacy-architecture.md`](docs/privacy-architecture.md) and
 > [`docs/audit-log-design.md`](docs/audit-log-design.md) to verify.
@@ -69,6 +71,9 @@ the platform's underlying systems to use it.
 
 - The top navigation takes staff directly to the dashboard, work board,
   meetings, forms and account settings.
+- Organisation tools (reports, imports, consents, representatives, API keys,
+  webhooks, single sign-on and retention) appear only when the person's role
+  includes that task.
 - The dashboard starts with clear counts and visual workload charts, then
   highlights items that need attention.
 - The work board has an **Add task** action and accepts drops into every column,
@@ -126,7 +131,7 @@ read as the software making an identity determination, it does not ship.
 
 ## Quickstart
 
-Prerequisites: Node `>= 20.11`, `pnpm 9`, Docker + Docker Compose. Full detail
+Prerequisites: Node `24.21.0` (`.nvmrc`), `pnpm 9`, Docker + Docker Compose. Full detail
 in [`docs/local-development.md`](docs/local-development.md).
 
 ```bash
@@ -137,7 +142,7 @@ pnpm install
 cp .env.example .env
 #    Generate secrets:
 #      openssl rand -base64 48   # BETTER_AUTH_SECRET
-#      openssl rand -base64 32   # ENCRYPTION_MASTER_KEY
+#    Dev envelope encryption uses the local provider. No master key required.
 
 # 3. Start local infrastructure (Postgres, Redis, MinIO, ClamAV, Mailpit)
 docker compose up -d
@@ -146,6 +151,7 @@ docker compose up -d
 pnpm db:migrate
 
 # 5. Seed baseline data (permission catalogue, system roles, dev org/user)
+#    Developer accounts need ALLOW_DEV_SEED=1 and a loopback DATABASE_URL.
 pnpm db:seed
 
 # 6. Run the app (and, in another shell, the background worker)
@@ -173,6 +179,7 @@ The app runs at <http://localhost:3000>.
 | `pnpm db:migrate`    | Apply migrations                              |
 | `pnpm db:studio`     | Open Drizzle Studio                           |
 | `pnpm db:seed`       | Seed baseline data                            |
+| `pnpm org:provision` | Provision an organisation (operator command)  |
 
 Accessibility acceptance coverage and the required assisted-review record are
 documented in [`docs/accessibility-acceptance.md`](docs/accessibility-acceptance.md).
@@ -182,11 +189,15 @@ documented in [`docs/accessibility-acceptance.md`](docs/accessibility-acceptance
 ```text
 BlakPath/
 ├── .github/                      CI workflows
+├── certs/                        RDS CA bundle for verify-full Postgres TLS
 ├── docker/                       Local service config (MinIO init, OpenTelemetry)
 ├── docs/                         Architecture, security, and operations docs
 ├── infra/                        AWS and Kubernetes manifests (humans apply these)
 ├── public/                       Static assets
 ├── scripts/                      Operational and verification scripts
+├── LICENSE                       Source licence, AGPL-3.0-only
+├── SECURITY.md                   Private vulnerability reporting
+├── README.md                     This file
 ├── src/
 │   ├── app/                      App Router pages and layouts
 │   │   └── api/                  Route handlers
@@ -196,6 +207,7 @@ BlakPath/
 │   ├── domains/                  Tenant-scoped domain services
 │   ├── instrumentation.ts        Next.js instrumentation hook
 │   ├── lib/                      Shared libraries (auth, env, queues, storage)
+│   ├── proxy.ts                  Next.js proxy: CSP, request limits, mutation guard
 │   └── styles/                   Global CSS
 ├── tests/                        unit / integration / e2e / live
 └── worker/                       BullMQ worker entrypoint and processors
@@ -206,31 +218,60 @@ lives at the repository root.
 
 ## Documentation
 
-| Document                                                               | Contents                                                                                       |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| [`docs/architecture.md`](docs/architecture.md)                         | Modular monolith, domains, system-context & container diagrams, request lifecycle, worker role |
-| [`docs/tenant-isolation.md`](docs/tenant-isolation.md)                 | The isolation model end-to-end and the isolation tests that must pass                          |
-| [`docs/authentication.md`](docs/authentication.md)                     | Better Auth, MFA/passkeys/TOTP, sessions, step-up, SSO/SCIM future                             |
-| [`docs/authorization-matrix.md`](docs/authorization-matrix.md)         | Roles × permission keys, separation of duties, contextual policies                             |
-| [`docs/audit-log-design.md`](docs/audit-log-design.md)                 | Event schema, SHA-256 hash chaining, checkpoints, redaction                                    |
-| [`docs/threat-model.md`](docs/threat-model.md)                         | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |
-| [`docs/privacy-architecture.md`](docs/privacy-architecture.md)         | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
-| [`docs/production-readiness.md`](docs/production-readiness.md)         | Production release gate, monitoring, backups and restore drills                                |
-| [`docs/operations-runbook.md`](docs/operations-runbook.md)             | Alert signals and incident response actions                                                    |
-| [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md) | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |
-| [`docs/local-development.md`](docs/local-development.md)               | Setup, services, commands, testing, troubleshooting                                            |
-| [`docs/council-trust-model.md`](docs/council-trust-model.md)           | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
-| [`docs/calendar-vision.md`](docs/calendar-vision.md)                   | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                 |
-| [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                         | Full user-journey e2e matrix across auth, CoA, teams, calendar                                 |
-| [`docs/eks-runbook.md`](docs/eks-runbook.md)                           | EKS deploy, data services, SES, restore drill, alarms                                          |
-| [`docs/council-onboarding.md`](docs/council-onboarding.md)             | New council tenant: teams, identity/SSO, go-live gate, legacy import                           |
+| Document                                                                     | Contents                                                                                       |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [`docs/architecture.md`](docs/architecture.md)                               | Modular monolith, domains, system-context & container diagrams, request lifecycle, worker role |
+| [`docs/tenant-isolation.md`](docs/tenant-isolation.md)                       | The isolation model end-to-end and the isolation tests that must pass                          |
+| [`docs/authentication.md`](docs/authentication.md)                           | Better Auth, MFA/passkeys/TOTP, sessions, step-up, SSO, per-org SCIM                           |
+| [`docs/rate-limits.md`](docs/rate-limits.md)                                 | Shared request limits for auth, public pages, and bearer endpoints                             |
+| [`docs/authorization-matrix.md`](docs/authorization-matrix.md)               | Roles × permission keys, separation of duties, contextual policies                             |
+| [`docs/audit-log-design.md`](docs/audit-log-design.md)                       | Event schema, SHA-256 hash chaining, checkpoints, redaction, viewer                            |
+| [`docs/audit-monthly-review.md`](docs/audit-monthly-review.md)               | Monthly tenant audit-log review checklist                                                      |
+| [`docs/threat-model.md`](docs/threat-model.md)                               | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |
+| [`docs/privacy-architecture.md`](docs/privacy-architecture.md)               | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
+| [`docs/customer-held-keys.md`](docs/customer-held-keys.md)                   | Client trust pack (draft): key custody modes, revocation, crypto-shredding, auditor checks     |
+| [`docs/adr/0001-customer-held-keys.md`](docs/adr/0001-customer-held-keys.md) | ADR: key custody modes, trust boundaries, escrow; what is implemented and what is deferred     |
+| [`docs/production-readiness.md`](docs/production-readiness.md)               | Production release gate, monitoring, backups and restore drills                                |
+| [`docs/operations-runbook.md`](docs/operations-runbook.md)                   | Alert signals and incident response actions                                                    |
+| [`docs/key-escrow-runbook.md`](docs/key-escrow-runbook.md)                   | Optional key escrow: offline ceremony CLI, escrow vault, dual-control release, drills          |
+| [`docs/evidence-scanning-design.md`](docs/evidence-scanning-design.md)       | Secure upload → quarantine → ClamAV → promote/serve lifecycle                                  |
+| [`docs/local-development.md`](docs/local-development.md)                     | Setup, services, commands, testing, troubleshooting                                            |
+| [`docs/council-trust-model.md`](docs/council-trust-model.md)                 | Councils as tenants, clients, teams/groups, Better Auth boundary, onboarding                   |
+| [`docs/calendar-vision.md`](docs/calendar-vision.md)                         | RangerOS-parity calendar: views, recurrence, attendees, reminders, build order                 |
+| [`docs/e2e-journeys.md`](docs/e2e-journeys.md)                               | Full user-journey e2e matrix across auth, CoA, teams, calendar                                 |
+| [`docs/eks-runbook.md`](docs/eks-runbook.md)                                 | EKS deploy, secret sync, origin edge, restore drill, alarms                                    |
+| [`docs/adr/0001-dedicated-cluster.md`](docs/adr/0001-dedicated-cluster.md)   | Dedicated EKS cluster for BlakPath; shared-cluster rules until cutover                         |
+| [`docs/council-onboarding.md`](docs/council-onboarding.md)                   | New council tenant: teams, identity/SSO, go-live gate, legacy import                           |
+| --------------------------------------------------------------------------   | ---------------------------------------------------------------------------------------------- |
+| [`docs/branch-protection.md`](docs/branch-protection.md)                     | `main` ruleset, merge queue, required checks and code owners                                   |
+| [`SECURITY.md`](SECURITY.md)                                                 | Private vulnerability reporting, response targets and safe harbour                             |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)                                         | Contribution rules, including the ban on software determining identity                         |
 
 ## Licence & governance — open code, community authority
 
-BlakPath code is public and auditable. Data governance and cultural authority
-stay with the relevant Aboriginal and Torres Strait Islander organisations,
-councils and communities. The software is a custodial tool, not a
-decision-maker.
+BlakPath source code is licensed under the GNU Affero General Public License,
+version 3 only ([`LICENSE`](LICENSE), SPDX `AGPL-3.0-only`). Copyright (C)
+2026 Yuma IT. That licence is the legal grant behind "public code, open for
+audit": you may run, study, modify and share the program, including when a
+modified version is offered as a network service, and corresponding source
+stays available to its users.
+
+Version 3 only. Later versions of the GNU licence do not apply unless the
+copyright holder adds that permission. This README is not legal advice; the
+`LICENSE` text controls.
+
+The licence covers source code in this repository. It does not cover, and
+does not give anyone the right to collect, publish or reuse:
+
+- Confirmation of Aboriginality records, or any other personal information
+- genealogy, evidence, correspondence or audit contents
+- cultural knowledge, or a community's authority over its own decisions
+
+Data governance and cultural authority stay with the relevant Aboriginal and
+Torres Strait Islander organisations, councils and communities. The software
+is a custodial tool, not a decision-maker. It must not score, rank, predict,
+infer, auto-approve or auto-reject Aboriginality. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 - **Use by any local council:** any council or authorised community
   organisation can deploy its own isolated tenant, configure its own roles,
@@ -239,5 +280,5 @@ decision-maker.
   (`docs/tenant-isolation.md`).
 - **Audit it:** all sensitive actions are permission-checked and written to an
   append-only, hash-chained audit trail (`docs/audit-log-design.md`).
-  Report issues via GitHub Issues; security issues via the process in
-  `docs/operations-runbook.md`.
+  Report product issues via GitHub Issues. Report security vulnerabilities
+  privately, as described in [`SECURITY.md`](SECURITY.md).
