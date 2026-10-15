@@ -56,6 +56,7 @@ import {
 } from '@/domains/family-links';
 import { listResponsesForApplication } from '@/domains/forms';
 import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
+import { listActiveStaff, listClients } from '@/domains/teams';
 import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { hasAny, hasPermission, subjectFromContext } from '@/lib/permissions/check';
@@ -107,6 +108,11 @@ export default async function ApplicationDetailPage({
     // A malformed id cannot exist: refuse it like any unreadable record.
     if (!isRecordId(id)) throw new AuthorizationError('POLICY_DENIED');
     data = await withRequestTenant(async (ctx) => {
+      const mayAssign = ctx.permissions.has('application:assign');
+      const mayLinkClient =
+        ctx.permissions.has('application:update-intake') &&
+        (ctx.permissions.has('client:read-any') ||
+          ctx.permissions.has('client:read-assigned'));
       const subject = subjectFromContext(ctx);
       // Genealogy is culturally sensitive: only family-link roles load it.
       const readFamilyLinks = canReadFamilyLinks(subject);
@@ -120,6 +126,8 @@ export default async function ApplicationDetailPage({
         formResponses,
         familyLinks,
         deceasedWarning,
+        staff,
+        clients,
       ] = await Promise.all([
         getApplicationCaseRecord(id),
         listForApplication(id),
@@ -130,6 +138,8 @@ export default async function ApplicationDetailPage({
         listResponsesForApplication(id),
         readFamilyLinks ? listFamilyLinks(id) : Promise.resolve(null),
         readFamilyLinks ? loadDeceasedNameWarning() : Promise.resolve(''),
+        mayAssign ? listActiveStaff() : Promise.resolve([]),
+        mayLinkClient ? listClients() : Promise.resolve([]),
       ]);
       const allowedKinds = CORRESPONDENCE_KINDS.filter((kind) =>
         maySendKind(kind, subject.permissions),
@@ -171,6 +181,12 @@ export default async function ApplicationDetailPage({
           priority: application.priority,
           status: application.status,
           assignedToCurrentUser: application.currentAssigneeUserId === ctx.userId,
+          clientId: application.clientId,
+          clients: clients.map((client) => ({
+            id: client.id,
+            displayName: client.displayName,
+          })),
+          staff,
           availableActions: actions,
           evidence: evidence.map((item) => ({
             id: item.id,

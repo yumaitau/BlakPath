@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { Page } from '@playwright/test';
+import postgres from 'postgres';
 import { expect, test } from './helpers/page';
 import {
   DEV_ORGANISATION_NAME,
@@ -9,6 +11,7 @@ import { expectNoWcagViolations } from './helpers/accessibility';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
+  selectDevelopmentOrganisation,
   selectOrganisation,
   signInAndSelectOrganisation,
   signInAs,
@@ -256,4 +259,211 @@ test('teams: invitation accept requires a session', async ({ page, request }) =>
   await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized' });
   await page.goto('/sign-in');
   await finishPage(page, pageErrors);
+});
+
+/**
+ * Staff MFA policy gates the staff shell. Give invited case officers a
+ * fixture passkey, like the dev seed and the SSO journey, so the spec reaches
+ * the team-scoping decision rather than the enrolment redirect.
+ */
+async function enrolFixturePasskeys(emails: readonly string[]): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required for staff MFA fixtures.');
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    for (const email of emails) {
+      const [user] = await sql<{ id: string }[]>`
+        select id from users where email = ${email}`;
+      if (!user) throw new Error(`No account was created for ${email}.`);
+      await sql`
+        insert into passkeys (id, user_id, name, credential_id, public_key, counter)
+        select ${randomUUID()}, ${user.id}, 'Team E2E fixture passkey',
+               ${`team-e2e-${user.id}`}, 'team-e2e-fixture-passkey', 0
+        where not exists (select 1 from passkeys where user_id = ${user.id})`;
+    }
+  } finally {
+    await sql.end();
+  }
+}
+
+test('team member reads a linked case and a non-member is denied', async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const adminContext = await browser.newContext();
+  const page = await adminContext.newPage();
+  const password = 'blakpath-dev-team-2026';
+  const stamp = Date.now().toString(36);
+  const memberEmail = `team-member-${stamp}@blakpath.test`;
+  const outsiderEmail = `team-outsider-${stamp}@blakpath.test`;
+  const memberName = `Team Member ${stamp}`;
+  const outsiderName = `Outsider ${stamp}`;
+  const matterName = `Scoped matter ${stamp}`;
+
+  try {
+    await signInAs(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await selectDevelopmentOrganisation(page);
+
+    const rolesResponse = await page.request.get('/api/memberships');
+    expect(rolesResponse.status()).toBe(200);
+    const { roles } = (await rolesResponse.json()) as {
+      roles: Array<{ id: string; name: string }>;
+    };
+    const caseOfficer = roles.find((role) => role.name === 'Case Officer');
+    expect(caseOfficer).toBeTruthy();
+
+    async function invite(email: string): Promise<string> {
+      const response = await page.request.post('/api/membership-invitations', {
+        data: { email, roleId: caseOfficer?.id },
+      });
+      expect(response.status()).toBe(201);
+      const body = (await response.json()) as { url: string };
+      const token = new URL(body.url).pathname.split('/').pop();
+      if (!token) throw new Error('Invitation URL did not include a token.');
+      return token;
+    }
+
+    const memberToken = await invite(memberEmail);
+    const outsiderToken = await invite(outsiderEmail);
+    for (const [token, name] of [
+      [memberToken, memberName],
+      [outsiderToken, outsiderName],
+    ] as const) {
+      const created = await page.request.post(
+        '/api/membership-invitations/create-account',
+        {
+          data: { token, name, password },
+        },
+      );
+      expect(created.status()).toBe(201);
+    }
+    await enrolFixturePasskeys([memberEmail, outsiderEmail]);
+
+    const teamResponse = await page.request.post('/api/teams', {
+      data: { slug: `e2e-scope-${stamp}`, name: `Scope ${stamp}` },
+    });
+    expect(teamResponse.status()).toBe(201);
+    const teamId = ((await teamResponse.json()) as { team: { id: string } }).team.id;
+
+    const groupResponse = await page.request.post('/api/groups', {
+      data: { slug: `e2e-group-${stamp}`, name: `Group ${stamp}` },
+    });
+    expect(groupResponse.status()).toBe(201);
+
+    const clientResponse = await page.request.post('/api/clients', {
+      data: { displayName: `Scoped client ${stamp}`, assignedTeamId: teamId },
+    });
+    expect(clientResponse.status()).toBe(201);
+    const clientId = ((await clientResponse.json()) as { client: { id: string } }).client
+      .id;
+
+    await page.goto('/applications');
+    await page.getByLabel('Name as provided').fill(matterName);
+    await page.getByLabel('Client record (optional)').selectOption({
+      label: `Scoped client ${stamp}`,
+    });
+    await page.getByRole('button', { name: 'Start application' }).click();
+    await expect(page).toHaveURL(/\/applications\/[0-9a-f-]{36}$/);
+    const applicationId = new URL(page.url()).pathname.split('/').pop();
+    if (!applicationId) throw new Error('Application URL did not include an id.');
+    await expect(page.getByLabel('Client record')).toHaveValue(clientId);
+    const application = { id: applicationId };
+
+    async function acceptAs(email: string, token: string) {
+      const context = await browser.newContext();
+      const userPage = await context.newPage();
+      await signInAs(userPage, email, password);
+      const accepted = await userPage.request.post('/api/membership-invitations/accept', {
+        data: { token },
+      });
+      expect(accepted.status()).toBe(200);
+      return { context, userPage };
+    }
+
+    const member = await acceptAs(memberEmail, memberToken);
+    const outsider = await acceptAs(outsiderEmail, outsiderToken);
+    try {
+      await member.userPage.goto(`/applications/${application.id}`);
+      await expect(
+        member.userPage.getByRole('heading', { name: 'Application unavailable' }),
+      ).toBeVisible();
+
+      await page.goto('/settings/teams');
+      const teamItem = page.getByRole('listitem').filter({
+        has: page.getByRole('button', { name: `Add to Scope ${stamp}` }),
+      });
+      await teamItem.getByLabel('Staff member').selectOption({
+        label: `${memberName} (${memberEmail})`,
+      });
+      await teamItem.getByRole('button', { name: `Add to Scope ${stamp}` }).click();
+      await expect(page.getByText('Team member added.')).toBeVisible();
+      await expect(
+        teamItem.getByRole('button', {
+          name: `Remove ${memberName} from Scope ${stamp}`,
+        }),
+      ).toBeVisible();
+
+      const memberList = await member.userPage.request.get('/api/applications?limit=100');
+      expect(memberList.status()).toBe(200);
+      const memberItems = ((await memberList.json()) as { items: Array<{ id: string }> })
+        .items;
+      expect(memberItems.some((item) => item.id === application.id)).toBe(true);
+      await member.userPage.goto(`/applications/${application.id}`);
+      await expect(member.userPage.getByLabel('Name as provided')).toHaveValue(
+        matterName,
+      );
+
+      const outsiderList = await outsider.userPage.request.get(
+        '/api/applications?limit=100',
+      );
+      expect(outsiderList.status()).toBe(200);
+      const outsiderItems = (
+        (await outsiderList.json()) as { items: Array<{ id: string }> }
+      ).items;
+      expect(outsiderItems.some((item) => item.id === application.id)).toBe(false);
+      await outsider.userPage.goto(`/applications/${application.id}`);
+      await expect(
+        outsider.userPage.getByRole('heading', { name: 'Application unavailable' }),
+      ).toBeVisible();
+
+      await teamItem
+        .getByRole('button', { name: `Remove ${memberName} from Scope ${stamp}` })
+        .click();
+      await expect(page.getByText('Team member removed.')).toBeVisible();
+      await member.userPage.goto(`/applications/${application.id}`);
+      await expect(
+        member.userPage.getByRole('heading', { name: 'Application unavailable' }),
+      ).toBeVisible();
+
+      await page.goto(`/applications/${application.id}`);
+      await page.getByLabel('Assign to a colleague').selectOption({
+        label: `${memberName} (${memberEmail})`,
+      });
+      await page.getByRole('button', { name: 'Assign case' }).click();
+      await expect(page.getByText('Case assigned.')).toBeVisible();
+      await member.userPage.goto(`/applications/${application.id}`);
+      await expect(
+        member.userPage.getByText('This case is assigned to you.'),
+      ).toBeVisible();
+
+      const groupItem = page.locator('section[aria-label="Groups"] li').filter({
+        has: page.getByRole('button', { name: `Add to Group ${stamp}` }),
+      });
+      await page.goto('/settings/teams');
+      await groupItem.getByLabel('Staff member').selectOption({
+        label: `${outsiderName} (${outsiderEmail})`,
+      });
+      await groupItem.getByRole('button', { name: `Add to Group ${stamp}` }).click();
+      await expect(page.getByText('Group member added.')).toBeVisible();
+      await groupItem
+        .getByRole('button', { name: `Remove ${outsiderName} from Group ${stamp}` })
+        .click();
+      await expect(page.getByText('Group member removed.')).toBeVisible();
+    } finally {
+      await member.context.close();
+      await outsider.context.close();
+    }
+  } finally {
+    await adminContext.close();
+  }
 });

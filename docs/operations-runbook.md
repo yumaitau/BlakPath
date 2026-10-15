@@ -23,6 +23,9 @@ incident ticket.
    endpoint URL, or rotate the signing secret from the management API. The
    secret is shown once at creation and once at rotation. Do not copy it into
    the ticket.
+   Exports recover on their own: the export maintenance sweep re-enqueues an
+   export stuck `processing` for 15 minutes (a dead worker) and marks it
+   `failed` after 3 interrupted attempts.
 5. Record the remediation and confirm the queue’s failed count returns to its
    expected baseline.
 
@@ -75,6 +78,9 @@ and `redriven` for one organisation. Page when the oldest age stays at or above
    no unscanned object may be promoted or downloaded.
 3. Restore the scanner and watch BullMQ retries drain. Page if two consecutive
    five-minute periods report the signal.
+4. The quarantine bucket expires objects after 2 days. An outage longer than
+   that loses the affected uploads (records stay quarantined, never promoted);
+   ask uploaders to re-submit rather than restoring objects from backup.
 
 ## `clamav_signature_age`
 

@@ -5,7 +5,7 @@ import { QueueName, type TenantJob } from '@/lib/queues';
 import { processEvidenceScan } from '@/domains/evidence';
 import { sweepEvidenceScans } from '@/domains/evidence/sweep';
 import { processWebhookDelivery, sweepStaleWebhookDeliveries } from '@/domains/webhooks';
-import { processExport } from '@/domains/reporting';
+import { processExport, processExportMaintenance } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
 import { scopeFor } from '@/db/tenant-db';
@@ -271,11 +271,17 @@ const webhookProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Export processor. Assembles the requested report as CSV, stores it, and marks
- * the request ready (or failed). A malformed payload is dropped, not retried.
+ * Export processor. `generate` jobs assemble the requested report as CSV, store
+ * it, and mark the request ready (or failed); a malformed payload is dropped,
+ * not retried. Scheduled `sweep` jobs expire past-window exports and recover
+ * exports stranded by a dead worker.
  */
 const exportProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
+  if (job.name === 'sweep') {
+    await processExportMaintenance({ organisationId, correlationId });
+    return;
+  }
   const exportRequestId = (job.data as { exportRequestId?: unknown }).exportRequestId;
   if (typeof exportRequestId !== 'string' || exportRequestId.length === 0) {
     logger.error({ jobId: job.id }, 'export job missing exportRequestId — dropping');

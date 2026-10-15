@@ -179,6 +179,18 @@ Resources:
                 Resource:
                   - !Sub '${EvidenceBucketArn}/*/applications/*/evidence/*'
                   - !Sub '${EvidenceBucketArn}/*/exports/*'
+              # Exports are streamed (multipart), tagged at creation for the
+              # bucket lifecycle rule, and every version is purged on expiry
+              # (DeleteObjects needs both delete actions). Listing versions is
+              # covered by RetentionVersionList.
+              - Sid: ExportLifecycle
+                Effect: Allow
+                Action:
+                  - s3:PutObjectTagging
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: !Sub '${EvidenceBucketArn}/*/exports/*'
               # Tenant key rewrap copies each evidence object onto itself.
               - Sid: EvidenceRewrapRead
                 Effect: Allow

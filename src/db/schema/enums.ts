@@ -208,12 +208,16 @@ export const retentionAction = pgEnum('retention_action', [
   'retain',
 ]);
 
-/** Lifecycle of an export request. */
+/**
+ * Lifecycle of an export request. `expired` means the download window closed
+ * and the stored file (every object version) has been removed.
+ */
 export const exportStatus = pgEnum('export_status', [
   'pending',
   'processing',
   'ready',
   'failed',
+  'expired',
 ]);
 
 /** Delivery state of a single webhook dispatch. */

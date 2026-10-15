@@ -20,6 +20,7 @@ const productionReview: Record<string, Review> = {
   '@aws-sdk/client-kms': { latestMajor: 3 },
   '@aws-sdk/client-s3': { latestMajor: 3 },
   '@aws-sdk/client-sesv2': { latestMajor: 3 },
+  '@aws-sdk/lib-storage': { latestMajor: 3 },
   '@aws-sdk/s3-request-presigner': { latestMajor: 3 },
   '@better-auth/passkey': { latestMajor: 1 },
   '@dnd-kit/core': { latestMajor: 6 },
