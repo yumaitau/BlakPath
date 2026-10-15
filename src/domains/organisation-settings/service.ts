@@ -207,7 +207,8 @@ export async function updateOrganisationSetting(
         resourceType: 'organisation_settings',
         resourceId: row.id,
         result: 'success',
-        reason: `settings.${input.field}`,
+        // Field names are fixed identifiers from SETTINGS_FIELDS, so already coded.
+        reason: input.field,
         before: settingsAuditMeta(
           input.field,
           beforeUnreadable ? beforeRaw : beforeParsed,
