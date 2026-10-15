@@ -39,6 +39,10 @@ const LISTED_ROUTES = [
   'POST /api/retention/disposal-authorities',
   'POST /api/break-glass/[id]/deny',
   'POST /api/break-glass/[id]/revoke',
+  'POST /api/break-glass',
+  'POST /api/break-glass/[id]/activate',
+  'POST /api/break-glass/[id]/approve',
+  'POST /api/break-glass/[id]/review',
 ] as const;
 
 describe('step-up route map', () => {
@@ -91,6 +95,14 @@ describe('step-up route map', () => {
     expect(STEP_UP_ROUTES['POST /api/break-glass/[id]/revoke']).toBe(
       STEP_UP_WINDOWS.privileged,
     );
+    for (const route of [
+      'POST /api/break-glass',
+      'POST /api/break-glass/[id]/activate',
+      'POST /api/break-glass/[id]/approve',
+      'POST /api/break-glass/[id]/review',
+    ] as const) {
+      expect(STEP_UP_ROUTES[route]).toBe(STEP_UP_WINDOWS.privileged);
+    }
     expect(STEP_UP_WINDOWS.privileged).toBe(5 * 60);
     expect(STEP_UP_WINDOWS.sensitiveAction).toBe(10 * 60);
     expect(STEP_UP_WINDOWS.destructive).toBe(15 * 60);

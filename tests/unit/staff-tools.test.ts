@@ -16,6 +16,8 @@ describe('staff tool navigation', () => {
       expect.arrayContaining(['Reports', 'API keys', 'Webhooks', 'Single sign-on']),
     );
     expect(admin).toContain('Audit trail');
+    expect(admin).toContain('Break-glass');
+    expect(labelsFor('case-officer')).not.toContain('Break-glass');
     expect(admin).not.toContain('Retention');
     expect(admin).not.toContain('Imports');
     expect(admin).not.toContain('Consents');

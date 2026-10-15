@@ -15,6 +15,10 @@ import { GET as downloadEvidence } from '@/app/api/evidence/[id]/download/route'
 import { GET as readMeetingPack } from '@/app/api/meetings/[id]/pack/route';
 import { POST as denyBreakGlass } from '@/app/api/break-glass/[id]/deny/route';
 import { POST as revokeBreakGlass } from '@/app/api/break-glass/[id]/revoke/route';
+import { POST as requestBreakGlass } from '@/app/api/break-glass/route';
+import { POST as activateBreakGlass } from '@/app/api/break-glass/[id]/activate/route';
+import { POST as approveBreakGlass } from '@/app/api/break-glass/[id]/approve/route';
+import { POST as reviewBreakGlass } from '@/app/api/break-glass/[id]/review/route';
 import { POST as createKey } from '@/app/api/keys/route';
 import { POST as requestExport } from '@/app/api/reports/exports/route';
 import { GET as downloadExport } from '@/app/api/reports/exports/[id]/download/route';
@@ -140,6 +144,26 @@ describe('listed routes require a fresh session', () => {
         params,
       ),
       STEP_UP_ROUTES['POST /api/break-glass/[id]/revoke'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      requestBreakGlass(post() as never),
+      STEP_UP_ROUTES['POST /api/break-glass'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      activateBreakGlass(post(), params),
+      STEP_UP_ROUTES['POST /api/break-glass/[id]/activate'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      approveBreakGlass(post(), params),
+      STEP_UP_ROUTES['POST /api/break-glass/[id]/approve'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      reviewBreakGlass(post() as never, params),
+      STEP_UP_ROUTES['POST /api/break-glass/[id]/review'],
     );
   });
 });

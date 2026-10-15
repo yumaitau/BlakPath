@@ -130,6 +130,8 @@ const BY_NAME: Record<string, { status: number; code: string; error: string }> =
   // Platform-operator lifecycle routes only; tenant routes never throw it.
   OrganisationNotFoundError: { status: 404, code: 'NOT_FOUND', error: 'Not found' },
   BreakGlassError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },
+  // A write attempted under a read-only break-glass grant.
+  BreakGlassWriteError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },
   TenantContextError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },
   // A suspended or offboarded organisation looks like any other refusal.
   OrganisationUnavailableError: { status: 403, code: 'FORBIDDEN', error: 'Forbidden' },
@@ -188,6 +190,21 @@ function classify(error: unknown): MappedError {
     return {
       status: 409,
       code: SAFE_CODE.test(upper) ? upper : 'CORRESPONDENCE_REFUSED',
+      error: error.message,
+    };
+  }
+  // Break-glass operational refusals (src/domains/break-glass/service.ts).
+  // Messages are fixed phrases that name no tenant record.
+  if (
+    error instanceof Error &&
+    (error.name === 'BreakGlassNotifyError' ||
+      error.name === 'BreakGlassReviewOverdueError')
+  ) {
+    const code = (error as { code?: unknown }).code;
+    return {
+      status: 409,
+      code:
+        typeof code === 'string' && SAFE_CODE.test(code) ? code : 'BREAK_GLASS_REFUSED',
       error: error.message,
     };
   }

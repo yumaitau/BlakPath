@@ -62,6 +62,11 @@ export const STAFF_TOOL_LINKS = [
     label: 'Audit trail',
     anyOf: ['audit:view'],
   },
+  {
+    href: '/settings/break-glass',
+    label: 'Break-glass',
+    anyOf: ['break-glass:approve'],
+  },
 ] as const satisfies readonly StaffToolLink[];
 
 export function visibleStaffTools(

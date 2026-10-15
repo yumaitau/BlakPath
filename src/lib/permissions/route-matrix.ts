@@ -327,9 +327,20 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     allowProbe: true,
   }),
   route('POST', '/api/break-glass', { kind: 'platform-operator' }),
+  route('GET', '/api/break-glass/mine', { kind: 'platform-operator' }),
+  route('GET', '/api/break-glass/[id]/access/applications', {
+    kind: 'platform-operator',
+  }),
+  route('GET', '/api/break-glass/[id]/access/applications/[applicationId]', {
+    kind: 'platform-operator',
+  }),
+  route('GET', '/api/break-glass/[id]/access/audit', { kind: 'platform-operator' }),
   route('POST', '/api/break-glass/[id]/activate', { kind: 'platform-operator' }),
   route('POST', '/api/break-glass/[id]/approve', anyOf(['break-glass:approve'])),
   route('POST', '/api/break-glass/[id]/deny', anyOf(['break-glass:approve'])),
+  route('POST', '/api/break-glass/[id]/review', anyOf(['break-glass:approve']), {
+    body: { notes: 'Matrix review notes for the support case.' },
+  }),
   route('POST', '/api/break-glass/[id]/revoke', anyOf(['break-glass:approve'])),
   route('PATCH', '/api/calendar/attendees/[id]', anyOf(ATTENDEE_PATCH), {
     body: { responseStatus: 'accepted' },

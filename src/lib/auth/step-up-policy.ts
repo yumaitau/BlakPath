@@ -48,8 +48,14 @@ export const STEP_UP_ROUTES = {
   'DELETE /api/retention/policies/[id]': STEP_UP_WINDOWS.destructive,
   'POST /api/retention/policies/[id]/activate': STEP_UP_WINDOWS.destructive,
   'POST /api/retention/disposal-authorities': STEP_UP_WINDOWS.destructive,
+  // Platform operator: request and activate (also re-checks the operator flag).
+  'POST /api/break-glass': STEP_UP_WINDOWS.privileged,
+  'POST /api/break-glass/[id]/activate': STEP_UP_WINDOWS.privileged,
+  // Tenant approver decisions. The approver may not be the requester.
+  'POST /api/break-glass/[id]/approve': STEP_UP_WINDOWS.privileged,
   'POST /api/break-glass/[id]/deny': STEP_UP_WINDOWS.privileged,
   'POST /api/break-glass/[id]/revoke': STEP_UP_WINDOWS.privileged,
+  'POST /api/break-glass/[id]/review': STEP_UP_WINDOWS.privileged,
 } as const;
 
 export type StepUpRoute = keyof typeof STEP_UP_ROUTES;
