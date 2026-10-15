@@ -20,6 +20,7 @@ import {
   organisationSettings,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
@@ -101,11 +102,6 @@ const codeGen = customAlphabet(
   32,
 );
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
-
 /** Walk `cause` until the Postgres driver error, if any. */
 function postgresError(error: unknown): { code?: string; constraint?: string } {
   const seen = new Set<unknown>();
@@ -186,7 +182,7 @@ async function renderDraftPdf(input: {
     .from(organisations)
     .where(eq(organisations.id, scope.organisationId))
     .limit(1);
-  const org = must(orgRows[0], 'organisation');
+  const org = expectRow(orgRows[0], 'organisation');
 
   // Optional brand colour for the certificate heading (organisation-authored).
   const settingsRows = await scope.db
@@ -309,7 +305,7 @@ export async function generateCertificate(
       ),
     )
     .limit(1);
-  const application = must(appRows[0], 'application');
+  const application = expectRow(appRows[0], 'application');
   if (!caseDecidedForCertificate(application.status)) {
     throw new AuthorizationError(
       'POLICY_DENIED',
@@ -376,7 +372,7 @@ export async function generateCertificate(
           }),
         )
         .returning();
-      const row = must(inserted[0], 'certificate');
+      const row = expectRow(inserted[0], 'certificate');
 
       await recordAudit(
         {
@@ -638,7 +634,7 @@ export async function signCertificate(id: string): Promise<CertificateRow> {
         'This certificate was already signed or changed. Refresh and try again.',
       );
     }
-    const signed = must(updated[0], 'certificate');
+    const signed = expectRow(updated[0], 'certificate');
 
     await recordAudit(
       {
@@ -790,7 +786,7 @@ export async function reissueCertificate(id: string): Promise<CertificateRow> {
           'This certificate was already revoked or changed. Refresh and try again.',
         );
       }
-      const revoked = must(updated[0], 'certificate');
+      const revoked = expectRow(updated[0], 'certificate');
 
       const inserted = await tx
         .insert(certificates)
@@ -812,7 +808,7 @@ export async function reissueCertificate(id: string): Promise<CertificateRow> {
           }),
         )
         .returning();
-      const replacement = must(inserted[0], 'certificate');
+      const replacement = expectRow(inserted[0], 'certificate');
 
       await recordAudit(
         {
@@ -929,7 +925,7 @@ export async function revokeCertificate(
         'This certificate was already revoked or changed. Refresh and try again.',
       );
     }
-    const row = must(updated[0], 'certificate');
+    const row = expectRow(updated[0], 'certificate');
 
     await recordAudit(
       {
