@@ -33,6 +33,10 @@ with resources owned by the production environment.
   `key_health_state_change` is one of those signals.
   `clamav_signature_age` carries `ageHours` and pages when the maximum in an
   hour is greater than 48.
+- `data-tier.example.yaml` is the RDS Postgres and ElastiCache Redis stack:
+  private subnets, customer managed keys, `rds.force_ssl=1`, Redis AUTH and
+  `noeviction`. It does not create the RDS Proxy. Settings and the apply steps
+  are in `docs/data-tier-capacity.md`. Deploy it only in `ap-southeast-2`.
 - `origin-edge.example.yaml` requests the origin ACM certificate, a regional
   WAFv2 web ACL (managed IP reputation, common, known-bad-inputs and SQLi rule
   groups) and the Authenticated Origin Pull trust store. Copy its outputs into

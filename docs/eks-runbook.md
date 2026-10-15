@@ -227,14 +227,19 @@ manifest is `infra/k8s/service-ingress.yaml`. The example stack is
   `/blakpath/production/runtime` outside namespace `blakpath` must fail with
   AccessDenied. Delete that check object. Do not print Secret data.
 - Customer keys everywhere: `alias/blakpath-app-secrets` encrypts the
-  Secrets Manager folder, EBS volumes by default, and ElastiCache at rest.
+  Secrets Manager folder and is the account default EBS key.
   `alias/blakpath-prod-evidence` is the bucket default for both S3 buckets.
   Objects written for a tenant use that tenant's CMK, with S3 Bucket Keys
-  off, so HeadObject shows the tenant key ARN. RDS uses its provisioned key.
-  No AWS-managed default keys in the secret path. The key policy keeps
+  off, so HeadObject shows the tenant key ARN. `alias/blakpath-rds` covers
+  RDS storage and Performance Insights; `alias/blakpath-elasticache` covers
+  Redis at rest (both from `infra/aws/data-tier.example.yaml`). These are
+  platform keys for the volume; tenant fields inside the database are still
+  sealed with the tenant key. No AWS-managed default keys in the secret or
+  data path. The key policy keeps
   account-root IAM delegation so the dedicated role's IAM allow works. Do not
   grant the shared External Secrets role on that key.
-- ElastiCache runs with transit and at-rest encryption. Redis holds
+- ElastiCache runs with transit encryption, an AUTH token, and at-rest
+  encryption. Redis holds
   ephemeral state only. Queue payloads are identifiers, never tenant field
   contents.
 - Set `OPERATOR_ONCALL_EMAIL` on the worker. Key-health state changes email
@@ -293,6 +298,12 @@ Record who rotated, when, and which keys. Do not record the values.
 
 ## Data services
 
+- Source: `infra/aws/data-tier.example.yaml` (RDS Postgres and ElastiCache
+  Redis, private subnets, customer managed keys, `rds.force_ssl=1`, 21-day
+  backups, Redis AUTH and `noeviction`). It does not create the RDS Proxy.
+  Settings and apply steps: `docs/data-tier-capacity.md`. Apply it in
+  `ap-southeast-2`, then deploy the namespace through the CD pipeline (#57).
+  `/api/ready` is the post-deploy check.
 - RDS Postgres with point-in-time recovery. RDS Proxy in front for failover.
   Two roles: `blakpath_migrator` (owner, migrate Job only) and
   `blakpath_app` (runtime DML). See `infra/postgres/audit-roles.sql`.
@@ -312,7 +323,9 @@ Record who rotated, when, and which keys. Do not record the values.
 - Named prepared statements are off (`prepare: false`). RDS Proxy can multiplex
   the extended query protocol, but SQL `PREPARE`/`EXECUTE` still pins, and
   older proxies pinned named protocol statements. The client never issues those.
-- ElastiCache Redis TLS. Ephemeral only: queues, rate limits, schedulers.
+- ElastiCache Redis TLS and AUTH token, two nodes, Multi-AZ failover,
+  `maxmemory-policy noeviction`, snapshot retention 0. Ephemeral only:
+  queues, rate limits, schedulers.
 - S3 evidence + quarantine buckets: block public access, enforce TLS,
   versioning on, AWS Backup coverage. The bucket default CMK is
   `alias/blakpath-prod-evidence`. Per-object SSE-KMS uses the tenant CMK.
