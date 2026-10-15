@@ -13,6 +13,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication, type ApplicationRow } from '@/domains/applications';
 import { isSuppressed } from '@/domains/email';
@@ -121,13 +122,6 @@ export interface PublicCorrespondenceView {
   readonly expiresAt: string;
   readonly kind: CorrespondenceKind;
   readonly certificateAvailable: boolean;
-}
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
 }
 
 function hashToken(token: string): string {
@@ -409,14 +403,14 @@ export async function createTemplate(
           id,
           name: input.name,
           kind: input.kind,
-          subjectTemplate: must(sealed.subjectTemplate, 'sealed subject'),
-          bodyTemplate: must(sealed.bodyTemplate, 'sealed body'),
+          subjectTemplate: expectRow(sealed.subjectTemplate, 'sealed subject'),
+          bodyTemplate: expectRow(sealed.bodyTemplate, 'sealed body'),
           active: true,
           createdByUserId: ctx.userId,
         }),
       )
       .returning();
-    const created = must(inserted[0], 'correspondence template');
+    const created = expectRow(inserted[0], 'correspondence template');
     await recordAudit(
       {
         action: 'correspondence.template_created',
@@ -484,7 +478,7 @@ export async function updateTemplate(
         ),
       )
       .returning();
-    const changed = must(updated[0], 'correspondence template');
+    const changed = expectRow(updated[0], 'correspondence template');
     await recordAudit(
       {
         action: 'correspondence.template_updated',
@@ -501,7 +495,7 @@ export async function updateTemplate(
     return changed;
   });
   const [opened] = await openTemplateRows(scope.organisationId, [row]);
-  return must(opened, 'opened correspondence template');
+  return expectRow(opened, 'opened correspondence template');
 }
 
 /** Copy built-in starters that this organisation does not already have by name. */
@@ -673,8 +667,8 @@ export async function draftCorrespondence(
           kind: input.kind,
           channel: input.channel,
           status: 'draft' as const,
-          subjectTemplate: must(sealed.subjectTemplate, 'sealed subject'),
-          bodyTemplate: must(sealed.bodyTemplate, 'sealed body'),
+          subjectTemplate: expectRow(sealed.subjectTemplate, 'sealed subject'),
+          bodyTemplate: expectRow(sealed.bodyTemplate, 'sealed body'),
           recipientName: sealed.recipientName ?? null,
           recipientEmail: sealed.recipientEmail ?? null,
           decisionId: decision?.id ?? null,
@@ -685,7 +679,7 @@ export async function draftCorrespondence(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'correspondence');
+    const row = expectRow(inserted[0], 'correspondence');
     await recordAudit(
       {
         action: 'correspondence.drafted',

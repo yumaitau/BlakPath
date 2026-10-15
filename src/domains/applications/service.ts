@@ -33,6 +33,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
@@ -150,14 +151,6 @@ export interface ApplicationListResult {
 
 /** Roles that do not hold a case. Kept out of the assignee filter. */
 const NON_ASSIGNEE_ROLE_SLUGS = ['applicant', 'applicant-representative'] as const;
-
-/** Assert a row was returned from an insert/update `.returning()`. */
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 /** Build a human-friendly per-organisation reference from a fresh id. */
 function makeReference(id: string): string {
@@ -468,7 +461,7 @@ export async function createApplication(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'application');
+    const created = expectRow(inserted[0], 'application');
 
     await tx.insert(applicationStatusHistory).values(
       scope.insertValues({
@@ -496,7 +489,7 @@ export async function createApplication(
     return created;
   });
   const [row] = await openApplicationRows(scope.organisationId, [stored]);
-  return must(row, 'application');
+  return expectRow(row, 'application');
 }
 
 /** Update intake details. Requires `application:update-intake`. */
@@ -549,7 +542,7 @@ export async function updateIntake(
       .set(patch)
       .where(scope.where(applications.organisationId, eq(applications.id, id)))
       .returning();
-    const saved = must(updated[0], 'application');
+    const saved = expectRow(updated[0], 'application');
 
     const intakeAudit = applicationIntakeAuditMeta({
       beforePriority: existing.priority,
@@ -571,7 +564,7 @@ export async function updateIntake(
     return saved;
   });
   const [row] = await openApplicationRows(scope.organisationId, [stored]);
-  return must(row, 'application');
+  return expectRow(row, 'application');
 }
 
 /** Assign (or reassign) an application to a worker. Requires `application:assign`. */
@@ -615,7 +608,7 @@ export async function assignApplication(
         }),
       )
       .returning();
-    const assignment = must(insertedAssignment[0], 'assignment');
+    const assignment = expectRow(insertedAssignment[0], 'assignment');
 
     await tx
       .update(applications)
@@ -748,7 +741,7 @@ export async function applyApplicationTransition(
     .returning({ id: applicationStatusHistory.id });
   const statusHistoryId = history[0]?.id ?? null;
 
-  return { row: must(updated[0], 'application'), from, to, note, statusHistoryId };
+  return { row: expectRow(updated[0], 'application'), from, to, note, statusHistoryId };
 }
 
 /** Audit a transition inside the transaction that wrote it. */
@@ -828,7 +821,7 @@ export async function transitionApplication(
     });
   }
   const [opened] = await openApplicationRows(applied.row.organisationId, [applied.row]);
-  return must(opened, 'application');
+  return expectRow(opened, 'application');
 }
 
 /**
@@ -980,7 +973,7 @@ export async function addNote(
         }),
       )
       .returning();
-    const created = must(insertedNote[0], 'note');
+    const created = expectRow(insertedNote[0], 'note');
 
     await recordAudit(
       {
@@ -998,7 +991,7 @@ export async function addNote(
     return created;
   });
   const [note] = await openNoteRows(scope.organisationId, [stored]);
-  return must(note, 'note');
+  return expectRow(note, 'note');
 }
 
 /** Re-export the context type for callers that thread it explicitly. */

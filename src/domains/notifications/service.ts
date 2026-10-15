@@ -2,6 +2,7 @@ import { and, count, desc, eq, isNull } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { memberships, notifications } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { AuthorizationError } from '@/lib/permissions/errors';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { addJob, QueueName } from '@/lib/queues';
@@ -91,10 +92,7 @@ export async function createNotification(
       }),
     )
     .returning();
-  const row = inserted[0];
-  if (!row) {
-    throw new Error('Expected a notification row to be returned from the database.');
-  }
+  const row = expectRow(inserted[0], 'notification row');
 
   if (await memberWantsEmail(input.organisationId, input.userId)) {
     await addJob(

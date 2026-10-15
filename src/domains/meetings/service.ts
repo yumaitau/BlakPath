@@ -10,6 +10,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -98,17 +99,10 @@ const SELF_ATTENDANCE = [
   'conflict:declare',
 ] as const;
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
-
 /** Minutes and the quorum note are sealed under the tenant key at rest. */
 async function openMeeting(organisationId: string, row: MeetingRow): Promise<MeetingRow> {
   const [opened] = await openMeetingRows(organisationId, [row]);
-  return must(opened, 'meeting');
+  return expectRow(opened, 'meeting');
 }
 
 async function loadMeeting(id: string): Promise<MeetingRow | null> {
@@ -176,7 +170,7 @@ export async function createMeeting(rawInput: CreateMeetingInput): Promise<Meeti
         }),
       )
       .returning();
-    const row = must(inserted[0], 'meeting');
+    const row = expectRow(inserted[0], 'meeting');
 
     await recordAudit(
       {
@@ -208,7 +202,7 @@ export async function cancelMeeting(meetingId: string): Promise<MeetingRow> {
       .set({ status: 'cancelled' })
       .where(scope.where(meetings.organisationId, eq(meetings.id, meetingId)))
       .returning();
-    const row = must(updated[0], 'meeting');
+    const row = expectRow(updated[0], 'meeting');
 
     await recordAudit(
       {
@@ -304,7 +298,7 @@ export async function addAgendaItem(
         }),
       )
       .returning();
-    const insertedRow = must(inserted[0], 'agenda item');
+    const insertedRow = expectRow(inserted[0], 'agenda item');
 
     await recordAudit(
       {
@@ -469,7 +463,7 @@ export async function declareConflict(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'conflict declaration');
+    const row = expectRow(inserted[0], 'conflict declaration');
 
     await recordAudit(
       {
@@ -485,7 +479,7 @@ export async function declareConflict(
     return row;
   });
   const [opened] = await openConflictRows(scope.organisationId, [declared]);
-  return must(opened, 'conflict declaration');
+  return expectRow(opened, 'conflict declaration');
 }
 
 /** Clear a previously declared conflict (agenda managers). */
@@ -506,7 +500,7 @@ export async function clearConflict(conflictId: string): Promise<ConflictRow> {
       )
       .returning();
     if (!updated[0]) throw new AuthorizationError('POLICY_DENIED');
-    const row = must(updated[0], 'conflict declaration');
+    const row = expectRow(updated[0], 'conflict declaration');
 
     await recordAudit(
       {
@@ -521,7 +515,7 @@ export async function clearConflict(conflictId: string): Promise<ConflictRow> {
     return row;
   });
   const [opened] = await openConflictRows(scope.organisationId, [cleared]);
-  return must(opened, 'conflict declaration');
+  return expectRow(opened, 'conflict declaration');
 }
 
 /* ---------------------------------------------------------------------------
@@ -583,7 +577,7 @@ export async function importMeetingsFromIcs(
           }),
         )
         .returning();
-      const row = must(inserted[0], 'meeting');
+      const row = expectRow(inserted[0], 'meeting');
       await recordAudit(
         {
           action: 'meeting.created',
@@ -778,7 +772,7 @@ export async function recordAttendance(
           ),
         )
         .limit(1);
-      const existingId = must(existing[0], 'attendance').id;
+      const existingId = expectRow(existing[0], 'attendance').id;
       const updated = await tx
         .update(meetingAttendance)
         .set({
@@ -794,7 +788,7 @@ export async function recordAttendance(
           ),
         )
         .returning();
-      row = must(updated[0], 'attendance');
+      row = expectRow(updated[0], 'attendance');
     }
 
     await recordAudit(
@@ -814,7 +808,7 @@ export async function recordAttendance(
   });
 
   const [opened] = await openAttendanceRows(scope.organisationId, [saved]);
-  return must(opened, 'attendance');
+  return expectRow(opened, 'attendance');
 }
 
 /** A person attests whether quorum was present. Not computed from attendance. */
@@ -853,7 +847,7 @@ export async function attestQuorum(
         ),
       )
       .returning();
-    const saved = must(updated[0], 'meeting');
+    const saved = expectRow(updated[0], 'meeting');
 
     await recordAudit(
       {
@@ -906,7 +900,7 @@ export async function recordMinutes(
         ),
       )
       .returning();
-    const saved = must(updated[0], 'meeting');
+    const saved = expectRow(updated[0], 'meeting');
 
     await recordAudit(
       {

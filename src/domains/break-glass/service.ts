@@ -8,6 +8,7 @@ import {
   rolePermissions,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import { createNotification } from '@/domains/notifications';
@@ -112,11 +113,6 @@ export class BreakGlassReviewOverdueError extends Error {
     super('A previous emergency-access review is overdue for this organisation.');
     this.name = 'BreakGlassReviewOverdueError';
   }
-}
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
 }
 
 function formatReviewDue(due: Date): string {
@@ -262,7 +258,7 @@ export async function requestBreakGlass(params: {
         expiresAt,
       })
       .returning();
-    const row = must(inserted[0], 'break-glass request');
+    const row = expectRow(inserted[0], 'break-glass request');
 
     await recordAudit(
       {
@@ -382,7 +378,7 @@ export async function activateBreakGlass(params: {
       .set({ tenantNotifiedAt: new Date() })
       .where(eq(breakGlassRequests.id, activated.id))
       .returning();
-    const row = must(notified[0], 'break-glass request');
+    const row = expectRow(notified[0], 'break-glass request');
 
     for (const action of [
       'break_glass.activated',
@@ -460,7 +456,7 @@ export async function approveBreakGlass(requestId: string): Promise<BreakGlassRo
         ),
       )
       .returning();
-    const row = must(updated[0], 'break-glass request');
+    const row = expectRow(updated[0], 'break-glass request');
 
     await recordAudit(
       {
@@ -501,7 +497,7 @@ export async function denyBreakGlass(
         ),
       )
       .returning();
-    const row = must(updated[0], 'break-glass request');
+    const row = expectRow(updated[0], 'break-glass request');
 
     await recordAudit(
       {
@@ -539,7 +535,7 @@ export async function revokeBreakGlass(requestId: string): Promise<BreakGlassRow
         ),
       )
       .returning();
-    const row = must(updated[0], 'break-glass request');
+    const row = expectRow(updated[0], 'break-glass request');
 
     await recordAudit(
       {
