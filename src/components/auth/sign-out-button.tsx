@@ -26,6 +26,7 @@ export function SignOutButton({
     } finally {
       // Navigate regardless: if sign-out failed, the sign-in page will
       // re-establish the correct state rather than trapping the user here.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- drop cached client session state; see file comment
       window.location.href = '/sign-in';
     }
   }
