@@ -605,6 +605,25 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
       body: { all: true },
     },
   ),
+  route(
+    'GET',
+    '/api/notifications/email',
+    { kind: 'member' },
+    {
+      allowRole: 'applicant',
+      allowProbe: true,
+    },
+  ),
+  route(
+    'PATCH',
+    '/api/notifications/email',
+    { kind: 'member' },
+    {
+      allowRole: 'applicant',
+      allowProbe: true,
+      body: { emailNotifications: true },
+    },
+  ),
   route('POST', '/api/organisation/activation', anyOf(['tenant:configure'])),
   route('GET', '/api/organisation/readiness', anyOf(['tenant:configure'])),
   route('PATCH', '/api/organisation/readiness', anyOf(['tenant:configure']), {

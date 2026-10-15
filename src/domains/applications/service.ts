@@ -44,6 +44,7 @@ import {
   type Subject,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { notifyWorkflowEvent } from '@/domains/notifications/dispatch';
 import { isPubliclyAcceptingApplications } from '@/domains/organisations/public-applications';
 import { applicantMayActOnCase } from '@/lib/auth/landing';
 import { isApplicantOnlyRoleSet } from '@/lib/permissions/roles';
@@ -610,7 +611,7 @@ export async function assignApplication(
   const priorAssignees = await activeAssigneeIds(id);
   const isReassignment = priorAssignees.length > 0;
 
-  return scope.db.transaction(async (tx) => {
+  const assignment = await scope.db.transaction(async (tx) => {
     // Release any current active assignments — history is preserved, not edited.
     await tx
       .update(applicationAssignments)
@@ -663,6 +664,19 @@ export async function assignApplication(
 
     return assignment;
   });
+
+  await notifyWorkflowEvent({
+    organisationId: ctx.organisationId,
+    correlationId: ctx.correlationId,
+    event: {
+      kind: 'assignment',
+      applicationId: id,
+      assigneeUserId: input.assigneeUserId,
+      actorUserId: ctx.userId,
+    },
+  });
+
+  return assignment;
 }
 
 /** An applicant-only actor tried to move a matter they are not named on. */
@@ -821,6 +835,18 @@ export async function transitionApplication(
       reason: 'application.applicant_not_owner',
     });
     throw error;
+  }
+  if (applied.to === 'in_review') {
+    const ctx = requireTenantContext();
+    await notifyWorkflowEvent({
+      organisationId: ctx.organisationId,
+      correlationId: ctx.correlationId,
+      event: {
+        kind: 'review_needed',
+        applicationId: id,
+        actorUserId: ctx.userId,
+      },
+    });
   }
   const [opened] = await openApplicationRows(applied.row.organisationId, [applied.row]);
   return expectRow(opened, 'application');

@@ -323,6 +323,13 @@
       "when": 1792023295431,
       "tag": "0045_applications_keyset_paging",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1792029304187,
+      "tag": "0046_workflow_notifications",
+      "breakpoints": true
     }
   ]
 }
