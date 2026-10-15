@@ -65,6 +65,23 @@ describe('family-link schemas', () => {
     ).toBe(true);
   });
 
+  it('accepts an optional deceased flag and rejects a non-boolean', () => {
+    expect(
+      requestFamilyLinkSchema.safeParse({
+        relationship: 'grandmother',
+        relativeName: 'Aunty May',
+        relativeDeceased: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      requestFamilyLinkSchema.safeParse({
+        relationship: 'grandmother',
+        relativeName: 'Aunty May',
+        relativeDeceased: 'yes',
+      }).success,
+    ).toBe(false);
+  });
+
   it('decide note is optional and bounded', () => {
     expect(decideFamilyLinkSchema.safeParse({}).success).toBe(true);
     expect(decideFamilyLinkSchema.safeParse({ note: 'x'.repeat(5001) }).success).toBe(

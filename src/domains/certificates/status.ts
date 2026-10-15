@@ -6,9 +6,9 @@
  * non-revoked certificate is valid or downloadable.
  *
  * PRODUCT INVARIANT: a certificate may only be generated from a decision that
- * authorised humans FINALISED with a `confirmed` outcome. There is no path that
- * computes or infers that outcome — `eligibleDecision` merely checks the human
- * decision already recorded in Phase 5.
+ * authorised humans FINALISED with a `confirmed` outcome, and only once the
+ * case itself is `decided`. There is no path that computes or infers that
+ * outcome — these helpers merely check the human decision already recorded.
  */
 
 export const CERTIFICATE_STATUSES = ['draft', 'signed', 'revoked'] as const;
@@ -25,6 +25,14 @@ export function eligibleDecision(decision: EligibleDecision): boolean {
   return decision.status === 'finalised' && decision.finalOutcome === 'confirmed';
 }
 
+/**
+ * The case itself must be `decided` — a finalised decision row is not enough
+ * if the application never reached that stage.
+ */
+export function caseDecidedForCertificate(applicationStatus: string): boolean {
+  return applicationStatus === 'decided';
+}
+
 /** Only a draft certificate can be signed. */
 export function canSign(status: CertificateStatus): boolean {
   return status === 'draft';
@@ -32,6 +40,15 @@ export function canSign(status: CertificateStatus): boolean {
 
 /** Only a signed certificate can be revoked. */
 export function canRevoke(status: CertificateStatus): boolean {
+  return status === 'signed';
+}
+
+/**
+ * Only a signed certificate can be re-issued. Re-issue revokes it and links a
+ * new draft. A certificate that is already revoked, including one superseded
+ * earlier, cannot be re-issued again.
+ */
+export function canReissue(status: CertificateStatus): boolean {
   return status === 'signed';
 }
 
@@ -53,4 +70,68 @@ export function makeCertificateReference(id: string, year: number): string {
 /** A verification code is 24–48 url-safe chars (letters, digits, hyphen). */
 export function isWellFormedVerificationCode(code: string): boolean {
   return /^[A-Za-z0-9-]{24,48}$/.test(code);
+}
+
+/**
+ * Status shown on the public verification page.
+ *
+ * `superseded` is not a stored lifecycle state. It is a revoked certificate
+ * that has a recorded replacement. The page must show that word and nothing
+ * that identifies the applicant.
+ */
+export const PUBLIC_CERTIFICATE_STATUSES = [
+  'draft',
+  'signed',
+  'revoked',
+  'superseded',
+] as const;
+export type PublicCertificateStatus = (typeof PUBLIC_CERTIFICATE_STATUSES)[number];
+
+export function publicCertificateStatus(
+  status: CertificateStatus,
+  superseded: boolean,
+): PublicCertificateStatus {
+  if (status === 'revoked' && superseded) return 'superseded';
+  return status;
+}
+
+/**
+ * The only fields a public verification response may contain.
+ * Callers must not spread the database row into this object.
+ */
+export interface PublicCertificateView {
+  valid: boolean;
+  reference: string;
+  organisationName: string;
+  status: PublicCertificateStatus;
+  signedOn: string | null;
+  /** Cryptographic seal check: signature matches the recorded payload. */
+  signatureValid: boolean;
+  /** Stored payload hash still matches the rebuilt canonical bytes. */
+  payloadIntact: boolean;
+  /** Version 2 seals a holder-name hash. The name itself is not returned. */
+  holderBound: boolean;
+}
+
+export function toPublicCertificateView(input: {
+  valid: boolean;
+  reference: string;
+  organisationName: string;
+  status: CertificateStatus;
+  superseded: boolean;
+  signedOn: string | null;
+  signatureValid: boolean;
+  payloadIntact: boolean;
+  holderBound: boolean;
+}): PublicCertificateView {
+  return {
+    valid: input.valid,
+    reference: input.reference,
+    organisationName: input.organisationName,
+    status: publicCertificateStatus(input.status, input.superseded),
+    signedOn: input.signedOn,
+    signatureValid: input.signatureValid,
+    payloadIntact: input.payloadIntact,
+    holderBound: input.holderBound,
+  };
 }

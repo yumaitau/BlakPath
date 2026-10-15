@@ -105,10 +105,6 @@ function toSettingsView(row: SettingsRow | undefined): OrganisationSettingsView 
       fieldSchemas.escalationContacts,
       row?.escalationContacts,
     ),
-    readinessChecklist: readField(
-      fieldSchemas.readinessChecklist,
-      row?.readinessChecklist,
-    ),
   };
 }
 
@@ -140,8 +136,6 @@ function columnPatch(field: SettingsField, value: unknown) {
       return { retentionDefaults: value };
     case 'escalationContacts':
       return { escalationContacts: value };
-    case 'readinessChecklist':
-      return { readinessChecklist: value };
     default: {
       const _exhaustive: never = field;
       return _exhaustive;
@@ -185,35 +179,44 @@ export async function updateOrganisationSetting(
     return toSettingsView(undefined);
   }
 
-  const written = existing
-    ? must(
-        (
-          await scope.db
-            .update(organisationSettings)
-            .set(columnPatch(input.field, next))
-            .where(scope.where(organisationSettings.organisationId))
-            .returning()
-        )[0],
-        'organisation settings',
-      )
-    : must(
-        (
-          await scope.db
-            .insert(organisationSettings)
-            .values(scope.insertValues(columnPatch(input.field, next)))
-            .returning()
-        )[0],
-        'organisation settings',
-      );
+  const written = await scope.db.transaction(async (tx) => {
+    const row = existing
+      ? must(
+          (
+            await tx
+              .update(organisationSettings)
+              .set(columnPatch(input.field, next))
+              .where(scope.where(organisationSettings.organisationId))
+              .returning()
+          )[0],
+          'organisation settings',
+        )
+      : must(
+          (
+            await tx
+              .insert(organisationSettings)
+              .values(scope.insertValues(columnPatch(input.field, next)))
+              .returning()
+          )[0],
+          'organisation settings',
+        );
 
-  await recordAudit({
-    action: auditAction(input.field),
-    resourceType: 'organisation_settings',
-    resourceId: written.id,
-    result: 'success',
-    reason: input.field,
-    before: settingsAuditMeta(input.field, beforeUnreadable ? beforeRaw : beforeParsed),
-    after: settingsAuditMeta(input.field, next),
+    await recordAudit(
+      {
+        action: auditAction(input.field),
+        resourceType: 'organisation_settings',
+        resourceId: row.id,
+        result: 'success',
+        reason: `settings.${input.field}`,
+        before: settingsAuditMeta(
+          input.field,
+          beforeUnreadable ? beforeRaw : beforeParsed,
+        ),
+        after: settingsAuditMeta(input.field, next),
+      },
+      tx,
+    );
+    return row;
   });
 
   return toSettingsView(written);
@@ -300,21 +303,42 @@ export async function addOrganisationDomain(
   const token = randomBytes(32).toString('base64url');
   let row: DomainRow;
   try {
-    row = must(
-      (
-        await scope.db
-          .insert(organisationDomains)
-          .values(
-            scope.insertValues({
-              domain: input.domain,
-              verified: false,
-              verificationToken: token,
-            }),
-          )
-          .returning()
-      )[0],
-      'organisation domain',
-    );
+    row = await scope.db.transaction(async (tx) => {
+      const inserted = must(
+        (
+          await tx
+            .insert(organisationDomains)
+            .values(
+              scope.insertValues({
+                domain: input.domain,
+                verified: false,
+                verificationToken: token,
+              }),
+            )
+            .returning()
+        )[0],
+        'organisation domain',
+      );
+      await recordAudit(
+        {
+          action: 'admin.domain_added',
+          resourceType: 'organisation_domain',
+          resourceId: inserted.id,
+          result: 'success',
+          reason: 'domain.added',
+          before: {
+            data: { present: false, domain: inserted.domain, verified: false },
+            allow: ['present', 'domain', 'verified'],
+          },
+          after: {
+            data: { present: true, domain: inserted.domain, verified: false },
+            allow: ['present', 'domain', 'verified'],
+          },
+        },
+        tx,
+      );
+      return inserted;
+    });
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new OrganisationSettingsError(
@@ -325,22 +349,6 @@ export async function addOrganisationDomain(
     }
     throw error;
   }
-
-  await recordAudit({
-    action: 'admin.domain_added',
-    resourceType: 'organisation_domain',
-    resourceId: row.id,
-    result: 'success',
-    reason: 'domain added',
-    before: {
-      data: { present: false, domain: row.domain, verified: false },
-      allow: ['present', 'domain', 'verified'],
-    },
-    after: {
-      data: { present: true, domain: row.domain, verified: false },
-      allow: ['present', 'domain', 'verified'],
-    },
-  });
   return toDomainView(row);
 }
 
@@ -401,35 +409,46 @@ export async function verifyOrganisationDomain(
     );
   }
 
-  const updated = must(
-    (
-      await scope.db
-        .update(organisationDomains)
-        .set({ verified: true, verificationToken: null })
-        .where(
-          scope.where(organisationDomains.organisationId, eq(organisationDomains.id, id)),
-        )
-        .returning()
-    )[0],
-    'organisation domain',
-  );
-
-  await recordAudit({
-    action: 'admin.domain_verified',
-    resourceType: 'organisation_domain',
-    resourceId: updated.id,
-    result: 'success',
-    reason: 'dns txt matched',
-    before: {
-      data: { domain: row.domain, verified: false },
-      allow: ['domain', 'verified'],
-    },
-    after: {
-      data: { domain: updated.domain, verified: true },
-      allow: ['domain', 'verified'],
-    },
+  // DNS is checked above, outside the transaction. The write is conditional on
+  // the row still being unverified so a concurrent check audits only once.
+  const updated = await scope.db.transaction(async (tx) => {
+    const rows = await tx
+      .update(organisationDomains)
+      .set({ verified: true, verificationToken: null })
+      .where(
+        scope.where(
+          organisationDomains.organisationId,
+          eq(organisationDomains.id, id),
+          eq(organisationDomains.verified, false),
+        ),
+      )
+      .returning();
+    const changed = rows[0];
+    if (!changed) return undefined;
+    await recordAudit(
+      {
+        action: 'admin.domain_verified',
+        resourceType: 'organisation_domain',
+        resourceId: changed.id,
+        result: 'success',
+        reason: 'domain.verified_dns_txt',
+        before: {
+          data: { domain: row.domain, verified: false },
+          allow: ['domain', 'verified'],
+        },
+        after: {
+          data: { domain: changed.domain, verified: true },
+          allow: ['domain', 'verified'],
+        },
+      },
+      tx,
+    );
+    return changed;
   });
-  return toDomainView(updated);
+  if (updated) return toDomainView(updated);
+  const current = await loadDomain(id);
+  if (!current) throw new AuthorizationError('POLICY_DENIED');
+  return toDomainView(current);
 }
 
 export async function removeOrganisationDomain(rawId: string): Promise<void> {
@@ -439,42 +458,47 @@ export async function removeOrganisationDomain(rawId: string): Promise<void> {
   const row = await loadDomain(id);
   if (!row) throw new AuthorizationError('POLICY_DENIED');
 
-  const disabled = await scope.db
-    .update(organisationSsoProviders)
-    .set({ enabled: false })
-    .where(
-      scope.where(
-        organisationSsoProviders.organisationId,
-        eq(organisationSsoProviders.domain, row.domain),
-        eq(organisationSsoProviders.enabled, true),
-      ),
-    )
-    .returning({ id: organisationSsoProviders.id });
+  await scope.db.transaction(async (tx) => {
+    const disabled = await tx
+      .update(organisationSsoProviders)
+      .set({ enabled: false })
+      .where(
+        scope.where(
+          organisationSsoProviders.organisationId,
+          eq(organisationSsoProviders.domain, row.domain),
+          eq(organisationSsoProviders.enabled, true),
+        ),
+      )
+      .returning({ id: organisationSsoProviders.id });
 
-  await scope.db
-    .delete(organisationDomains)
-    .where(
-      scope.where(organisationDomains.organisationId, eq(organisationDomains.id, id)),
-    );
+    await tx
+      .delete(organisationDomains)
+      .where(
+        scope.where(organisationDomains.organisationId, eq(organisationDomains.id, id)),
+      );
 
-  await recordAudit({
-    action: 'admin.domain_removed',
-    resourceType: 'organisation_domain',
-    resourceId: row.id,
-    result: 'success',
-    reason: 'domain removed',
-    before: {
-      data: { present: true, domain: row.domain, verified: row.verified },
-      allow: ['present', 'domain', 'verified'],
-    },
-    after: {
-      data: {
-        present: false,
-        domain: row.domain,
-        verified: false,
-        ssoBindingsDisabled: disabled.length,
+    await recordAudit(
+      {
+        action: 'admin.domain_removed',
+        resourceType: 'organisation_domain',
+        resourceId: row.id,
+        result: 'success',
+        reason: 'domain.removed',
+        before: {
+          data: { present: true, domain: row.domain, verified: row.verified },
+          allow: ['present', 'domain', 'verified'],
+        },
+        after: {
+          data: {
+            present: false,
+            domain: row.domain,
+            verified: false,
+            ssoBindingsDisabled: disabled.length,
+          },
+          allow: ['present', 'domain', 'verified', 'ssoBindingsDisabled'],
+        },
       },
-      allow: ['present', 'domain', 'verified', 'ssoBindingsDisabled'],
-    },
+      tx,
+    );
   });
 }

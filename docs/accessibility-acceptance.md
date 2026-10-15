@@ -9,8 +9,10 @@ non-technical users.
 
 `pnpm test:e2e` runs axe against these supported journeys in Chromium:
 
-- public landing, accessibility, privacy, support, organisation discovery and
-  certificate verification;
+- public landing, accessibility, privacy, support, organisation discovery,
+  the start-application page and certificate verification;
+- the applicant portal: own applications, recorded status, evidence upload,
+  shared notes and withdraw, including visible keyboard focus;
 - sign in, sign up, password reset and organisation selection;
 - dashboard, application register and case view, work board, forms and the
   notifications menu;

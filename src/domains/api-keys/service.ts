@@ -56,30 +56,42 @@ export async function createApiKey(
   const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
 
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(apiKeys)
-    .values(
-      scope.insertValues({
-        name: input.name,
-        keyHash: hashApiKey(raw),
-        prefix: displayPrefix(raw),
-        scopes: input.scopes,
-        createdByUserId: ctx.userId,
-        expiresAt,
-      }),
-    )
-    .returning();
-  const apiKey = must(inserted[0], 'api key');
+  const apiKey = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(apiKeys)
+      .values(
+        scope.insertValues({
+          name: input.name,
+          keyHash: hashApiKey(raw),
+          prefix: displayPrefix(raw),
+          scopes: input.scopes,
+          purpose: input.purpose ?? null,
+          destination: input.destination ?? null,
+          createdByUserId: ctx.userId,
+          expiresAt,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'api key');
 
-  await recordAudit({
-    action: 'api_key.created',
-    resourceType: 'api_key',
-    resourceId: apiKey.id,
-    result: 'success',
-    after: {
-      data: { name: input.name, prefix: apiKey.prefix },
-      allow: ['name', 'prefix'],
-    },
+    await recordAudit(
+      {
+        action: 'api_key.created',
+        resourceType: 'api_key',
+        resourceId: created.id,
+        result: 'success',
+        after: {
+          data: {
+            prefix: created.prefix,
+            purpose: input.purpose ?? null,
+            destination: input.destination ?? null,
+          },
+          allow: ['prefix', 'purpose', 'destination'],
+        },
+      },
+      tx,
+    );
+    return created;
   });
 
   return { apiKey, key: raw };
@@ -94,6 +106,8 @@ export async function listApiKeys(): Promise<
       | 'name'
       | 'prefix'
       | 'scopes'
+      | 'purpose'
+      | 'destination'
       | 'lastUsedAt'
       | 'expiresAt'
       | 'revokedAt'
@@ -111,6 +125,8 @@ export async function listApiKeys(): Promise<
       name: apiKeys.name,
       prefix: apiKeys.prefix,
       scopes: apiKeys.scopes,
+      purpose: apiKeys.purpose,
+      destination: apiKeys.destination,
       lastUsedAt: apiKeys.lastUsedAt,
       expiresAt: apiKeys.expiresAt,
       revokedAt: apiKeys.revokedAt,
@@ -127,22 +143,31 @@ export async function revokeApiKey(id: string): Promise<ApiKeyRow> {
   requirePermission(subjectFromContext(ctx), 'tenant:configure');
 
   const scope = currentScope();
-  const updated = await scope.db
-    .update(apiKeys)
-    .set({ revokedAt: new Date() })
-    .where(
-      scope.where(apiKeys.organisationId, eq(apiKeys.id, id), isNull(apiKeys.revokedAt)),
-    )
-    .returning();
-  const row = must(updated[0], 'api key');
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(apiKeys)
+      .set({ revokedAt: new Date() })
+      .where(
+        scope.where(
+          apiKeys.organisationId,
+          eq(apiKeys.id, id),
+          isNull(apiKeys.revokedAt),
+        ),
+      )
+      .returning();
+    const row = must(updated[0], 'api key');
 
-  await recordAudit({
-    action: 'api_key.revoked',
-    resourceType: 'api_key',
-    resourceId: id,
-    result: 'success',
+    await recordAudit(
+      {
+        action: 'api_key.revoked',
+        resourceType: 'api_key',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 /** Re-export the permission-key guard for callers building scope pickers. */

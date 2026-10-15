@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { OrganisationSettingsEditor } from '@/components/settings/organisation-settings-editor';
+import { getTenantReadiness } from '@/domains/onboarding';
 import {
   getOrganisationSettings,
   listOrganisationDomains,
@@ -29,13 +30,20 @@ export default async function OrganisationSettingsPage() {
       <OrganisationSettingsEditor
         initialSettings={loaded.settings}
         initialDomains={loaded.domains}
+        initialChecklist={loaded.checklist}
       />
     </div>
   );
 }
 
 function load() {
-  return Promise.all([getOrganisationSettings(), listOrganisationDomains()]).then(
-    ([settings, domains]) => ({ settings, domains }),
-  );
+  return Promise.all([
+    getOrganisationSettings(),
+    listOrganisationDomains(),
+    getTenantReadiness(),
+  ]).then(([settings, domains, readiness]) => ({
+    settings,
+    domains,
+    checklist: readiness.checklist,
+  }));
 }

@@ -7,7 +7,6 @@ import {
   evidenceRequirementsSchema,
   fieldSchemas,
   guidanceSchema,
-  readinessChecklistSchema,
   retentionDefaultsSchema,
   terminologySchema,
 } from './schemas';
@@ -154,12 +153,6 @@ function summarise(field: SettingsField, value: unknown): Record<string, Summary
       return {
         count: contacts.contacts.length,
         roles: contacts.contacts.map((contact) => safeText(contact.role) ?? '[withheld]'),
-      };
-    }
-    case 'readinessChecklist': {
-      const checklist = readinessChecklistSchema.parse(value);
-      return {
-        items: checklist.items.map((item) => ({ key: item.key, done: item.done })),
       };
     }
     default: {

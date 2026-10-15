@@ -4,29 +4,19 @@ import {
   getOrganisationSettings,
   updateOrganisationSetting,
 } from '@/domains/organisation-settings';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 
 /** GET /api/organisation-settings — current tenant settings. PATCH — replace one field. */
-export async function GET(): Promise<Response> {
-  try {
-    const settings = await withRequestTenant(() => getOrganisationSettings());
-    return NextResponse.json({ settings });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const GET = tenantHandler(async function GET(): Promise<Response> {
+  const settings = await withRequestTenant(() => getOrganisationSettings());
+  return NextResponse.json({ settings });
+});
 
-export async function PATCH(request: NextRequest): Promise<Response> {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
-  try {
-    const settings = await withRequestTenant(() => updateOrganisationSetting(body));
-    return NextResponse.json({ settings });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const PATCH = tenantHandler(async function PATCH(
+  request: NextRequest,
+): Promise<Response> {
+  const body: unknown = await request.json();
+  const settings = await withRequestTenant(() => updateOrganisationSetting(body));
+  return NextResponse.json({ settings });
+});

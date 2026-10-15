@@ -9,6 +9,8 @@ import { parseDomain } from './dns';
  * Aboriginality from settings.
  */
 
+// The readiness checklist lives on the same row but is owned by onboarding
+// (`/api/organisation/readiness`), which keeps its versioned shape.
 export const SETTINGS_FIELDS = [
   'terminology',
   'branding',
@@ -18,7 +20,6 @@ export const SETTINGS_FIELDS = [
   'consentWording',
   'retentionDefaults',
   'escalationContacts',
-  'readinessChecklist',
 ] as const;
 
 export type SettingsField = (typeof SETTINGS_FIELDS)[number];
@@ -115,28 +116,6 @@ export const escalationContactsSchema = z
   .strict();
 export type EscalationContacts = z.infer<typeof escalationContactsSchema>;
 
-const checklistItemSchema = z
-  .object({
-    key: z
-      .string()
-      .trim()
-      .regex(/^[a-z][a-z0-9_]{0,63}$/),
-    label: z.string().trim().min(1).max(200),
-    done: z.boolean(),
-  })
-  .strict();
-
-export const readinessChecklistSchema = z
-  .object({
-    items: z.array(checklistItemSchema).max(30),
-  })
-  .strict()
-  .refine(
-    (value) => new Set(value.items.map((item) => item.key)).size === value.items.length,
-    { message: 'Checklist keys must be unique.' },
-  );
-export type ReadinessChecklist = z.infer<typeof readinessChecklistSchema>;
-
 export const fieldSchemas = {
   terminology: terminologySchema,
   branding: brandingSchema,
@@ -146,7 +125,6 @@ export const fieldSchemas = {
   consentWording: consentWordingSchema,
   retentionDefaults: retentionDefaultsSchema,
   escalationContacts: escalationContactsSchema,
-  readinessChecklist: readinessChecklistSchema,
 } as const;
 
 export const updateSettingsSchema = z
@@ -179,7 +157,6 @@ export interface OrganisationSettingsView {
   consentWording: ConsentWording | null;
   retentionDefaults: RetentionDefaults | null;
   escalationContacts: EscalationContacts | null;
-  readinessChecklist: ReadinessChecklist | null;
 }
 
 /** Parse one stored or submitted field. `null` clears it. */

@@ -21,3 +21,12 @@ export const denyBreakGlassSchema = z.object({
   reason: z.string().trim().min(1).max(2000),
 });
 export type DenyBreakGlassInput = z.input<typeof denyBreakGlassSchema>;
+
+/**
+ * Post-use review. The notes are the human record of whether the access
+ * matched the stated support purpose. The software does not judge that.
+ */
+export const reviewBreakGlassSchema = z.object({
+  notes: z.string().trim().min(1).max(2000),
+});
+export type ReviewBreakGlassInput = z.input<typeof reviewBreakGlassSchema>;

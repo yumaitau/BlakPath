@@ -1,0 +1,1 @@
+ALTER TABLE "family_links" ADD COLUMN "relative_deceased" boolean DEFAULT false NOT NULL;

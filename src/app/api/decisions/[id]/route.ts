@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { castVote, finaliseDecision, withdrawVote } from '@/domains/decisions';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
 
 const mutationSchema = z.discriminatedUnion('operation', [
   z.object({
@@ -14,28 +15,29 @@ const mutationSchema = z.discriminatedUnion('operation', [
     operation: z.literal('finalise'),
     outcome: z.enum(['confirmed', 'not_confirmed', 'deferred']),
     note: z.string().trim().max(5000).optional(),
+    meetingId: z.uuid().optional(),
   }),
 ]);
 
-export async function PATCH(
+export const PATCH = tenantHandler(async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const input = mutationSchema.parse(await request.json().catch(() => null));
-    const result = await withRequestTenant(async () => {
-      if (input.operation === 'vote') {
-        return castVote(id, { choice: input.choice, note: input.note });
-      }
-      if (input.operation === 'withdraw_vote') {
-        await withdrawVote(id);
-        return null;
-      }
-      return finaliseDecision(id, { outcome: input.outcome, note: input.note });
+  const { id } = await params;
+  const input = mutationSchema.parse(await request.json().catch(() => null));
+  const result = await withRequestTenant(async () => {
+    if (input.operation === 'vote') {
+      return castVote(id, { choice: input.choice, note: input.note });
+    }
+    if (input.operation === 'withdraw_vote') {
+      await withdrawVote(id);
+      return null;
+    }
+    return finaliseDecision(id, {
+      outcome: input.outcome,
+      note: input.note,
+      meetingId: input.meetingId,
     });
-    return NextResponse.json({ result });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  });
+  return NextResponse.json({ result });
+});

@@ -1,14 +1,20 @@
 'use client';
 
 import { useState } from 'react';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { OrganisationDomainView } from '@/domains/organisation-settings';
+import { responseNeedsStepUp, withStepUp } from '@/lib/auth/step-up-flow';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 type Notice = { tone: 'ok' | 'err'; text: string } | null;
 
 async function readError(response: Response): Promise<string> {
+  if (await responseNeedsStepUp(response)) {
+    return 'Confirm it is you to change domains. You stay signed in.';
+  }
   if (response.status === 403) return 'No permission for that action.';
   if (response.status === 400 || response.status === 409 || response.status === 503) {
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
@@ -31,16 +37,31 @@ export function OrganisationDomainsPanel({
   const [pending, setPending] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const hydrated = useHydrated();
+  const stepUp = useStepUp();
+  const busy = !hydrated || pending !== null;
+
+  // Domain changes require a recent sign-in. JSON content type satisfies the
+  // cookie-mutation guard even when there is no body.
+  function send(url: string, method: 'POST' | 'DELETE', body?: unknown) {
+    const init: RequestInit = {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+    };
+    if (body !== undefined) init.body = JSON.stringify(body);
+    return withStepUp(
+      () => fetch(url, init),
+      () => stepUp.request(),
+    );
+  }
 
   async function addDomain(event: React.FormEvent) {
     event.preventDefault();
     setPending('add');
     setNotice(null);
     try {
-      const response = await fetch('/api/organisation-domains', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: domainName }),
+      const response = await send('/api/organisation-domains', 'POST', {
+        domain: domainName,
       });
       if (!response.ok) {
         setNotice({ tone: 'err', text: await readError(response) });
@@ -64,9 +85,7 @@ export function OrganisationDomainsPanel({
     setPending(id);
     setNotice(null);
     try {
-      const response = await fetch(`/api/organisation-domains/${id}/verify`, {
-        method: 'POST',
-      });
+      const response = await send(`/api/organisation-domains/${id}/verify`, 'POST');
       if (!response.ok) {
         setNotice({ tone: 'err', text: await readError(response) });
         return;
@@ -85,9 +104,7 @@ export function OrganisationDomainsPanel({
     setPending(id);
     setNotice(null);
     try {
-      const response = await fetch(`/api/organisation-domains/${id}`, {
-        method: 'DELETE',
-      });
+      const response = await send(`/api/organisation-domains/${id}`, 'DELETE');
       if (!response.ok) {
         setNotice({ tone: 'err', text: await readError(response) });
         return;
@@ -108,6 +125,7 @@ export function OrganisationDomainsPanel({
       className="border-border rounded-lg border p-4 sm:p-5"
       aria-labelledby="domains-heading"
     >
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <h2 id="domains-heading" className="text-lg font-semibold">
         Domains
       </h2>
@@ -148,7 +166,7 @@ export function OrganisationDomainsPanel({
                   <Button
                     type="button"
                     size="sm"
-                    disabled={pending !== null}
+                    disabled={busy}
                     onClick={() => checkDomain(item.id)}
                   >
                     {pending === item.id ? 'Checking…' : 'Check DNS'}
@@ -159,7 +177,7 @@ export function OrganisationDomainsPanel({
                     type="button"
                     size="sm"
                     variant="destructive"
-                    disabled={pending !== null}
+                    disabled={busy}
                     onClick={() => removeDomain(item.id)}
                   >
                     Confirm remove
@@ -169,7 +187,7 @@ export function OrganisationDomainsPanel({
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={pending !== null}
+                    disabled={busy}
                     onClick={() => setConfirmRemove(item.id)}
                   >
                     Remove
@@ -198,7 +216,7 @@ export function OrganisationDomainsPanel({
             required
           />
         </div>
-        <Button type="submit" size="sm" disabled={pending !== null}>
+        <Button type="submit" size="sm" disabled={busy}>
           {pending === 'add' ? 'Adding…' : 'Add domain'}
         </Button>
       </form>

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import type {
   OrganisationDomainView,
   OrganisationSettingsView,
@@ -14,6 +15,14 @@ import type {
 } from '@/domains/organisation-settings';
 
 type Notice = { tone: 'ok' | 'err'; text: string } | null;
+
+export interface ReadinessChecklistView {
+  readonly items: ReadonlyArray<{
+    readonly key: string;
+    readonly label: string;
+    readonly complete: boolean;
+  }>;
+}
 
 function newId(): string {
   return globalThis.crypto.randomUUID();
@@ -77,13 +86,35 @@ function SaveBar({
   notice: Notice;
   onSave: () => void;
 }) {
+  const hydrated = useHydrated();
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Button type="button" size="sm" disabled={pending} onClick={onSave}>
+      <Button type="button" size="sm" disabled={!hydrated || pending} onClick={onSave}>
         {pending ? 'Saving…' : 'Save'}
       </Button>
       <NoticeLine notice={notice} />
     </div>
+  );
+}
+
+function AddRowButton({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  const hydrated = useHydrated();
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      disabled={!hydrated}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
   );
 }
 
@@ -168,16 +199,13 @@ function TerminologySection({
         </div>
       ))}
       <div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
+        <AddRowButton
           onClick={() =>
             setRows((current) => [...current, { id: newId(), key: '', label: '' }])
           }
         >
           Add term
-        </Button>
+        </AddRowButton>
       </div>
       <SaveBar pending={pending} notice={notice} onSave={onSave} />
     </Section>
@@ -406,10 +434,7 @@ function EvidenceSection({
         </div>
       ))}
       <div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
+        <AddRowButton
           onClick={() =>
             setItems((current) => [
               ...current,
@@ -418,7 +443,7 @@ function EvidenceSection({
           }
         >
           Add item
-        </Button>
+        </AddRowButton>
       </div>
       <SaveBar pending={pending} notice={notice} onSave={onSave} />
     </Section>
@@ -675,10 +700,7 @@ function ContactsSection({
         </div>
       ))}
       <div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
+        <AddRowButton
           onClick={() =>
             setContacts((current) => [
               ...current,
@@ -687,135 +709,82 @@ function ContactsSection({
           }
         >
           Add contact
-        </Button>
+        </AddRowButton>
       </div>
       <SaveBar pending={pending} notice={notice} onSave={onSave} />
     </Section>
   );
 }
 
-function ChecklistSection({
-  initial,
-}: {
-  initial: OrganisationSettingsView['readinessChecklist'];
-}) {
-  const [items, setItems] = useState(() =>
-    (initial?.items ?? []).map((item) => ({
-      id: newId(),
-      key: item.key,
-      label: item.label,
-      done: item.done,
-    })),
-  );
-  const [pending, setPending] = useState(false);
+function ChecklistSection({ initial }: { initial: ReadinessChecklistView | null }) {
+  const hydrated = useHydrated();
+  const [items, setItems] = useState(initial?.items ?? []);
+  const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
 
-  async function onSave() {
-    const cleaned: Array<{ key: string; label: string; done: boolean }> = [];
-    const seen = new Set<string>();
-    for (const item of items) {
-      const key = item.key.trim();
-      const label = item.label.trim();
-      if (!key && !label) continue;
-      if (!key || !label) {
-        setNotice({ tone: 'err', text: 'Each checklist item needs a key and a label.' });
-        return;
-      }
-      if (seen.has(key)) {
-        setNotice({ tone: 'err', text: 'Checklist keys must be unique.' });
-        return;
-      }
-      seen.add(key);
-      cleaned.push({ key, label, done: item.done });
-    }
-    setPending(true);
+  async function record(item: string, complete: boolean) {
+    setPending(item);
     setNotice(null);
-    const error = await saveField(
-      'readinessChecklist',
-      cleaned.length > 0 ? { items: cleaned } : null,
-    );
-    setPending(false);
-    setNotice(error ? { tone: 'err', text: error } : { tone: 'ok', text: 'Saved.' });
+    try {
+      const response = await fetch('/api/organisation/readiness', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item, complete }),
+      });
+      if (!response.ok) {
+        setNotice({
+          tone: 'err',
+          text:
+            response.status === 403
+              ? 'No permission for that action.'
+              : 'Could not record that item. Try again.',
+        });
+        return;
+      }
+      const body = (await response.json()) as { checklist: ReadinessChecklistView };
+      setItems(body.checklist.items);
+      setNotice({ tone: 'ok', text: 'Recorded.' });
+    } catch {
+      setNotice({ tone: 'err', text: 'Could not record that item. Try again.' });
+    } finally {
+      setPending(null);
+    }
   }
 
   return (
     <Section
       id="readiness-heading"
       title="Readiness checklist"
-      description="A human checklist for onboarding. Nothing here is ticked automatically, and nothing here decides an application."
+      description="A person records each onboarding item. Nothing here is ticked automatically, and nothing here decides an application."
     >
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
-        >
-          <div className="grid gap-2">
-            <Label htmlFor={`ready-key-${item.id}`}>Key</Label>
-            <Input
-              id={`ready-key-${item.id}`}
-              value={item.key}
-              onChange={(event) =>
-                setItems((current) =>
-                  current.map((row) =>
-                    row.id === item.id ? { ...row, key: event.target.value } : row,
-                  ),
-                )
-              }
-              autoCapitalize="none"
-              spellCheck={false}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor={`ready-label-${item.id}`}>Label</Label>
-            <Input
-              id={`ready-label-${item.id}`}
-              value={item.label}
-              onChange={(event) =>
-                setItems((current) =>
-                  current.map((row) =>
-                    row.id === item.id ? { ...row, label: event.target.value } : row,
-                  ),
-                )
-              }
-            />
-          </div>
-          <label
-            className="flex items-center gap-2 pb-2 text-sm"
-            htmlFor={`ready-done-${item.id}`}
-          >
-            <input
-              id={`ready-done-${item.id}`}
-              type="checkbox"
-              checked={item.done}
-              onChange={(event) =>
-                setItems((current) =>
-                  current.map((row) =>
-                    row.id === item.id ? { ...row, done: event.target.checked } : row,
-                  ),
-                )
-              }
-              className="border-input text-primary focus-visible:ring-ring size-5 rounded"
-            />
-            Done
-          </label>
-        </div>
-      ))}
-      <div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            setItems((current) => [
-              ...current,
-              { id: newId(), key: '', label: '', done: false },
-            ])
-          }
-        >
-          Add item
-        </Button>
-      </div>
-      <SaveBar pending={pending} notice={notice} onSave={onSave} />
+      {initial === null ? (
+        <p className="text-muted-foreground text-sm">
+          The stored checklist could not be read. Ask the platform operator to record it
+          again.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {items.map((item) => (
+            <li key={item.key}>
+              <label
+                className="flex items-start gap-2 text-sm"
+                htmlFor={`ready-${item.key}`}
+              >
+                <input
+                  id={`ready-${item.key}`}
+                  type="checkbox"
+                  checked={item.complete}
+                  disabled={!hydrated || pending !== null}
+                  onChange={(event) => record(item.key, event.target.checked)}
+                  className="border-input text-primary focus-visible:ring-ring mt-0.5 size-5 rounded"
+                />
+                {item.label}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+      <NoticeLine notice={notice} />
     </Section>
   );
 }
@@ -824,9 +793,12 @@ function ChecklistSection({
 export function OrganisationSettingsEditor({
   initialSettings,
   initialDomains,
+  initialChecklist,
 }: {
   initialSettings: OrganisationSettingsView;
   initialDomains: OrganisationDomainView[];
+  /** From onboarding readiness; null when the stored checklist is unreadable. */
+  initialChecklist: ReadinessChecklistView | null;
 }) {
   return (
     <div className="flex flex-col gap-8">
@@ -859,7 +831,7 @@ export function OrganisationSettingsEditor({
       <ConsentSection initial={initialSettings.consentWording} />
       <RetentionSection initial={initialSettings.retentionDefaults} />
       <ContactsSection initial={initialSettings.escalationContacts} />
-      <ChecklistSection initial={initialSettings.readinessChecklist} />
+      <ChecklistSection initial={initialChecklist} />
       <OrganisationDomainsPanel initialDomains={initialDomains} />
     </div>
   );
