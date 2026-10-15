@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreDependencies": ["pino-pretty"],
-  "ignoreBinaries": ["openssl"],
+  "ignoreBinaries": ["kubectl", "kustomize", "openssl"],
   "rules": {
     "files": "off",
     "exports": "off",

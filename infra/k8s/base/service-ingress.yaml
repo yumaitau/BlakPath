@@ -44,7 +44,7 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-    - host: blakpath.yumait.au
+    - host: placeholder.invalid
       http:
         paths:
           # More specific than `/`. Public clients never reach the detailed report.

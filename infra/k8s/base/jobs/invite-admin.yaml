@@ -1,7 +1,7 @@
 # One-shot: email the first organisation administrator.
 # Run after migrate and seed. Does not create a password or print a join link.
 # Replace the three REPLACE_* values, then:
-#   kubectl apply -f infra/k8s/jobs/invite-admin.yaml
+#   see "Hand-applied jobs" in docs/eks-runbook.md (image and namespace).
 # The invitee must enrol a passkey or authenticator before organisation access.
 # NOT in kustomization.yaml.
 apiVersion: batch/v1
@@ -30,7 +30,7 @@ spec:
           emptyDir: {}
       containers:
         - name: invite-admin
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          image: blakpath/worker:unset
           imagePullPolicy: IfNotPresent
           command: [pnpm, exec, tsx, scripts/invite-first-admin.ts]
           envFrom:

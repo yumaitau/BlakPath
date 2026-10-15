@@ -1,4 +1,4 @@
-# Pre-deploy gate. Not part of infra/k8s/kustomization.yaml.
+# Pre-deploy gate. Not part of the environment overlay.
 # scripts/eks-deploy.sh applies this Job and blocks the workload rollout
 # unless both containers exit 0.
 apiVersion: batch/v1
@@ -28,7 +28,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: web
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app:7350f7c
+          image: blakpath/app:unset
           imagePullPolicy: IfNotPresent
           workingDir: /app
           command: ['node', 'release-check.cjs']
@@ -58,7 +58,7 @@ spec:
             capabilities:
               drop: [ALL]
         - name: worker
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:7350f7c
+          image: blakpath/worker:unset
           imagePullPolicy: IfNotPresent
           workingDir: /app
           command: ['node', 'release-check.cjs']

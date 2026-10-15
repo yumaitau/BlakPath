@@ -1,12 +1,15 @@
+# Environment-neutral base. Apply an overlay, not this directory.
+# Account ids, bucket names, key ARNs and the image registry are tokens
+# that the overlays and scripts/eks-deploy.sh fill in. See docs/eks-runbook.md.
+#
 # Rollouts go through scripts/eks-deploy.sh. That script applies
-# infra/k8s/release-check, then the release-pinned migrate Job, and applies
-# this kustomization only after both Jobs exit 0. Applying this directory
-# alone skips the gate and the migration.
+# overlays/<environment>/release-check, then the release-pinned migrate Job,
+# and applies overlays/<environment> only after both Jobs exit 0. Applying an
+# overlay alone skips the gate and the migration.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: blakpath
 resources:
-  - namespace.yaml
   - configmap.yaml
   - serviceaccounts.yaml
   - secretstore.yaml
@@ -19,8 +22,3 @@ resources:
   - service-ingress.yaml
   - network-policy.yaml
   - autoscaling.yaml
-images:
-  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/app
-    newTag: 7350f7c
-  - name: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker
-    newTag: 7350f7c

@@ -8,8 +8,8 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 `pnpm db:seed` loads the permission catalogue and system role templates only.
 It does not create a production organisation. Do not insert the organisation
 row by hand. Provision with the operator command (or the Kubernetes Job
-`infra/k8s/jobs/provision-organisation.yaml`). `pnpm admin:invite`
-(`infra/k8s/jobs/invite-admin.yaml`) still covers the very first organisation
+`infra/k8s/base/jobs/provision-organisation.yaml`). `pnpm admin:invite`
+(`infra/k8s/base/jobs/invite-admin.yaml`) still covers the very first organisation
 on an empty database, but refuses once any organisation exists.
 
 The command runs with the application database role (`DATABASE_URL`), never

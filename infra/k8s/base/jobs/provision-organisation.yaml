@@ -18,7 +18,7 @@
 # Activation is refused until the tenant key is active and validated, every
 # checklist item is recorded, and the agreement is recorded.
 #
-#   kubectl apply -f infra/k8s/jobs/provision-organisation.yaml
+#   see "Hand-applied jobs" in docs/eks-runbook.md (image and namespace).
 # NOT in kustomization.yaml.
 apiVersion: batch/v1
 kind: Job
@@ -48,7 +48,7 @@ spec:
           emptyDir: {}
       containers:
         - name: provision-organisation
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          image: blakpath/worker:unset
           imagePullPolicy: IfNotPresent
           command:
             - pnpm

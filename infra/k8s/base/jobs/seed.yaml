@@ -1,7 +1,7 @@
-# Production seed: permission catalogue + system role templates only.
+# Catalogue seed: permission catalogue + system role templates only.
 # Developer accounts require ALLOW_DEV_SEED=1 and a loopback database host.
 # NODE_ENV=production never creates them (see src/db/seeds).
-#   kubectl apply -f infra/k8s/jobs/seed.yaml
+# Render infra/k8s/overlays/<environment>/jobs (docs/eks-runbook.md).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -27,7 +27,7 @@ spec:
           emptyDir: {}
       containers:
         - name: seed
-          image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath/worker:4676c43
+          image: blakpath/worker:unset
           imagePullPolicy: IfNotPresent
           command: [pnpm, exec, tsx, src/db/seeds/index.ts]
           envFrom:

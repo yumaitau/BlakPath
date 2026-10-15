@@ -6,7 +6,7 @@
 # or credential id.
 #
 # Precondition: the origin load balancer inbound-cidrs stay limited to
-# Cloudflare ranges (infra/k8s/service-ingress.yaml). cf-connecting-ip is
+# Cloudflare ranges (infra/k8s/base/service-ingress.yaml). cf-connecting-ip is
 # trusted only while that is true. Do not widen those CIDRs.
 
 zone: blakpath.yumait.au

@@ -1,0 +1,43 @@
+# Production overlay. Bucket names, the bucket default KMS key and the
+# account id are tokens. scripts/eks-deploy.sh substitutes them from private
+# CD config and pins the images to the release digests. See docs/eks-runbook.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: blakpath
+resources:
+  - ../../base
+  - namespace.yaml
+patches:
+  - path: configmap-patch.yaml
+    target:
+      kind: ConfigMap
+      name: blakpath-config
+  - path: serviceaccount-patch.yaml
+    target:
+      kind: ServiceAccount
+      name: blakpath-external-secrets
+  - path: ingress-patch.yaml
+    target:
+      group: networking.k8s.io
+      version: v1
+      kind: Ingress
+      name: blakpath
+  - path: externalsecret-patch.yaml
+    target:
+      group: external-secrets.io
+      version: v1
+      kind: ExternalSecret
+      name: blakpath-runtime
+  - path: migrator-externalsecret-patch.yaml
+    target:
+      group: external-secrets.io
+      version: v1
+      kind: ExternalSecret
+      name: blakpath-migrator
+images:
+  - name: blakpath/app
+    newName: __ECR_REGISTRY__/blakpath/app
+    newTag: __IMAGE_TAG__
+  - name: blakpath/worker
+    newName: __ECR_REGISTRY__/blakpath/worker
+    newTag: __IMAGE_TAG__
