@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { reviews, reviewComments } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import {
   beforeConditionalWrite,
   nextRowVersion,
@@ -32,13 +33,6 @@ import { canComment, canFinalise, canReopen, type ReviewStatus } from './status'
 
 export type ReviewRow = typeof reviews.$inferSelect;
 export type ReviewCommentRow = typeof reviewComments.$inferSelect;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 /** Load a live review within the active tenant scope. */
 async function loadReview(id: string): Promise<ReviewRow | null> {
@@ -89,7 +83,7 @@ export async function createReview(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'review');
+    const row = expectRow(inserted[0], 'review');
 
     await recordAudit(
       {
@@ -133,7 +127,7 @@ export async function addReviewComment(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'review comment');
+    const row = expectRow(inserted[0], 'review comment');
 
     await recordAudit(
       {
@@ -186,7 +180,7 @@ export async function finaliseReview(reviewId: string): Promise<ReviewRow> {
         'This review changed while you were working. Refresh and try again.',
       );
     }
-    const row = must(updated[0], 'review');
+    const row = expectRow(updated[0], 'review');
 
     await recordAudit(
       {
@@ -236,7 +230,7 @@ export async function reopenReview(reviewId: string): Promise<ReviewRow> {
         'This review changed while you were working. Refresh and try again.',
       );
     }
-    const row = must(updated[0], 'review');
+    const row = expectRow(updated[0], 'review');
 
     await recordAudit(
       {
