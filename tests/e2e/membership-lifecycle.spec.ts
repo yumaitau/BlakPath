@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './helpers/page';
+import { expectNoWcagViolations } from './helpers/accessibility';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -7,6 +8,7 @@ import {
   selectDevelopmentOrganisation,
   signInAndSelectOrganisation,
 } from './helpers/auth';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 const STAFF_EMAIL = 'staff@blakpath.local';
 const STAFF_PASSWORD = 'blakpath-dev-staff-2026';
@@ -26,6 +28,7 @@ test('invite acceptance, role changes and revocation remain tenant-bound', async
   baseURL,
 }) => {
   test.setTimeout(120_000);
+  const pageErrors = watchForPageErrors(page);
   await signInAndSelectOrganisation(page);
   const currentAccess = await page.request.get('/api/memberships');
   expect(currentAccess.status()).toBe(200);
@@ -42,6 +45,7 @@ test('invite acceptance, role changes and revocation remain tenant-bound', async
     expect(resetAccess.status()).toBe(200);
   }
   await page.goto('/settings/people');
+  await expectNoWcagViolations(page);
   await page.getByLabel('Email address').fill(STAFF_EMAIL);
   await page.getByLabel('Initial role').selectOption({ label: 'Committee Chair' });
   await page.getByRole('button', { name: 'Send invitation' }).click();
@@ -59,28 +63,31 @@ test('invite acceptance, role changes and revocation remain tenant-bound', async
     extraHTTPHeaders: { Origin: baseURL ?? 'http://localhost:3000' },
   });
   const staffPage = await staffContext.newPage();
+  const staffErrors = watchForPageErrors(staffPage);
   try {
-    await isolateSignInClient(staffPage);
-    await staffPage.goto(firstInvitationUrl);
-    await expect(
-      staffPage.getByText('This invitation is no longer available'),
-    ).toBeVisible();
+    await test.step('invite accept', async () => {
+      await isolateSignInClient(staffPage);
+      await staffPage.goto(firstInvitationUrl);
+      await expect(
+        staffPage.getByText('This invitation is no longer available'),
+      ).toBeVisible();
 
-    await staffPage.goto(invitationUrl);
-    await expect(
-      staffPage.getByRole('heading', {
-        name: 'Join BlakPath Development Organisation',
-      }),
-    ).toBeVisible();
-    await staffPage.getByRole('link', { name: 'Sign in' }).click();
-    await staffPage.getByLabel('Email').fill(STAFF_EMAIL);
-    await staffPage.getByLabel('Password').fill(STAFF_PASSWORD);
-    await staffPage.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await expect(staffPage).toHaveURL(invitationUrl, { timeout: 30_000 });
-    await staffPage
-      .getByRole('button', { name: 'Join BlakPath Development Organisation' })
-      .click();
-    await expect(staffPage).toHaveURL(/\/dashboard$/);
+      await staffPage.goto(invitationUrl);
+      await expect(
+        staffPage.getByRole('heading', {
+          name: 'Join BlakPath Development Organisation',
+        }),
+      ).toBeVisible();
+      await staffPage.getByRole('link', { name: 'Sign in' }).click();
+      await staffPage.getByLabel('Email').fill(STAFF_EMAIL);
+      await staffPage.getByLabel('Password').fill(STAFF_PASSWORD);
+      await staffPage.getByRole('button', { name: 'Sign in', exact: true }).click();
+      await expect(staffPage).toHaveURL(invitationUrl, { timeout: 30_000 });
+      await staffPage
+        .getByRole('button', { name: 'Join BlakPath Development Organisation' })
+        .click();
+      await expect(staffPage).toHaveURL(/\/dashboard$/);
+    });
 
     await page.reload();
     invitation = page.getByRole('listitem').filter({ hasText: STAFF_EMAIL }).first();
@@ -134,16 +141,21 @@ test('invite acceptance, role changes and revocation remain tenant-bound', async
     await member.getByRole('button', { name: 'Confirm removal' }).click();
     await expect(member).toContainText('revoked');
     expect((await staffPage.request.get('/api/applications')).status()).toBe(403);
+    expectNoPageErrors(staffErrors);
   } finally {
     await staffContext.close();
   }
+  expectNoPageErrors(pageErrors);
 });
 
 test('the bootstrap administrator identity remains stable', async ({ page }) => {
+  const pageErrors = watchForPageErrors(page);
   await signInAs(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await selectDevelopmentOrganisation(page);
   await page.goto('/settings/people');
   await expect(page.getByRole('listitem').filter({ hasText: ADMIN_EMAIL })).toContainText(
     'Organisation Administrator',
   );
+  await expectNoWcagViolations(page);
+  expectNoPageErrors(pageErrors);
 });

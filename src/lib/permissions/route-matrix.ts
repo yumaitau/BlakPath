@@ -358,6 +358,7 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('DELETE', '/api/calendar/events/[id]', anyOf(['calendar:delete-any'])),
   route('POST', '/api/calendar/events/[id]/attendees', anyOf(['calendar:update-any'])),
   route('POST', '/api/calendar/events/[id]/invite', anyOf(['calendar:update-any'])),
+  route('POST', '/api/calendar/events/[id]/reminders', anyOf(['calendar:update-any'])),
   route('POST', '/api/calendar/import', anyOf(['meeting:create']), {
     body: { ics: 'BEGIN:VCALENDAR' },
   }),
