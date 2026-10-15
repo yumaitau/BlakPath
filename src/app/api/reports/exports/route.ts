@@ -9,7 +9,7 @@ import { tenantHandler } from '@/lib/http/error-response';
 /**
  * Export requests.
  * - GET  — list this tenant's export requests.
- * - POST — request an export ({ type }); the worker assembles the CSV.
+ * - POST — request an export ({ type, status?, from?, to? }); the worker assembles the CSV.
  */
 export const GET = tenantHandler(async function GET(): Promise<Response> {
   const items = await withRequestTenant(() => listExports());

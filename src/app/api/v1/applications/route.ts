@@ -24,6 +24,11 @@ export const GET = tenantHandler(async function GET(
   // Parsed before the key check so `?limit=abc` is a 400, not a 500 after auth.
   const query = listApplicationsSchema.parse({
     ...(searchParams.get('status') ? { status: searchParams.get('status') } : {}),
+    ...(searchParams.get('assigneeUserId')
+      ? { assigneeUserId: searchParams.get('assigneeUserId') }
+      : {}),
+    ...(searchParams.get('q') ? { q: searchParams.get('q') } : {}),
+    ...(searchParams.get('cursor') ? { cursor: searchParams.get('cursor') } : {}),
     ...(searchParams.get('limit') ? { limit: searchParams.get('limit') } : {}),
     ...(searchParams.get('offset') ? { offset: searchParams.get('offset') } : {}),
   }) as ListApplicationsInput;
@@ -38,5 +43,6 @@ export const GET = tenantHandler(async function GET(
     })),
     limit: result.limit,
     offset: result.offset,
+    nextCursor: result.nextCursor,
   });
 });
