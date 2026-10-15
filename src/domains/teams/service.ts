@@ -1,4 +1,5 @@
 import { and, asc, eq, exists, isNull, or } from 'drizzle-orm';
+import { uuidv7 } from 'uuidv7';
 import {
   clients,
   groupMemberships,
@@ -18,6 +19,7 @@ import {
   subjectFromContext,
 } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { openClientRows, sealClientContacts } from '@/lib/encryption/tenant-fields';
 import {
   addGroupMemberSchema,
   addTeamMemberSchema,
@@ -123,25 +125,30 @@ export async function createTeam(raw: CreateTeamInput): Promise<TeamRow> {
   requirePermission(subjectFromContext(ctx), 'team:create');
   const input = createTeamSchema.parse(raw);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(teams)
-    .values(
-      scope.insertValues({
-        slug: input.slug,
-        name: input.name,
-        description: input.description ?? null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'team');
-  await recordAudit({
-    action: 'team.created',
-    resourceType: 'team',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { slug: row.slug }, allow: ['slug'] },
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(teams)
+      .values(
+        scope.insertValues({
+          slug: input.slug,
+          name: input.name,
+          description: input.description ?? null,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'team');
+    await recordAudit(
+      {
+        action: 'team.created',
+        resourceType: 'team',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { slug: row.slug }, allow: ['slug'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listTeams(): Promise<TeamRow[]> {
@@ -174,28 +181,33 @@ export async function addTeamMember(raw: AddTeamMemberInput) {
     )
     .limit(1);
   if (existing) return existing;
-  const inserted = await scope.db
-    .insert(teamMemberships)
-    .values(
-      scope.insertValues({
-        teamId: input.teamId,
-        userId: input.userId,
-        role: input.role ?? 'member',
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'team membership');
-  await recordAudit({
-    action: 'team.member_added',
-    resourceType: 'team',
-    resourceId: input.teamId,
-    result: 'success',
-    after: {
-      data: { userId: input.userId, role: row.role },
-      allow: ['userId', 'role'],
-    },
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(teamMemberships)
+      .values(
+        scope.insertValues({
+          teamId: input.teamId,
+          userId: input.userId,
+          role: input.role ?? 'member',
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'team membership');
+    await recordAudit(
+      {
+        action: 'team.member_added',
+        resourceType: 'team',
+        resourceId: input.teamId,
+        result: 'success',
+        after: {
+          data: { userId: input.userId, role: row.role },
+          allow: ['userId', 'role'],
+        },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function removeTeamMember(raw: RemoveTeamMemberInput) {
@@ -203,25 +215,31 @@ export async function removeTeamMember(raw: RemoveTeamMemberInput) {
   requirePermission(subjectFromContext(ctx), 'team:manage');
   const input = removeTeamMemberSchema.parse(raw);
   const scope = currentScope();
-  const removed = await scope.db
-    .delete(teamMemberships)
-    .where(
-      scope.where(
-        teamMemberships.organisationId,
-        eq(teamMemberships.teamId, input.teamId),
-        eq(teamMemberships.userId, input.userId),
-      ),
-    )
-    .returning();
-  if (!removed[0]) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({
-    action: 'team.member_removed',
-    resourceType: 'team',
-    resourceId: input.teamId,
-    result: 'success',
-    after: { data: { userId: input.userId }, allow: ['userId'] },
+  return scope.db.transaction(async (tx) => {
+    const removed = await tx
+      .delete(teamMemberships)
+      .where(
+        scope.where(
+          teamMemberships.organisationId,
+          eq(teamMemberships.teamId, input.teamId),
+          eq(teamMemberships.userId, input.userId),
+        ),
+      )
+      .returning();
+    const row = removed[0];
+    if (!row) throw new AuthorizationError('POLICY_DENIED');
+    await recordAudit(
+      {
+        action: 'team.member_removed',
+        resourceType: 'team',
+        resourceId: input.teamId,
+        result: 'success',
+        after: { data: { userId: input.userId }, allow: ['userId'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return removed[0];
 }
 
 export async function listTeamMembers(): Promise<TeamMemberView[]> {
@@ -272,26 +290,31 @@ export async function createGroup(raw: CreateGroupInput): Promise<GroupRow> {
   requirePermission(subjectFromContext(ctx), 'group:create');
   const input = createGroupSchema.parse(raw);
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(groups)
-    .values(
-      scope.insertValues({
-        slug: input.slug,
-        name: input.name,
-        description: input.description ?? null,
-        teamId: input.teamId ?? null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'group');
-  await recordAudit({
-    action: 'group.created',
-    resourceType: 'group',
-    resourceId: row.id,
-    result: 'success',
-    after: { data: { slug: row.slug }, allow: ['slug'] },
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(groups)
+      .values(
+        scope.insertValues({
+          slug: input.slug,
+          name: input.name,
+          description: input.description ?? null,
+          teamId: input.teamId ?? null,
+        }),
+      )
+      .returning();
+    const row = must(inserted[0], 'group');
+    await recordAudit(
+      {
+        action: 'group.created',
+        resourceType: 'group',
+        resourceId: row.id,
+        result: 'success',
+        after: { data: { slug: row.slug }, allow: ['slug'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function listGroups(): Promise<GroupRow[]> {
@@ -324,19 +347,24 @@ export async function addGroupMember(raw: AddGroupMemberInput) {
     )
     .limit(1);
   if (existing) return existing;
-  const inserted = await scope.db
-    .insert(groupMemberships)
-    .values(scope.insertValues({ groupId: input.groupId, userId: input.userId }))
-    .returning();
-  const row = must(inserted[0], 'group membership');
-  await recordAudit({
-    action: 'group.member_added',
-    resourceType: 'group',
-    resourceId: input.groupId,
-    result: 'success',
-    after: { data: { userId: input.userId }, allow: ['userId'] },
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(groupMemberships)
+      .values(scope.insertValues({ groupId: input.groupId, userId: input.userId }))
+      .returning();
+    const row = must(inserted[0], 'group membership');
+    await recordAudit(
+      {
+        action: 'group.member_added',
+        resourceType: 'group',
+        resourceId: input.groupId,
+        result: 'success',
+        after: { data: { userId: input.userId }, allow: ['userId'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function removeGroupMember(raw: RemoveGroupMemberInput) {
@@ -344,25 +372,31 @@ export async function removeGroupMember(raw: RemoveGroupMemberInput) {
   requirePermission(subjectFromContext(ctx), 'group:manage');
   const input = removeGroupMemberSchema.parse(raw);
   const scope = currentScope();
-  const removed = await scope.db
-    .delete(groupMemberships)
-    .where(
-      scope.where(
-        groupMemberships.organisationId,
-        eq(groupMemberships.groupId, input.groupId),
-        eq(groupMemberships.userId, input.userId),
-      ),
-    )
-    .returning();
-  if (!removed[0]) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({
-    action: 'group.member_removed',
-    resourceType: 'group',
-    resourceId: input.groupId,
-    result: 'success',
-    after: { data: { userId: input.userId }, allow: ['userId'] },
+  return scope.db.transaction(async (tx) => {
+    const removed = await tx
+      .delete(groupMemberships)
+      .where(
+        scope.where(
+          groupMemberships.organisationId,
+          eq(groupMemberships.groupId, input.groupId),
+          eq(groupMemberships.userId, input.userId),
+        ),
+      )
+      .returning();
+    const row = removed[0];
+    if (!row) throw new AuthorizationError('POLICY_DENIED');
+    await recordAudit(
+      {
+        action: 'group.member_removed',
+        resourceType: 'group',
+        resourceId: input.groupId,
+        result: 'success',
+        after: { data: { userId: input.userId }, allow: ['userId'] },
+      },
+      tx,
+    );
+    return row;
   });
-  return removed[0];
 }
 
 export async function listGroupMembers(): Promise<GroupMemberView[]> {
@@ -388,27 +422,41 @@ export async function createClient(raw: CreateClientInput): Promise<ClientRow> {
   const input = createClientSchema.parse(raw);
   const scope = currentScope();
   if (input.assignedTeamId) await assertTeam(input.assignedTeamId);
-  const inserted = await scope.db
-    .insert(clients)
-    .values(
-      scope.insertValues({
-        displayName: input.displayName,
-        contactEmail: input.contactEmail ?? null,
-        contactPhone: input.contactPhone ?? null,
-        linkedUserId: input.linkedUserId ?? null,
-        assignedTeamId: input.assignedTeamId ?? null,
-        notes: input.notes ?? null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'client');
-  await recordAudit({
-    action: 'client.created',
-    resourceType: 'client',
-    resourceId: row.id,
-    result: 'success',
+  const id = uuidv7();
+  const sealed = await sealClientContacts(scope.organisationId, id, {
+    contactEmail: input.contactEmail ?? null,
+    contactPhone: input.contactPhone ?? null,
+    notes: input.notes ?? null,
   });
-  return row;
+  const stored = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(clients)
+      .values(
+        scope.insertValues({
+          id,
+          displayName: input.displayName,
+          contactEmail: sealed.contactEmail,
+          contactPhone: sealed.contactPhone,
+          linkedUserId: input.linkedUserId ?? null,
+          assignedTeamId: input.assignedTeamId ?? null,
+          notes: sealed.notes,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'client');
+    await recordAudit(
+      {
+        action: 'client.created',
+        resourceType: 'client',
+        resourceId: created.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return created;
+  });
+  const [row] = await openClientRows(scope.organisationId, [stored]);
+  return must(row, 'client');
 }
 
 export async function listClients(): Promise<ClientRow[]> {
@@ -435,7 +483,7 @@ export async function listClients(): Promise<ClientRow[]> {
             ),
         ),
       );
-  return scope.db
+  const rows = await scope.db
     .select()
     .from(clients)
     .where(
@@ -447,6 +495,7 @@ export async function listClients(): Promise<ClientRow[]> {
     )
     .orderBy(asc(clients.displayName))
     .limit(500);
+  return openClientRows(scope.organisationId, rows);
 }
 
 export async function assignClient(
@@ -458,18 +507,26 @@ export async function assignClient(
   const input = assignClientSchema.parse(raw);
   const scope = currentScope();
   await assertTeam(input.assignedTeamId);
-  const updated = await scope.db
-    .update(clients)
-    .set({ assignedTeamId: input.assignedTeamId })
-    .where(scope.where(clients.organisationId, eq(clients.id, id)))
-    .returning();
-  const row = updated[0];
-  if (!row) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({
-    action: 'client.assigned',
-    resourceType: 'client',
-    resourceId: id,
-    result: 'success',
+  const stored = await scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(clients)
+      .set({ assignedTeamId: input.assignedTeamId })
+      .where(scope.where(clients.organisationId, eq(clients.id, id)))
+      .returning();
+    const assigned = updated[0];
+    if (!assigned) throw new AuthorizationError('POLICY_DENIED');
+    await recordAudit(
+      {
+        action: 'client.assigned',
+        resourceType: 'client',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return assigned;
   });
+  const [row] = await openClientRows(scope.organisationId, [stored]);
+  if (!row) throw new AuthorizationError('POLICY_DENIED');
   return row;
 }

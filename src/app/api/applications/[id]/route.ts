@@ -7,7 +7,8 @@ import {
   updateIntake,
 } from '@/domains/applications';
 import { APPLICATION_STATUSES } from '@/domains/applications/workflow';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
+import { tenantHandler } from '@/lib/http/error-response';
 
 const mutationSchema = z.discriminatedUnion('operation', [
   z.object({
@@ -45,38 +46,34 @@ const mutationSchema = z.discriminatedUnion('operation', [
   }),
 ]);
 
-export async function PATCH(
+export const PATCH = tenantHandler(async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const input = mutationSchema.parse(await request.json().catch(() => null));
-    const result = await withRequestTenant(async (ctx) => {
-      switch (input.operation) {
-        case 'update_intake':
-          return updateIntake(id, {
-            applicantName: input.applicantName,
-            priority: input.priority,
-            clientId: input.clientId,
-          });
-        case 'assign_self':
-          return assignApplication(id, {
-            assigneeUserId: ctx.userId,
-            roleContext: 'case-officer',
-          });
-        case 'assign':
-          return assignApplication(id, {
-            assigneeUserId: input.assigneeUserId,
-          });
-        case 'transition':
-          return transitionApplication(id, input.action, { note: input.note });
-        case 'add_note':
-          return addNote(id, { body: input.body, visibility: input.visibility });
-      }
-    });
-    return NextResponse.json({ result, statuses: APPLICATION_STATUSES });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const input = mutationSchema.parse(await request.json().catch(() => null));
+  const result = await withRequestTenant(async (ctx) => {
+    switch (input.operation) {
+      case 'update_intake':
+        return updateIntake(id, {
+          applicantName: input.applicantName,
+          priority: input.priority,
+          clientId: input.clientId,
+        });
+      case 'assign_self':
+        return assignApplication(id, {
+          assigneeUserId: ctx.userId,
+          roleContext: 'case-officer',
+        });
+      case 'assign':
+        return assignApplication(id, {
+          assigneeUserId: input.assigneeUserId,
+        });
+      case 'transition':
+        return transitionApplication(id, input.action, { note: input.note });
+      case 'add_note':
+        return addNote(id, { body: input.body, visibility: input.visibility });
+    }
+  });
+  return NextResponse.json({ result, statuses: APPLICATION_STATUSES });
+});

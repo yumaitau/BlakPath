@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { uuidv7 } from 'uuidv7';
 
 /**
@@ -54,4 +55,23 @@ export function correlationFromHeaders(
     correlationId: read(CORRELATION_HEADER) ?? newId(),
     requestId: read(REQUEST_HEADER) ?? newId(),
   };
+}
+
+const requestIds = new AsyncLocalStorage<CorrelationIds>();
+
+/**
+ * Bind the inbound request's ids for the rest of the handler (and anything it
+ * awaits). Route wrappers set this once so the error log, the JSON body, and
+ * the tenant context all share one request id.
+ */
+export function runWithRequestIds<T>(
+  ids: CorrelationIds,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return requestIds.run(ids, fn);
+}
+
+/** Ids for the active request, or `undefined` outside a route wrapper. */
+export function currentRequestIds(): CorrelationIds | undefined {
+  return requestIds.getStore();
 }

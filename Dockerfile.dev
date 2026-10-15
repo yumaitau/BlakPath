@@ -8,20 +8,33 @@
 # and container-local node_modules. NOT for production — see Dockerfile.
 ###############################################################################
 
-ARG NODE_VERSION=20.18.1
-FROM node:${NODE_VERSION}-slim
+# Node 24 LTS, same version as production. Digest is the multi-arch index for
+# node:24.21.0-slim (Debian bookworm). Bump the version and digest together.
+ARG NODE_VERSION=24.21.0
+FROM node:${NODE_VERSION}-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS os
 
 ENV PNPM_HOME=/pnpm
 ENV PATH="${PNPM_HOME}:${PATH}"
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # tini for signal handling; curl for compose healthchecks; procps for pgrep.
+# Upgrade so Debian security fixes (the pinned snapshot lags) are applied.
 RUN apt-get update \
+  && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends tini curl ca-certificates procps \
   && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+# npm and Yarn ship with the Node image and are unused; pnpm comes from Corepack
+# in the next stage.
+RUN rm -rf /usr/local/lib/node_modules/npm /opt/yarn* \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+    /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 WORKDIR /app
+
+FROM os AS toolchain
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+
+FROM toolchain
 
 # Prime the dependency cache. The compose bind-mount overlays source at runtime,
 # but a named volume keeps /app/node_modules from being shadowed by the host.

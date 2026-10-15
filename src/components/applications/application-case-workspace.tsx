@@ -9,12 +9,21 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
 import { Alert } from '@/components/ui/alert';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  inferUploadContentType,
+  UPLOAD_ACCEPT,
+  uploadProblem,
+} from '@/domains/evidence/status';
+import { withStepUp } from '@/lib/auth/step-up-flow';
 
 interface CaseEvidence {
   id: string;
@@ -23,6 +32,8 @@ interface CaseEvidence {
   classification: string | null;
   sizeBytes: number;
   createdAt: string;
+  receiptChannel: string | null;
+  receivedOn: string | null;
 }
 
 interface CaseRequest {
@@ -55,6 +66,9 @@ interface WorkspacePermissions {
   downloadEvidence: boolean;
   addNote: boolean;
   uploadEvidence: boolean;
+  classifyEvidence: boolean;
+  /** Staff recording a file received for the applicant, not their own upload. */
+  uploadOnBehalf: boolean;
 }
 
 interface CaseClient {
@@ -74,9 +88,10 @@ export interface ApplicationCaseWorkspaceProps {
   priority: string;
   status: string;
   assignedToCurrentUser: boolean;
-  clientId: string | null;
-  clients: CaseClient[];
-  staff: CaseStaff[];
+  /** Linked client record; omitted when the viewer cannot link clients. */
+  clientId?: string | null;
+  clients?: CaseClient[];
+  staff?: CaseStaff[];
   availableActions: Array<{ value: string; label: string }>;
   evidence: CaseEvidence[];
   evidenceRequests: CaseRequest[];
@@ -96,10 +111,67 @@ function displayDate(value: string): string {
   }).format(new Date(value));
 }
 
+function displayDay(value: string): string {
+  return new Intl.DateTimeFormat('en-AU', {
+    dateStyle: 'medium',
+    timeZone: 'UTC',
+  }).format(new Date(`${value}T00:00:00Z`));
+}
+
+const RECEIPT_PHRASES: Record<string, string> = {
+  post: 'by post',
+  in_person: 'in person',
+  email: 'by email',
+  other: 'another way',
+};
+
+function receiptSummary(
+  channel: string | null,
+  receivedOn: string | null,
+): string | null {
+  if (!channel || !receivedOn) return null;
+  const phrase = RECEIPT_PHRASES[channel] ?? channel;
+  return `Received ${phrase} on ${displayDay(receivedOn)}`;
+}
+
 function evidenceTone(status: string): 'success' | 'warning' | 'destructive' {
   if (status === 'clean') return 'success';
   if (status === 'infected' || status === 'rejected') return 'destructive';
   return 'warning';
+}
+
+interface UploadProgress {
+  name: string;
+  percent: number;
+  state: 'waiting' | 'uploading' | 'done' | 'failed';
+}
+
+/**
+ * PUT a file to a presigned URL, reporting progress. `fetch` cannot report
+ * upload progress, so this uses XMLHttpRequest. Resolves true on a 2xx reply.
+ */
+function putWithProgress(
+  url: string,
+  headers: Record<string, string>,
+  file: File,
+  onProgress: (percent: number) => void,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    for (const [name, value] of Object.entries(headers)) {
+      xhr.setRequestHeader(name, value);
+    }
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300);
+    xhr.onerror = () => resolve(false);
+    xhr.onabort = () => resolve(false);
+    xhr.send(file);
+  });
 }
 
 function evidenceIcon(status: string) {
@@ -110,6 +182,10 @@ function evidenceIcon(status: string) {
 
 export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const router = useRouter();
+  const stepUp = useStepUp();
+  const hydrated = useHydrated();
+  const clients = props.clients ?? [];
+  const staff = props.staff ?? [];
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,63 +197,115 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
   const [requestDue, setRequestDue] = useState('');
   const [noteBody, setNoteBody] = useState('');
   const [noteVisibility, setNoteVisibility] = useState('staff');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [fileProblems, setFileProblems] = useState<string[]>([]);
+  const [uploads, setUploads] = useState<UploadProgress[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [receiptChannel, setReceiptChannel] = useState('');
+  const [receivedOn, setReceivedOn] = useState('');
+  const [classifications, setClassifications] = useState<Record<string, string>>({});
   const [clientId, setClientId] = useState(props.clientId ?? '');
   const [assigneeUserId, setAssigneeUserId] = useState('');
 
-  async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedFile) return;
-    setBusy('upload-evidence');
-    setError(null);
-    setMessage(null);
+  function chooseFiles(files: FileList | null) {
+    const chosen = Array.from(files ?? []);
+    const problems: string[] = [];
+    const accepted: File[] = [];
+    for (const file of chosen) {
+      const problem = uploadProblem(file);
+      if (problem) problems.push(problem);
+      else accepted.push(file);
+    }
+    setFileProblems(problems);
+    setSelectedFiles(accepted);
+    setUploads([]);
+  }
+
+  function updateUpload(index: number, patch: Partial<UploadProgress>) {
+    setUploads((current) =>
+      current.map((item, i) => (i === index ? { ...item, ...patch } : item)),
+    );
+  }
+
+  /** Upload one file; resolves with a plain-language problem, or null. */
+  async function uploadOne(file: File, index: number): Promise<string | null> {
+    const contentType = inferUploadContentType(file.name, file.type);
+    if (!contentType) return 'this file type is not accepted.';
     try {
       const request = await fetch(`/api/applications/${props.applicationId}/evidence`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fileName: selectedFile.name,
-          contentType: selectedFile.type,
-          sizeBytes: selectedFile.size,
+          fileName: file.name,
+          contentType,
+          sizeBytes: file.size,
+          ...(props.permissions.uploadOnBehalf ? { receiptChannel, receivedOn } : {}),
         }),
       });
       if (!request.ok) {
-        setError('This file could not be prepared for upload. Check its type and size.');
-        return;
+        return 'it could not be prepared for upload. Check its type and size.';
       }
       const prepared = (await request.json()) as {
         evidence: { id: string };
         upload: { url: string; headers: Record<string, string> };
       };
-      const uploaded = await fetch(prepared.upload.url, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': selectedFile.type,
-          ...prepared.upload.headers,
-        },
-        body: selectedFile,
-      });
-      if (!uploaded.ok) {
-        setError('The file upload did not complete. Please try again.');
-        return;
-      }
+      updateUpload(index, { state: 'uploading' });
+      const uploaded = await putWithProgress(
+        prepared.upload.url,
+        prepared.upload.headers,
+        file,
+        (percent) => updateUpload(index, { percent }),
+      );
+      if (!uploaded) return 'the upload did not complete. Please try again.';
       const completed = await fetch(`/api/evidence/${prepared.evidence.id}/complete`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!completed.ok) {
-        setError('The file arrived, but its security scan could not be started.');
-        return;
+        return 'the file arrived, but its security scan could not be started.';
       }
-      setSelectedFile(null);
+      return null;
+    } catch {
+      return 'the upload could not be completed. Check your connection.';
+    }
+  }
+
+  async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (selectedFiles.length === 0) return;
+    setBusy('upload-evidence');
+    setError(null);
+    setMessage(null);
+    setUploads(
+      selectedFiles.map((file) => ({ name: file.name, percent: 0, state: 'waiting' })),
+    );
+    const failures: string[] = [];
+    let succeeded = 0;
+    // One at a time, so progress is easy to follow and bandwidth is not split.
+    for (const [index, file] of selectedFiles.entries()) {
+      const problem = await uploadOne(file, index);
+      if (problem) {
+        failures.push(`${file.name}: ${problem}`);
+        updateUpload(index, { state: 'failed' });
+      } else {
+        succeeded += 1;
+        updateUpload(index, { state: 'done', percent: 100 });
+      }
+    }
+    setBusy(null);
+    setSelectedFiles([]);
+    if (fileInput.current) fileInput.current.value = '';
+    if (failures.length > 0) setError(failures.join(' '));
+    if (succeeded === 1) {
       setMessage(
         'Evidence uploaded to quarantine. It cannot be opened until the scan is clean.',
       );
-      router.refresh();
-    } catch {
-      setError('The evidence upload could not be completed. Check your connection.');
-    } finally {
-      setBusy(null);
+    } else if (succeeded > 1) {
+      setMessage(
+        `${succeeded} files uploaded to quarantine. They cannot be opened until each scan is clean.`,
+      );
     }
+    if (succeeded > 0) router.refresh();
   }
 
   async function mutate(
@@ -195,10 +323,12 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
+        const conflict = await readConflictMessage(response);
         setError(
-          response.status === 403
-            ? 'You do not have permission to make that change.'
-            : 'That change could not be saved. Refresh the case and try again.',
+          conflict ??
+            (response.status === 403
+              ? 'You do not have permission to make that change.'
+              : 'That change could not be saved. Refresh the case and try again.'),
         );
         return false;
       }
@@ -251,8 +381,42 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
     }
   }
 
+  async function downloadEvidence(id: string) {
+    setBusy(`download:${id}`);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await withStepUp(
+        () =>
+          fetch(`/api/evidence/${id}/download`, {
+            headers: { Accept: 'application/json' },
+          }),
+        () => stepUp.request(),
+      );
+      if (!response.ok) {
+        setError(
+          response.status === 401
+            ? 'Confirm it is you to download this file. You stay signed in.'
+            : 'That file could not be downloaded.',
+        );
+        return;
+      }
+      const data = (await response.json()) as { url?: string };
+      if (!data.url) {
+        setError('That file could not be downloaded.');
+        return;
+      }
+      window.location.assign(data.url);
+    } catch {
+      setError('That file could not be downloaded. Check your connection.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <div className="flex min-w-0 flex-col gap-8">
         {error ? (
           <Alert role="alert" tone="destructive" title="Change not saved">
@@ -341,11 +505,12 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
                 <select
                   id="case-client"
                   value={clientId}
+                  disabled={!hydrated}
                   onChange={(event) => setClientId(event.target.value)}
                   className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
                 >
                   <option value="">Not linked yet</option>
-                  {props.clients.map((client) => (
+                  {clients.map((client) => (
                     <option key={client.id} value={client.id}>
                       {client.displayName}
                     </option>
@@ -355,7 +520,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               <Button
                 type="submit"
                 variant="outline"
-                disabled={busy !== null || !clientId}
+                disabled={!hydrated || busy !== null || !clientId}
               >
                 {busy === 'client' ? 'Linking…' : 'Link client'}
               </Button>
@@ -372,6 +537,9 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
           </h2>
           <p className="text-muted-foreground mt-1 text-sm">
             Files stay quarantined and unavailable until a clean malware scan is recorded.
+            {props.permissions.classifyEvidence
+              ? ' Classification is an administrative label your organisation records. It is not a decision about a person’s identity.'
+              : ''}
           </p>
 
           {props.evidence.length === 0 ? (
@@ -383,38 +551,117 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               {props.evidence.map((item) => {
                 const downloadable =
                   item.status === 'clean' && props.permissions.downloadEvidence;
+                const received = receiptSummary(item.receiptChannel, item.receivedOn);
                 return (
-                  <li
-                    key={item.id}
-                    className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">
-                        {item.fileName}
+                  <li key={item.id} className="flex flex-col gap-3 py-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">
+                          {item.fileName}
+                        </span>
+                        <span className="text-muted-foreground text-xs">
+                          {item.classification ?? 'Not classified'} ·{' '}
+                          {Math.ceil(item.sizeBytes / 1024)} KB
+                          {received ? ` · ${received}` : ''}
+                        </span>
                       </span>
-                      <span className="text-muted-foreground text-xs">
-                        {item.classification ?? 'Not classified'} ·{' '}
-                        {Math.ceil(item.sizeBytes / 1024)} KB
-                      </span>
-                    </span>
-                    <span className="flex items-center gap-3">
-                      <Badge
-                        tone={evidenceTone(item.status)}
-                        icon={evidenceIcon(item.status)}
-                      >
-                        {item.status === 'clean'
-                          ? 'Scan clean'
-                          : displayLabel(item.status)}
-                      </Badge>
-                      {downloadable ? (
-                        <a
-                          className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline"
-                          href={`/api/evidence/${item.id}/download`}
+                      <span className="flex items-center gap-3">
+                        <Badge
+                          tone={evidenceTone(item.status)}
+                          icon={evidenceIcon(item.status)}
                         >
-                          <Download className="size-4" aria-hidden="true" /> Download
-                        </a>
-                      ) : null}
-                    </span>
+                          {item.status === 'clean'
+                            ? 'Scan clean'
+                            : displayLabel(item.status)}
+                        </Badge>
+                        {downloadable ? (
+                          <button
+                            type="button"
+                            className="text-primary inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 hover:underline disabled:opacity-60"
+                            disabled={busy !== null}
+                            onClick={() => void downloadEvidence(item.id)}
+                          >
+                            <Download className="size-4" aria-hidden="true" />
+                            {busy === `download:${item.id}` ? 'Checking…' : 'Download'}
+                          </button>
+                        ) : null}
+                      </span>
+                    </div>
+                    {props.permissions.classifyEvidence ? (
+                      <form
+                        className="flex flex-col gap-2 sm:flex-row sm:items-end"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void (async () => {
+                            const classification = (
+                              classifications[item.id] ?? ''
+                            ).trim();
+                            if (!classification) return;
+                            setBusy(`classify:${item.id}`);
+                            setError(null);
+                            setMessage(null);
+                            try {
+                              const response = await fetch(
+                                `/api/evidence/${item.id}/classification`,
+                                {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ classification }),
+                                },
+                              );
+                              if (!response.ok) {
+                                setError(
+                                  response.status === 403
+                                    ? 'You do not have permission to classify this file.'
+                                    : 'That classification could not be saved. Refresh the case and try again.',
+                                );
+                                return;
+                              }
+                              setClassifications((current) => ({
+                                ...current,
+                                [item.id]: '',
+                              }));
+                              setMessage(`Classification recorded for ${item.fileName}.`);
+                              router.refresh();
+                            } catch {
+                              setError(
+                                'That classification could not be saved. Check your connection and try again.',
+                              );
+                            } finally {
+                              setBusy(null);
+                            }
+                          })();
+                        }}
+                      >
+                        <div className="grid min-w-0 flex-1 gap-2">
+                          <Label htmlFor={`classify-${item.id}`}>
+                            Classification for {item.fileName}
+                          </Label>
+                          <Input
+                            id={`classify-${item.id}`}
+                            value={classifications[item.id] ?? ''}
+                            maxLength={120}
+                            required
+                            onChange={(event) =>
+                              setClassifications((current) => ({
+                                ...current,
+                                [item.id]: event.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                        <Button
+                          type="submit"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy !== null}
+                        >
+                          {busy === `classify:${item.id}`
+                            ? 'Saving…'
+                            : 'Save classification'}
+                        </Button>
+                      </form>
+                    ) : null}
                   </li>
                 );
               })}
@@ -423,23 +670,114 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
 
           {props.permissions.uploadEvidence ? (
             <form className="border-border mt-6 border-t pt-5" onSubmit={uploadEvidence}>
-              <Label htmlFor="evidence-file">Upload supporting evidence</Label>
+              <Label htmlFor="evidence-file">
+                {props.permissions.uploadOnBehalf
+                  ? 'Record evidence received'
+                  : 'Upload supporting evidence'}
+              </Label>
               <Input
+                ref={fileInput}
                 id="evidence-file"
                 className="mt-2"
                 type="file"
-                accept="application/pdf,image/jpeg,image/png"
+                accept={UPLOAD_ACCEPT}
+                multiple
                 required
-                onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                aria-describedby="evidence-file-hint"
+                onChange={(event) => chooseFiles(event.target.files)}
               />
-              <p className="text-muted-foreground mt-2 text-xs">
-                PDF, JPEG or PNG, up to 25 MB. The file is quarantined until its malware
-                scan is clean.
+              {props.permissions.uploadOnBehalf ? (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="evidence-receipt-channel">How it was received</Label>
+                    <select
+                      id="evidence-receipt-channel"
+                      value={receiptChannel}
+                      required
+                      onChange={(event) => setReceiptChannel(event.target.value)}
+                      className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
+                    >
+                      <option value="">Choose one</option>
+                      <option value="post">Post</option>
+                      <option value="in_person">In person</option>
+                      <option value="email">Email</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="evidence-received-on">Date received</Label>
+                    <Input
+                      id="evidence-received-on"
+                      type="date"
+                      required
+                      max={new Intl.DateTimeFormat('en-CA', {
+                        timeZone: 'Australia/Sydney',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                      }).format(new Date())}
+                      value={receivedOn}
+                      onChange={(event) => setReceivedOn(event.target.value)}
+                    />
+                  </div>
+                </div>
+              ) : null}
+              <p id="evidence-file-hint" className="text-muted-foreground mt-2 text-xs">
+                PDF, photos (JPEG, PNG, TIFF or HEIC) or Word documents, up to 25 MB each.
+                You can choose several files.
+                {props.permissions.uploadOnBehalf
+                  ? ' Say how and when they arrived.'
+                  : ''}{' '}
+                Each file is quarantined until its malware scan is clean.
               </p>
+              {fileProblems.length > 0 ? (
+                <Alert
+                  className="mt-3"
+                  role="alert"
+                  tone="destructive"
+                  title="Some files cannot be uploaded"
+                >
+                  <ul className="list-disc pl-5">
+                    {fileProblems.map((problem) => (
+                      <li key={problem}>{problem}</li>
+                    ))}
+                  </ul>
+                </Alert>
+              ) : null}
+              {uploads.length > 0 ? (
+                <ul className="mt-3 space-y-2 text-sm" aria-label="Upload progress">
+                  {uploads.map((item, index) => (
+                    <li key={`${index}-${item.name}`} className="grid gap-1">
+                      <span className="flex justify-between gap-3">
+                        <span className="truncate">{item.name}</span>
+                        <span className="text-muted-foreground shrink-0 text-xs">
+                          {item.state === 'done'
+                            ? 'Uploaded'
+                            : item.state === 'failed'
+                              ? 'Not uploaded'
+                              : item.state === 'waiting'
+                                ? 'Waiting'
+                                : `${item.percent}%`}
+                        </span>
+                      </span>
+                      <progress
+                        className="h-1.5 w-full"
+                        max={100}
+                        value={item.percent}
+                        aria-label={`Upload progress for ${item.name}`}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               <Button
                 className="mt-3"
                 type="submit"
-                disabled={!selectedFile || busy !== null}
+                disabled={
+                  selectedFiles.length === 0 ||
+                  busy !== null ||
+                  (props.permissions.uploadOnBehalf && (!receiptChannel || !receivedOn))
+                }
               >
                 {busy === 'upload-evidence' ? 'Uploading…' : 'Upload evidence'}
               </Button>
@@ -594,7 +932,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               {busy === 'assign' ? 'Assigning…' : 'Assign to me'}
             </Button>
           ) : null}
-          {props.permissions.assign && props.staff.length > 0 ? (
+          {props.permissions.assign && staff.length > 0 ? (
             <form
               className="mt-4 grid gap-2"
               aria-label="Assign case to a colleague"
@@ -612,11 +950,12 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               <select
                 id="case-assignee"
                 value={assigneeUserId}
+                disabled={!hydrated}
                 onChange={(event) => setAssigneeUserId(event.target.value)}
                 className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
               >
                 <option value="">Choose staff</option>
-                {props.staff.map((person) => (
+                {staff.map((person) => (
                   <option key={person.userId} value={person.userId}>
                     {person.name} ({person.email})
                   </option>
@@ -625,7 +964,7 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               <Button
                 type="submit"
                 variant="outline"
-                disabled={busy !== null || !assigneeUserId}
+                disabled={!hydrated || busy !== null || !assigneeUserId}
               >
                 {busy === 'assign-other' ? 'Assigning…' : 'Assign case'}
               </Button>

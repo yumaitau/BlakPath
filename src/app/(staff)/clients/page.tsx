@@ -1,5 +1,7 @@
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import { ClientRegister } from '@/components/teams/client-register';
 import { listClients, listTeamOptions } from '@/domains/teams';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 
 export default async function ClientsPage() {
@@ -16,15 +18,12 @@ export default async function ClientsPage() {
     clients = loaded.rows;
     canAssign = loaded.mayAssign;
     teams = loaded.teamRows;
-  } catch {
+  } catch (error) {
+    await handlePageError(error);
     clients = null;
   }
   if (!clients) {
-    return (
-      <p className="text-muted-foreground mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-        Sign in and select your organisation to view clients.
-      </p>
-    );
+    return <ForbiddenNotice title="You do not have access to clients" />;
   }
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">

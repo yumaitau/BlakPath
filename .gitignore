@@ -33,6 +33,8 @@ infra/k8s/secret.yaml
 # os / editor
 .DS_Store
 *.pem
+# Public AWS RDS trust bundle baked into the runtime image. Not a secret.
+!certs/rds-global-bundle.pem
 .idea
 .vscode/*
 !.vscode/extensions.json

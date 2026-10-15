@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 export interface MemberView {
   id: string;
@@ -69,7 +70,10 @@ export function MemberManagement({
   const [latestInvitationUrl, setLatestInvitationUrl] = useState<string | null>(null);
 
   const selectedRole = roles.find((role) => role.id === roleId);
-  const busy = busyKey !== null;
+  const hydrated = useHydrated();
+  // Actions and selects stay disabled until hydrated: an early click is lost
+  // and React does not replay a select change made before hydration.
+  const busy = busyKey !== null || !hydrated;
 
   async function invite(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -114,6 +118,7 @@ export function MemberManagement({
     try {
       const response = await fetch(`/api/membership-invitations/${id}/resend`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!response.ok) {
         setFeedback({
@@ -145,6 +150,7 @@ export function MemberManagement({
     try {
       const response = await fetch(`/api/membership-invitations/${id}`, {
         method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!response.ok) {
         setFeedback({
@@ -272,6 +278,7 @@ export function MemberManagement({
               <select
                 id="invitation-role"
                 value={roleId}
+                disabled={!hydrated}
                 onChange={(event) => setRoleId(event.target.value)}
                 className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
               >
@@ -405,6 +412,7 @@ export function MemberManagement({
                   <select
                     id={`member-role-${member.id}`}
                     value={roleSelections[member.id] ?? ''}
+                    disabled={!hydrated}
                     onChange={(event) =>
                       setRoleSelections((current) => ({
                         ...current,

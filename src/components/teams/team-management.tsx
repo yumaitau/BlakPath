@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import type {
   GroupMemberView,
   GroupRow,
@@ -26,6 +27,7 @@ export function TeamManagement({
   staff: StaffOption[];
 }) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [teamName, setTeamName] = useState('');
@@ -41,11 +43,12 @@ export function TeamManagement({
     method: 'POST' | 'DELETE',
     body?: unknown,
   ): Promise<boolean> {
-    const init: RequestInit = { method };
-    if (body !== undefined) {
-      init.headers = { 'Content-Type': 'application/json' };
-      init.body = JSON.stringify(body);
-    }
+    // The /api mutation guard requires a JSON content type, DELETE included.
+    const init: RequestInit = {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+    };
+    if (body !== undefined) init.body = JSON.stringify(body);
     const res = await fetch(path, init);
     if (res.status === 403) {
       setMessage('No permission for that action.');
@@ -190,7 +193,7 @@ export function TeamManagement({
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={pending}
+                        disabled={!hydrated || pending}
                         onClick={() => onRemoveTeamMember(team.id, member.userId)}
                       >
                         Remove {member.name} from {team.name}
@@ -211,6 +214,7 @@ export function TeamManagement({
                       Staff member
                     </label>
                     <select
+                      disabled={!hydrated}
                       id={`team-member-${team.id}`}
                       className="rounded border px-2 py-1 text-sm"
                       value={teamUserId[team.id] ?? ''}
@@ -237,6 +241,7 @@ export function TeamManagement({
                       Team role
                     </label>
                     <select
+                      disabled={!hydrated}
                       id={`team-role-${team.id}`}
                       className="rounded border px-2 py-1 text-sm"
                       value={teamRole[team.id] ?? 'member'}
@@ -251,7 +256,7 @@ export function TeamManagement({
                       <option value="lead">Lead</option>
                     </select>
                   </div>
-                  <Button type="submit" size="sm" disabled={pending}>
+                  <Button type="submit" size="sm" disabled={!hydrated || pending}>
                     Add to {team.name}
                   </Button>
                 </form>
@@ -288,7 +293,7 @@ export function TeamManagement({
               placeholder="intake"
             />
           </div>
-          <Button type="submit" size="sm" disabled={pending}>
+          <Button type="submit" size="sm" disabled={!hydrated || pending}>
             Create team
           </Button>
         </form>
@@ -328,7 +333,7 @@ export function TeamManagement({
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={pending}
+                        disabled={!hydrated || pending}
                         onClick={() => onRemoveGroupMember(group.id, member.userId)}
                       >
                         Remove {member.name} from {group.name}
@@ -349,6 +354,7 @@ export function TeamManagement({
                       Staff member
                     </label>
                     <select
+                      disabled={!hydrated}
                       id={`group-member-${group.id}`}
                       className="rounded border px-2 py-1 text-sm"
                       value={groupUserId[group.id] ?? ''}
@@ -367,7 +373,7 @@ export function TeamManagement({
                       ))}
                     </select>
                   </div>
-                  <Button type="submit" size="sm" disabled={pending}>
+                  <Button type="submit" size="sm" disabled={!hydrated || pending}>
                     Add to {group.name}
                   </Button>
                 </form>
@@ -404,7 +410,7 @@ export function TeamManagement({
               placeholder="duty-desk"
             />
           </div>
-          <Button type="submit" size="sm" disabled={pending}>
+          <Button type="submit" size="sm" disabled={!hydrated || pending}>
             Create group
           </Button>
         </form>

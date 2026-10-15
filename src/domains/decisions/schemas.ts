@@ -7,6 +7,8 @@ import { DECISION_OUTCOMES, VOTE_CHOICES } from './tally';
 export const proposeDecisionSchema = z.object({
   outcome: z.enum(DECISION_OUTCOMES),
   rationale: z.string().trim().max(5000).optional(),
+  /** Meeting where the committee is considering this proposal, when one is sitting. */
+  meetingId: z.uuid().optional(),
 });
 export type ProposeDecisionInput = z.input<typeof proposeDecisionSchema>;
 
@@ -21,5 +23,7 @@ export type CastVoteInput = z.input<typeof castVoteSchema>;
 export const finaliseDecisionSchema = z.object({
   outcome: z.enum(DECISION_OUTCOMES),
   note: z.string().trim().max(5000).optional(),
+  /** Meeting where the committee recorded the outcome. Required when the case is on an agenda. */
+  meetingId: z.uuid().optional(),
 });
 export type FinaliseDecisionInput = z.input<typeof finaliseDecisionSchema>;

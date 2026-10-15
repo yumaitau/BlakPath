@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import type { ClientRow } from '@/domains/teams';
 
 /** Client register. Lists tenant clients, registers new ones, assigns teams. */
@@ -16,6 +17,7 @@ export function ClientRegister({
   canAssign: boolean;
 }) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -119,6 +121,7 @@ export function ClientRegister({
                     Team
                   </label>
                   <select
+                    disabled={!hydrated}
                     id={`client-team-${c.id}`}
                     className="rounded border px-2 py-1 text-sm"
                     value={teamByClient[c.id] ?? c.assignedTeamId ?? ''}
@@ -136,7 +139,7 @@ export function ClientRegister({
                       </option>
                     ))}
                   </select>
-                  <Button type="submit" size="sm" disabled={pending}>
+                  <Button type="submit" size="sm" disabled={!hydrated || pending}>
                     Assign team
                   </Button>
                 </form>
@@ -173,7 +176,7 @@ export function ClientRegister({
             onChange={(e) => setEmail(e.target.value)}
           />
         </div>
-        <Button type="submit" size="sm" disabled={pending}>
+        <Button type="submit" size="sm" disabled={!hydrated || pending}>
           Register client
         </Button>
       </form>

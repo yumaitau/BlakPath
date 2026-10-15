@@ -68,6 +68,9 @@ integration('team scoping', () => {
       slug: `team-scope-${suffix}`,
       status: 'active',
     });
+    // Client contacts and applicant fields are sealed under the tenant key.
+    const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+    await ensureOrganisationKey(organisationId);
     await runtime.db.insert(runtime.schema.memberships).values([
       {
         id: adminMembershipId,
