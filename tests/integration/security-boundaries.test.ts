@@ -114,6 +114,9 @@ integration('database-backed security boundaries', () => {
         status: 'active',
       },
     ]);
+    const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+    await ensureOrganisationKey(organisationA);
+    await ensureOrganisationKey(organisationB);
 
     const permissions = new Set([
       'application:create',
@@ -238,11 +241,11 @@ integration('database-backed security boundaries', () => {
       .where(
         (await import('drizzle-orm')).eq(runtime.schema.applications.id, application.id),
       );
-    expect(storedApplications[0]).toEqual({
-      applicantName: 'Name supplied for integration testing',
-      organisationId: organisationA,
-      status: 'decided',
-    });
+    expect(storedApplications[0]?.organisationId).toBe(organisationA);
+    expect(storedApplications[0]?.status).toBe('decided');
+    expect(storedApplications[0]?.applicantName.startsWith('{"v":2')).toBe(true);
+    const { isTenantCiphertext } = await import('@/lib/encryption/field-codec');
+    expect(isTenantCiphertext(storedApplications[0]?.applicantName)).toBe(true);
 
     const guarded = runtime.tenantDb.scopeFor(organisationB).insertValues({
       organisationId: organisationA,

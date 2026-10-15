@@ -1,24 +1,19 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import { createGroup, listGroups, type CreateGroupInput } from '@/domains/teams';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /** GET /api/groups — list tenant groups. POST — create group. */
-export async function GET(): Promise<Response> {
-  try {
-    const rows = await withRequestTenant(() => listGroups());
-    return NextResponse.json({ groups: rows });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const GET = tenantHandler(async function GET(): Promise<Response> {
+  const rows = await withRequestTenant(() => listGroups());
+  return NextResponse.json({ groups: rows });
+});
 
-export async function POST(request: NextRequest): Promise<Response> {
-  try {
-    const body = (await request.json()) as CreateGroupInput;
-    const row = await withRequestTenant(() => createGroup(body));
-    return NextResponse.json({ group: row }, { status: 201 });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
+  const body = (await request.json()) as CreateGroupInput;
+  const row = await withRequestTenant(() => createGroup(body));
+  return NextResponse.json({ group: row }, { status: 201 });
+});

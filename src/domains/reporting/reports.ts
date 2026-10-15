@@ -1,3 +1,5 @@
+import { DESTRUCTION_REGISTER_COLUMNS } from '@/domains/retention/register';
+
 /**
  * Report registry — the closed set of exportable datasets and their columns.
  *
@@ -9,7 +11,12 @@
  * or determines a person's Aboriginality.
  */
 
-export const REPORT_TYPES = ['applications', 'decisions', 'certificates'] as const;
+export const REPORT_TYPES = [
+  'applications',
+  'decisions',
+  'certificates',
+  'destruction_register',
+] as const;
 export type ReportType = (typeof REPORT_TYPES)[number];
 
 /** CSV column headers for each report, in order. */
@@ -25,6 +32,7 @@ export const REPORT_COLUMNS: Record<ReportType, readonly string[]> = {
   ],
   decisions: ['Application', 'Proposed outcome', 'Final outcome', 'Status', 'Finalised'],
   certificates: ['Reference', 'Status', 'Signed', 'Revoked'],
+  destruction_register: DESTRUCTION_REGISTER_COLUMNS,
 };
 
 export function isReportType(value: string): value is ReportType {

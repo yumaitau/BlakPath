@@ -1,5 +1,5 @@
 {
-  "id": "101afe13-7c63-44f6-b3c2-a8dc720d06d1",
+  "id": "b76854e1-4ba5-4e09-97ec-9bce58b81107",
   "prevId": "e1a6652d-3756-465e-ac7c-9ed3d84da830",
   "version": "7",
   "dialect": "postgresql",
@@ -193,6 +193,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "aaguid": {
+          "name": "aaguid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -379,6 +385,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "verified": {
+          "name": "verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "failed_verification_count": {
+          "name": "failed_verification_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -453,6 +479,13 @@
         },
         "is_platform_operator": {
           "name": "is_platform_operator",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "two_factor_enabled": {
+          "name": "two_factor_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -1316,13 +1349,6 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
-        },
-        "email_notifications": {
-          "name": "email_notifications",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
         },
         "created_at": {
           "name": "created_at",
@@ -4208,12 +4234,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "overdue_notified_at": {
-          "name": "overdue_notified_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -4241,33 +4261,6 @@
             },
             {
               "expression": "application_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "evidence_requests_org_status_due_idx": {
-          "name": "evidence_requests_org_status_due_idx",
-          "columns": [
-            {
-              "expression": "organisation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "due_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

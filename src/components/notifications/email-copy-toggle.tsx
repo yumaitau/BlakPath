@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 /**
  * Per-member switch for the email copy of in-app notices. The inbox itself
  * always stays on. The control talks only to the tenant-scoped preference API.
  */
 export function EmailCopyToggle() {
+  const hydrated = useHydrated();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -61,7 +63,7 @@ export function EmailCopyToggle() {
             type="checkbox"
             className="border-border mt-1 size-4 rounded"
             checked={enabled === true}
-            disabled={pending || enabled === null}
+            disabled={!hydrated || pending || enabled === null}
             onChange={(event) => void onChange(event.target.checked)}
           />
           <div>
