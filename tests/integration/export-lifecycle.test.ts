@@ -13,7 +13,12 @@ import type * as S3Module from '@/lib/storage/s3';
 const integration = process.env.RUN_INTEGRATION === 'true' ? describe : describe.skip;
 
 const storage = vi.hoisted(() => ({
-  uploads: [] as Array<{ key: string; csv: string; lifecycle: string | undefined }>,
+  uploads: [] as Array<{
+    key: string;
+    csv: string;
+    lifecycle: string | undefined;
+    organisationId: string;
+  }>,
   /** When set, the next upload hangs until released (a worker "killed" mid-export). */
   hang: null as null | { release: () => void },
   purged: [] as string[],
@@ -33,6 +38,7 @@ vi.mock('@/lib/storage/s3', async (importActual) => ({
     key: string;
     body: AsyncIterable<string | Buffer>;
     lifecycle?: string;
+    organisationId: string;
   }) => {
     let csv = '';
     for await (const chunk of params.body) csv += chunk.toString();
@@ -43,11 +49,15 @@ vi.mock('@/lib/storage/s3', async (importActual) => ({
         hang.release = resolve;
       });
     }
-    storage.uploads.push({ key: params.key, csv, lifecycle: params.lifecycle });
+    storage.uploads.push({
+      key: params.key,
+      csv,
+      lifecycle: params.lifecycle,
+      organisationId: params.organisationId,
+    });
   },
-  purgeObjectVersions: async (params: { key: string }) => {
+  deleteAllObjectVersions: async (params: { key: string }) => {
     storage.purged.push(params.key);
-    return 2;
   },
 }));
 
@@ -74,15 +84,35 @@ integration('export lifecycle', () => {
 
   afterAll(async () => {
     if (!closeDatabase) return;
-    const [{ db }, schema, drizzle] = await Promise.all([
+    const [{ db }, schema, drizzle, { AUDIT_APPEND_ONLY_TRIGGERS }] = await Promise.all([
       import('@/db/client'),
       import('@/db/schema'),
       import('drizzle-orm'),
+      import('@/db/audit-guard'),
     ]);
     if (organisationId) {
-      await db
-        .delete(schema.auditEvents)
-        .where(drizzle.eq(schema.auditEvents.organisationId, organisationId));
+      // Teardown only: the audit trail is append-only, so lift the guard to
+      // remove this suite's throwaway tenant, then restore it.
+      const toggle = (state: 'DISABLE' | 'ENABLE ALWAYS') =>
+        Promise.all(
+          AUDIT_APPEND_ONLY_TRIGGERS.map((trigger) =>
+            db
+              .execute(
+                drizzle.sql.raw(
+                  `ALTER TABLE ${trigger.table} ${state} TRIGGER ${trigger.name}`,
+                ),
+              )
+              .catch(() => undefined),
+          ),
+        );
+      await toggle('DISABLE');
+      try {
+        await db
+          .delete(schema.auditEvents)
+          .where(drizzle.eq(schema.auditEvents.organisationId, organisationId));
+      } finally {
+        await toggle('ENABLE ALWAYS');
+      }
       await db
         .delete(schema.organisations)
         .where(drizzle.eq(schema.organisations.id, organisationId));
@@ -100,6 +130,9 @@ integration('export lifecycle', () => {
         import('drizzle-orm'),
       ],
     );
+    // Sequential: these share the mocked storage module's import graph.
+    const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+    const { sealApplicationFields } = await import('@/lib/encryption/tenant-fields');
     const { EXPORT_STALE_MS, MAX_EXPORT_ATTEMPTS } =
       await import('@/domains/reporting/generate');
     closeDatabase = () => sqlClient.end({ timeout: 5 });
@@ -115,10 +148,18 @@ integration('export lifecycle', () => {
       slug: `export-lifecycle-${orgId}`,
       status: 'active',
     });
-    await db.insert(schema.applications).values([
-      { organisationId: orgId, reference: 'APP-1', applicantName: 'Test, "One"' },
-      { organisationId: orgId, reference: 'APP-2', applicantName: 'Test Two' },
-    ]);
+    await ensureOrganisationKey(orgId);
+    // Applicant names are sealed under the tenant key, as the app writes them.
+    for (const [reference, applicantName] of [
+      ['APP-1', 'Test, "One"'],
+      ['APP-2', 'Test Two'],
+    ] as const) {
+      const id = uuidv7();
+      const sealed = await sealApplicationFields(orgId, id, { applicantName, reference });
+      await db
+        .insert(schema.applications)
+        .values({ id, organisationId: orgId, reference, applicantName, ...sealed });
+    }
     const [request] = await db
       .insert(exportRequests)
       .values({ organisationId: orgId, type: 'applications', status: 'pending' })
@@ -175,6 +216,8 @@ integration('export lifecycle', () => {
     expect(storage.uploads).toHaveLength(1);
     const upload = storage.uploads[0];
     expect(upload?.lifecycle).toBe('export');
+    // Bound to the tenant, so the object is sealed with the tenant CMK.
+    expect(upload?.organisationId).toBe(orgId);
     expect(upload?.csv.split('\r\n')[0]).toBe(
       reporting.REPORT_COLUMNS.applications.join(','),
     );
