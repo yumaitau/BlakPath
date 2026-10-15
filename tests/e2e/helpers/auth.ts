@@ -11,8 +11,7 @@ export const PORTAL_APPLICANT_EMAIL = 'applicant@blakpath.local';
 export const PORTAL_APPLICANT_PASSWORD = 'blakpath-dev-applicant-2026';
 
 let selectedAdminCookies:
-  | Awaited<ReturnType<ReturnType<Page['context']>['cookies']>>
-  | undefined;
+  Awaited<ReturnType<ReturnType<Page['context']>['cookies']>> | undefined;
 
 /**
  * Give each interactive sign-in its own documentation-only client address.
