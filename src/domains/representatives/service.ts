@@ -1,11 +1,16 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { consentRecords, representativeAuthorisations } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import {
+  REPRESENTATIVE_ACCESS_PERMISSIONS,
+  REPRESENTATIVE_LIST_PERMISSIONS,
+} from './permissions';
 
 /**
  * Representative access — consent-backed, time-boxed, revocable.
@@ -19,12 +24,6 @@ import { AuthorizationError } from '@/lib/permissions/errors';
 
 export type RepresentativeRow = typeof representativeAuthorisations.$inferSelect;
 
-const REP_WRITE = [
-  'application:create',
-  'application:update-intake',
-  'application:assign',
-] as const;
-
 const requestSchema = z.object({
   subjectUserId: z.uuid(),
   representativeUserId: z.uuid(),
@@ -32,11 +31,6 @@ const requestSchema = z.object({
   consentRecordId: z.uuid(),
   expiresAt: z.coerce.date().optional(),
 });
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} from database.`);
-  return row;
-}
 
 async function liveConsent(
   scope: ReturnType<typeof currentScope>,
@@ -79,7 +73,7 @@ export async function requestRepresentativeAccess(
   raw: z.input<typeof requestSchema>,
 ): Promise<RepresentativeRow> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), REP_WRITE);
+  requireAny(subjectFromContext(ctx), REPRESENTATIVE_ACCESS_PERMISSIONS);
   const input = requestSchema.parse(raw);
   if (input.subjectUserId === input.representativeUserId) {
     throw new AuthorizationError('POLICY_DENIED');
@@ -91,38 +85,43 @@ export async function requestRepresentativeAccess(
       resourceType: 'representative_authorisation',
       resourceId: null,
       result: 'denied',
-      reason: 'no live consent',
+      reason: 'representative.no_live_consent',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
-  const inserted = await scope.db
-    .insert(representativeAuthorisations)
-    .values(
-      scope.insertValues({
-        subjectUserId: input.subjectUserId,
-        representativeUserId: input.representativeUserId,
-        purpose: input.purpose,
-        status: 'pending',
-        expiresAt: input.expiresAt ?? null,
-        consentRecordId: input.consentRecordId,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'representative authorisation');
-  await recordAudit({
-    action: 'representative.requested',
-    resourceType: 'representative_authorisation',
-    resourceId: row.id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(representativeAuthorisations)
+      .values(
+        scope.insertValues({
+          subjectUserId: input.subjectUserId,
+          representativeUserId: input.representativeUserId,
+          purpose: input.purpose,
+          status: 'pending',
+          expiresAt: input.expiresAt ?? null,
+          consentRecordId: input.consentRecordId,
+        }),
+      )
+      .returning();
+    const row = expectRow(inserted[0], 'representative authorisation');
+    await recordAudit(
+      {
+        action: 'representative.requested',
+        resourceType: 'representative_authorisation',
+        resourceId: row.id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function activateRepresentativeAccess(
   id: string,
 ): Promise<RepresentativeRow> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), REP_WRITE);
+  requireAny(subjectFromContext(ctx), REPRESENTATIVE_ACCESS_PERMISSIONS);
   const scope = currentScope();
   const rows = await scope.db
     .select()
@@ -146,51 +145,73 @@ export async function activateRepresentativeAccess(
       resourceType: 'representative_authorisation',
       resourceId: id,
       result: 'denied',
-      reason: 'consent lapsed',
+      reason: 'representative.consent_lapsed',
     });
     throw new AuthorizationError('POLICY_DENIED');
   }
-  const updated = await scope.db
-    .update(representativeAuthorisations)
-    .set({ status: 'active', grantedAt: new Date() })
-    .where(
-      scope.where(
-        representativeAuthorisations.organisationId,
-        eq(representativeAuthorisations.id, id),
-      ),
-    )
-    .returning();
-  const row = must(updated[0], 'representative authorisation');
-  await recordAudit({
-    action: 'representative.activated',
-    resourceType: 'representative_authorisation',
-    resourceId: id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(representativeAuthorisations)
+      .set({ status: 'active', grantedAt: new Date() })
+      .where(
+        scope.where(
+          representativeAuthorisations.organisationId,
+          eq(representativeAuthorisations.id, id),
+        ),
+      )
+      .returning();
+    const row = expectRow(updated[0], 'representative authorisation');
+    await recordAudit(
+      {
+        action: 'representative.activated',
+        resourceType: 'representative_authorisation',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
 }
 
 export async function revokeRepresentativeAccess(id: string): Promise<RepresentativeRow> {
   const ctx = requireTenantContext();
-  requireAny(subjectFromContext(ctx), REP_WRITE);
+  requireAny(subjectFromContext(ctx), REPRESENTATIVE_ACCESS_PERMISSIONS);
   const scope = currentScope();
-  const updated = await scope.db
-    .update(representativeAuthorisations)
-    .set({ status: 'revoked', revokedAt: new Date() })
-    .where(
-      scope.where(
-        representativeAuthorisations.organisationId,
-        eq(representativeAuthorisations.id, id),
-      ),
-    )
-    .returning();
-  const row = updated[0];
-  if (!row) throw new AuthorizationError('POLICY_DENIED');
-  await recordAudit({
-    action: 'representative.revoked',
-    resourceType: 'representative_authorisation',
-    resourceId: id,
-    result: 'success',
+  return scope.db.transaction(async (tx) => {
+    const updated = await tx
+      .update(representativeAuthorisations)
+      .set({ status: 'revoked', revokedAt: new Date() })
+      .where(
+        scope.where(
+          representativeAuthorisations.organisationId,
+          eq(representativeAuthorisations.id, id),
+        ),
+      )
+      .returning();
+    const row = updated[0];
+    if (!row) throw new AuthorizationError('POLICY_DENIED');
+    await recordAudit(
+      {
+        action: 'representative.revoked',
+        resourceType: 'representative_authorisation',
+        resourceId: id,
+        result: 'success',
+      },
+      tx,
+    );
+    return row;
   });
-  return row;
+}
+
+/** List representative authorisations in the active organisation. */
+export async function listRepresentativeAuthorisations(): Promise<RepresentativeRow[]> {
+  const ctx = requireTenantContext();
+  requireAny(subjectFromContext(ctx), REPRESENTATIVE_LIST_PERMISSIONS);
+  const scope = currentScope();
+  return scope.db
+    .select()
+    .from(representativeAuthorisations)
+    .where(scope.where(representativeAuthorisations.organisationId))
+    .orderBy(desc(representativeAuthorisations.createdAt));
 }

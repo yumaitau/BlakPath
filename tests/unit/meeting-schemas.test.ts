@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   addAgendaItemSchema,
+  attestQuorumSchema,
   createMeetingSchema,
   declareConflictSchema,
+  recordAttendanceSchema,
+  recordMinutesSchema,
 } from '@/domains/meetings/schemas';
+import {
+  finaliseDecisionSchema,
+  proposeDecisionSchema,
+} from '@/domains/decisions/schemas';
 
 const UUID = '018f5b3a-0000-7000-8000-000000000000';
 
@@ -39,5 +46,41 @@ describe('addAgendaItemSchema / declareConflictSchema', () => {
     expect(
       declareConflictSchema.safeParse({ applicationId: UUID, meetingId: 'bad' }).success,
     ).toBe(false);
+  });
+});
+
+describe('attendance, quorum and minutes', () => {
+  it('attendance is an explicit present/absent record for a member', () => {
+    expect(
+      recordAttendanceSchema.safeParse({ userId: UUID, present: true }).success,
+    ).toBe(true);
+    expect(
+      recordAttendanceSchema.safeParse({ userId: UUID, present: 'yes' }).success,
+    ).toBe(false);
+  });
+
+  it('quorum is a boolean attestation, not a headcount', () => {
+    expect(attestQuorumSchema.safeParse({ present: false }).success).toBe(true);
+    expect(attestQuorumSchema.safeParse({ present: 3 }).success).toBe(false);
+  });
+
+  it('minutes must contain text a person wrote', () => {
+    expect(recordMinutesSchema.safeParse({ minutes: '  ' }).success).toBe(false);
+    expect(recordMinutesSchema.safeParse({ minutes: 'The committee sat.' }).success).toBe(
+      true,
+    );
+  });
+});
+
+describe('decision meeting link inputs', () => {
+  it('accepts an optional meeting id on propose and finalise', () => {
+    expect(
+      proposeDecisionSchema.safeParse({ outcome: 'deferred', meetingId: UUID }).success,
+    ).toBe(true);
+    expect(
+      finaliseDecisionSchema.safeParse({ outcome: 'confirmed', meetingId: 'nope' })
+        .success,
+    ).toBe(false);
+    expect(finaliseDecisionSchema.safeParse({ outcome: 'confirmed' }).success).toBe(true);
   });
 });

@@ -1,7 +1,8 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import { createForm, listForms, type CreateFormInput } from '@/domains/forms';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * GET  /api/forms — list the tenant's forms.
@@ -11,21 +12,15 @@ import { createForm, listForms, type CreateFormInput } from '@/domains/forms';
  * PRODUCT INVARIANT: a form only collects information a human provides. It never
  * determines a person's Aboriginality.
  */
-export async function GET(): Promise<Response> {
-  try {
-    const forms = await withRequestTenant(() => listForms());
-    return NextResponse.json({ forms });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const GET = tenantHandler(async function GET(): Promise<Response> {
+  const forms = await withRequestTenant(() => listForms());
+  return NextResponse.json({ forms });
+});
 
-export async function POST(request: NextRequest): Promise<Response> {
-  try {
-    const body = (await request.json()) as CreateFormInput;
-    const form = await withRequestTenant(() => createForm(body));
-    return NextResponse.json({ form }, { status: 201 });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+export const POST = tenantHandler(async function POST(
+  request: NextRequest,
+): Promise<Response> {
+  const body = (await request.json()) as CreateFormInput;
+  const form = await withRequestTenant(() => createForm(body));
+  return NextResponse.json({ form }, { status: 201 });
+});

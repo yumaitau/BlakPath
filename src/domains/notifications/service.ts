@@ -1,18 +1,21 @@
 import { and, count, desc, eq, isNull } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
-import { notifications } from '@/db/schema';
+import { memberships, notifications } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
+import { AuthorizationError } from '@/lib/permissions/errors';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { addJob, QueueName } from '@/lib/queues';
+import { wantsNotificationEmail } from './workflow';
 export { renderNotificationEmail } from './templates';
 
 /**
  * Notifications service.
  *
  * A notification is a durable, in-app record that something needs a member's
- * attention. Creating one also enqueues a Notification job so the worker can
- * deliver an email copy that simply points the member back into the app — never
- * a bearer link.
+ * attention. Creating one also enqueues a Notification job when that member
+ * wants an email copy. The email only points them back into the app — never a
+ * bearer link, and never case content.
  *
  * These functions run from BOTH domain services and the worker, so they use
  * `scopeFor(organisationId)` (an explicit tenant scope) rather than the ambient
@@ -51,9 +54,31 @@ export interface CreateNotificationInput {
   dedupeKey?: string;
 }
 
+/** Active membership's email preference. Missing or inactive memberships opt out. */
+async function memberWantsEmail(
+  organisationId: string,
+  userId: string,
+): Promise<boolean> {
+  const scope = scopeFor(organisationId);
+  const rows = await scope.db
+    .select({ emailNotifications: memberships.emailNotifications })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.userId, userId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .limit(1);
+  return wantsNotificationEmail(rows[0]?.emailNotifications);
+}
+
 /**
- * Insert a notification row and enqueue its email-delivery job. The job is keyed
- * by the notification id so a retry cannot double-schedule delivery.
+ * Insert a notification row and, when the member wants email, enqueue delivery.
+ * The job is keyed by the notification id so a retry cannot double-schedule it.
+ * The in-app row is written either way. With a `dedupeKey`, a retried producer
+ * gets the existing row back instead of a second notice or email.
  */
 export async function createNotification(
   input: CreateNotificationInput,
@@ -79,10 +104,10 @@ export async function createNotification(
       target: [notifications.organisationId, notifications.dedupeKey],
     })
     .returning();
-  let row = inserted[0];
-  if (!row && input.dedupeKey) {
+  let existing: NotificationRow | undefined = inserted[0];
+  if (!existing && input.dedupeKey) {
     // A previous (possibly crashed) run already created this notification.
-    const existing = await scope.db
+    const rows = await scope.db
       .select()
       .from(notifications)
       .where(
@@ -92,15 +117,13 @@ export async function createNotification(
         ),
       )
       .limit(1);
-    row = existing[0];
+    existing = rows[0];
   }
-  if (!row) {
-    throw new Error('Expected a notification row to be returned from the database.');
-  }
+  const row = expectRow(existing, 'notification row');
 
   // Already emailed: nothing left to deliver. Otherwise (re-)offer the job; the
   // stable job id de-duplicates it and the processor skips emailed rows.
-  if (!row.emailedAt) {
+  if (!row.emailedAt && (await memberWantsEmail(input.organisationId, input.userId))) {
     await addJob(
       QueueName.Notification,
       'deliver',
@@ -122,6 +145,44 @@ export function queueNotification(
   correlationId: string,
 ): Promise<NotificationRow> {
   return createNotification(input, correlationId);
+}
+
+/** The current member's email-copy preference in the active tenant. */
+export async function getEmailNotificationPreference(): Promise<boolean> {
+  const ctx = requireTenantContext();
+  const scope = currentScope();
+  const rows = await scope.db
+    .select({ emailNotifications: memberships.emailNotifications })
+    .from(memberships)
+    .where(
+      scope.where(
+        memberships.organisationId,
+        eq(memberships.userId, ctx.userId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .limit(1);
+  return wantsNotificationEmail(rows[0]?.emailNotifications);
+}
+
+/** Turn the current member's email copy on or off. In-app notices stay on. */
+export async function setEmailNotificationPreference(enabled: boolean): Promise<boolean> {
+  const ctx = requireTenantContext();
+  const scope = currentScope();
+  const updated = await scope.db
+    .update(memberships)
+    .set({ emailNotifications: enabled })
+    .where(
+      scope.where(
+        memberships.organisationId,
+        eq(memberships.userId, ctx.userId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .returning({ emailNotifications: memberships.emailNotifications });
+  const row = updated[0];
+  if (!row) throw new AuthorizationError('POLICY_DENIED');
+  return row.emailNotifications;
 }
 
 /** Mark that an email copy has been dispatched for a notification. */

@@ -3,17 +3,16 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/client';
 import { emailSuppressions } from '@/db/schema';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 
 /**
- * Email suppression service — SES bounce/complaint handling.
+ * Email suppression service — SES permanent-bounce and complaint handling.
  *
- * Prod mail goes through SES (SMTP interface); SES posts bounce/complaint
+ * Prod mail goes through the SES v2 API; the SES configuration set publishes
  * events via SNS to POST /api/email/events. Suppressed addresses are skipped
- * in `sendEmail` until explicitly cleared. Only address hashes persist.
- * Only permanent bounces and complaints are recorded (see the events route).
- * Organisation administrators see suppressed member/invitee addresses on the
- * People screen and can clear one once the address is fixed (audited).
+ * in `sendEmail` until a platform operator, or an organisation administrator
+ * acting on their own member or invitee, clears them. Only address hashes
+ * persist.
  */
 
 /** SHA-256 hex of lower-cased address. No plaintext PII stored. */
@@ -60,22 +59,73 @@ export async function recordSuppression(raw: {
     )
     .limit(1);
   if (existing.length > 0) return { suppressed: true };
-  const inserted = await db
-    .insert(emailSuppressions)
-    .values({
-      addressHash,
-      kind: input.kind ?? 'bounce',
-      sourceMessageId: input.sourceMessageId ?? null,
-    })
-    .returning({ id: emailSuppressions.id });
-  await recordAudit({
-    action: 'email.suppressed',
-    resourceType: 'email_suppression',
-    resourceId: inserted[0]?.id ?? null,
-    result: 'success',
-    organisationId: null,
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(emailSuppressions)
+      .values({
+        addressHash,
+        kind: input.kind ?? 'bounce',
+        sourceMessageId: input.sourceMessageId ?? null,
+      })
+      .returning({ id: emailSuppressions.id });
+    await recordAudit(
+      {
+        action: 'email.suppressed',
+        resourceType: 'email_suppression',
+        resourceId: inserted[0]?.id ?? null,
+        result: 'success',
+        organisationId: null,
+      },
+      tx,
+    );
   });
   return { suppressed: true };
+}
+
+const clearSchema = z.object({
+  address: z.email().max(320),
+  actorUserId: z.uuid(),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+/**
+ * Clear an active suppression. Platform-operator action: the address is hashed
+ * and not stored, and each cleared row is audited.
+ */
+export async function clearSuppression(raw: {
+  address: string;
+  actorUserId: string;
+  reason?: string;
+}): Promise<{ cleared: boolean }> {
+  const input = clearSchema.parse(raw);
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(emailSuppressions)
+      .set({ clearedAt: new Date(), clearedReason: input.reason ?? null })
+      .where(
+        and(
+          eq(emailSuppressions.addressHash, hashAddress(input.address)),
+          isNull(emailSuppressions.clearedAt),
+        ),
+      )
+      .returning({ id: emailSuppressions.id });
+    if (updated.length === 0) return { cleared: false };
+    for (const row of updated) {
+      await recordPlatformAudit(
+        {
+          action: 'email.suppression_cleared',
+          resourceType: 'email_suppression',
+          resourceId: row.id,
+          result: 'success',
+          actorUserId: input.actorUserId,
+          // Free text stays on the suppression row; the trail records the code.
+          reason: input.reason ? 'email.suppression_note' : null,
+        },
+        tx,
+      );
+    }
+    return { cleared: true };
+  });
 }
 
 export type SuppressionKind = 'bounce' | 'complaint';
@@ -107,39 +157,45 @@ export async function suppressionsFor(
 }
 
 /**
- * Clear the active suppression for one address so mail resumes. The caller
- * must already have authorised the actor (organisation administrator acting on
- * a member or invitee of their own tenant). Audited against the caller's tenant
- * context (one event per cleared row). Returns false when nothing was
- * suppressed.
+ * Clear the active suppression for one member's or invitee's address so mail
+ * resumes. The caller must already have authorised the actor (organisation
+ * administrator acting on a member or invitee of their own tenant) and resolved
+ * the address from that record, never from request input. Audited in the
+ * caller's tenant context, one event per cleared row, in the same transaction.
+ * Returns false when nothing was suppressed.
  */
-export async function clearSuppression(
+export async function clearSuppressionForTarget(
   address: string,
   target: { kind: 'membership' | 'invitation'; id: string },
 ): Promise<boolean> {
-  const cleared = await db
-    .update(emailSuppressions)
-    .set({ clearedAt: new Date() })
-    .where(
-      and(
-        eq(emailSuppressions.addressHash, hashAddress(address)),
-        isNull(emailSuppressions.clearedAt),
-      ),
-    )
-    .returning({ id: emailSuppressions.id, kind: emailSuppressions.kind });
-  if (cleared.length === 0) return false;
-  for (const row of cleared) {
-    await recordAudit({
-      action: 'email.suppression_cleared',
-      resourceType: 'email_suppression',
-      resourceId: row.id,
-      result: 'success',
-      // Which member/invitee the admin acted on; never the address itself.
-      after: {
-        data: { kind: row.kind, target: target.kind, targetId: target.id },
-        allow: ['kind', 'target', 'targetId'],
-      },
-    });
-  }
-  return true;
+  return db.transaction(async (tx) => {
+    const cleared = await tx
+      .update(emailSuppressions)
+      .set({ clearedAt: new Date() })
+      .where(
+        and(
+          eq(emailSuppressions.addressHash, hashAddress(address)),
+          isNull(emailSuppressions.clearedAt),
+        ),
+      )
+      .returning({ id: emailSuppressions.id, kind: emailSuppressions.kind });
+    if (cleared.length === 0) return false;
+    for (const row of cleared) {
+      await recordAudit(
+        {
+          action: 'email.suppression_cleared',
+          resourceType: 'email_suppression',
+          resourceId: row.id,
+          result: 'success',
+          // Which member/invitee the admin acted on; never the address itself.
+          after: {
+            data: { kind: row.kind, target: target.kind, targetId: target.id },
+            allow: ['kind', 'target', 'targetId'],
+          },
+        },
+        tx,
+      );
+    }
+    return true;
+  });
 }

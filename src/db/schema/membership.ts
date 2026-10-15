@@ -2,6 +2,7 @@ import { relations } from 'drizzle-orm';
 import {
   boolean,
   index,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -101,6 +102,12 @@ export const memberships = pgTable(
     invitedByUserId: refId('invited_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
+    /**
+     * When true, in-app notifications also send an email that only asks the
+     * member to sign in. The email never carries case content. In-app records
+     * are written either way.
+     */
+    emailNotifications: boolean('email_notifications').notNull().default(true),
     ...timestamps,
   },
   (table) => [
@@ -134,10 +141,12 @@ export const membershipRoles = pgTable(
 /**
  * A single-organisation invitation to join with one initial role.
  *
- * Only the SHA-256 hash of the bearer token is stored. Acceptance also checks
- * the signed-in account's verified email, so possessing a forwarded link alone
- * cannot grant access. Rows remain after acceptance/revocation for the
- * organisation's access history.
+ * The SHA-256 hash of the bearer token is the lookup key. A sealed copy
+ * (envelope ciphertext) exists only so the worker can deliver the link, and
+ * is cleared after a successful send. The raw token is never queued.
+ * Acceptance also checks the signed-in account's verified email, so
+ * possessing a forwarded link alone cannot grant access. Rows remain after
+ * acceptance/revocation for the organisation's access history.
  */
 export const membershipInvitations = pgTable(
   'membership_invitations',
@@ -153,6 +162,11 @@ export const membershipInvitations = pgTable(
     /** Optional team the invitee joins on acceptance (same organisation). */
     teamId: refId('team_id').references(() => teams.id, { onDelete: 'set null' }),
     tokenHash: text('token_hash').notNull(),
+    /**
+     * Envelope-encrypted bearer token. Present only until the worker sends
+     * the invitation email, then cleared. Never copied onto a queue.
+     */
+    tokenSeal: jsonb('token_seal'),
     status: membershipInvitationStatus('status').notNull().default('pending'),
     invitedByUserId: refId('invited_by_user_id').references(() => users.id, {
       onDelete: 'set null',

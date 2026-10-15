@@ -1,4 +1,4 @@
-import { Worker, type ConnectionOptions } from 'bullmq';
+import { Worker, type ConnectionOptions, type Job, type WorkerOptions } from 'bullmq';
 import type { Logger } from 'pino';
 import {
   isSendThrottled,
@@ -6,7 +6,12 @@ import {
   type QueueRateLimit,
 } from '@/lib/email/rate-limit';
 import type { TenantJob } from '@/lib/queues';
-import type { ProcessorFn } from './processors';
+
+/** Runs one job. `token` is the BullMQ lock token (needed to move a job). */
+export type QueueJobHandler = (
+  job: Job<TenantJob>,
+  token: string | undefined,
+) => Promise<unknown>;
 
 /**
  * Build one BullMQ Worker for a queue. Kept separate from the bootstrap (which
@@ -21,7 +26,7 @@ import type { ProcessorFn } from './processors';
  */
 export function createQueueWorker(options: {
   queueName: string;
-  processor: ProcessorFn;
+  processor: QueueJobHandler;
   logger: Logger;
   connection: ConnectionOptions;
   prefix: string;
@@ -29,15 +34,16 @@ export function createQueueWorker(options: {
   limiter?: QueueRateLimit;
   throttleBackoffMs?: number;
   autorun?: boolean;
+  settings?: WorkerOptions['settings'];
 }): Worker<TenantJob> {
   const { processor, logger, limiter } = options;
   const pauseMs = options.throttleBackoffMs ?? THROTTLE_BACKOFF_MS;
 
   const worker: Worker<TenantJob> = new Worker<TenantJob>(
     options.queueName,
-    async (job) => {
+    async (job, token) => {
       try {
-        await processor(job, logger);
+        return await processor(job, token);
       } catch (err) {
         if (limiter && isSendThrottled(err)) {
           logger.warn({ jobId: job.id, pauseMs }, 'sender throttled — pausing queue');
@@ -52,6 +58,7 @@ export function createQueueWorker(options: {
       prefix: options.prefix,
       concurrency: options.concurrency,
       ...(limiter ? { limiter } : {}),
+      ...(options.settings ? { settings: options.settings } : {}),
       autorun: options.autorun ?? false,
     },
   );

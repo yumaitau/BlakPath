@@ -66,6 +66,11 @@ vi.mock('@/db/tenant-db', () => {
 
 vi.mock('@/lib/tenancy/context', () => ({ requireTenantContext: vi.fn() }));
 
+// Every recipient here is an active member who asked for email copies.
+vi.mock('@/domains/notifications/workflow', () => ({
+  wantsNotificationEmail: () => true,
+}));
+
 vi.mock('@/lib/queues', () => ({
   QueueName: { Notification: 'notification' },
   addJob: (...args: unknown[]) => {

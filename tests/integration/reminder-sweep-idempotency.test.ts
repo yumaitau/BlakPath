@@ -68,6 +68,15 @@ integration('reminder sweep idempotency', () => {
         email: `reminder-${id}@example.test`,
       })),
     );
+    // Active members who want email copies, so each notice offers a delivery job.
+    await db.insert(schema.memberships).values(
+      userIds.map((userId) => ({
+        organisationId: orgId,
+        userId,
+        status: 'active' as const,
+        emailNotifications: true,
+      })),
+    );
     const now = new Date('2026-10-14T22:00:00Z');
     await db.insert(schema.calendarEvents).values({
       id: eventId,

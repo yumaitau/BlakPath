@@ -14,9 +14,11 @@ import { organisations } from './tenancy';
  *
  * A notification tells a member that something needs their attention (evidence
  * flagged, a form response arrived, a decision awaits a vote). Tenant-owned and
- * org-leading indexed. The notification worker delivers a copy by email; this
- * row is the durable, in-app record. Bodies carry no secrets — links point back
- * into the permission-checked app, never to a bearer URL.
+ * org-leading indexed. The notification worker delivers an email copy only when
+ * the member has asked for one. That email points back into the app and carries
+ * no case content. This row is the durable in-app record. Bodies carry no
+ * secrets — links point back into the permission-checked app, never to a bearer
+ * URL.
  */
 export const notifications = pgTable(
   'notifications',

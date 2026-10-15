@@ -24,6 +24,8 @@ vi.mock('@/db/tenant-db', () => {
   return { scopeFor: () => ({ db: { select: () => chain() } }) };
 });
 vi.mock('@/lib/email/mailer', () => ({ sendEmail: state.sendEmail }));
+// The tenant gate is covered elsewhere; these jobs belong to an active tenant.
+vi.mock('../../worker/tenant-job', () => ({ acceptTenantJob: async () => true }));
 vi.mock('@/domains/notifications', async () => ({
   markEmailed: state.markEmailed,
   renderNotificationEmail: (await import('@/domains/notifications/templates'))
@@ -82,6 +84,7 @@ describe('notification processor', () => {
           emailedAt: null,
         },
       ],
+      [{ emailNotifications: true }],
       [{ email: 'sam@example.org', name: 'Sam' }],
     );
     await processNotification(job(), logger);
@@ -109,6 +112,7 @@ describe('notification processor', () => {
           emailedAt: null,
         },
       ],
+      [{ emailNotifications: true }],
       [{ email: 'sam@example.org', name: 'Sam' }],
       [{ startAt: new Date('2026-10-14T22:30:00Z'), timezone: 'Australia/Sydney' }],
     );
@@ -134,7 +138,7 @@ describe('notification processor', () => {
           emailedAt: null,
         },
       ],
-      [], // membership join filtered the user out (suspended/revoked)
+      [], // no active membership (suspended/revoked): no preference row
     );
     await expect(processNotification(job(), logger)).resolves.toBeUndefined();
     expect(state.sendEmail).not.toHaveBeenCalled();

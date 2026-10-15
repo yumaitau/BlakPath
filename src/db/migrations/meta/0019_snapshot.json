@@ -1,5 +1,5 @@
 {
-  "id": "e6a7dc8f-b2a7-4bed-80fc-daa57d08584c",
+  "id": "b76854e1-4ba5-4e09-97ec-9bce58b81107",
   "prevId": "e1a6652d-3756-465e-ac7c-9ed3d84da830",
   "version": "7",
   "dialect": "postgresql",
@@ -193,6 +193,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "aaguid": {
+          "name": "aaguid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -379,6 +385,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "verified": {
+          "name": "verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "failed_verification_count": {
+          "name": "failed_verification_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -453,6 +479,13 @@
         },
         "is_platform_operator": {
           "name": "is_platform_operator",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "two_factor_enabled": {
+          "name": "two_factor_enabled",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -7583,12 +7616,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "dedupe_key": {
-          "name": "dedupe_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -7605,27 +7632,6 @@
         }
       },
       "indexes": {
-        "notifications_org_dedupe_key_unique": {
-          "name": "notifications_org_dedupe_key_unique",
-          "columns": [
-            {
-              "expression": "organisation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "dedupe_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "notifications_org_user_read_idx": {
           "name": "notifications_org_user_read_idx",
           "columns": [

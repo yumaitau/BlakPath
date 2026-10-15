@@ -70,7 +70,11 @@ export async function runApplicationImport(raw: unknown): Promise<ImportResult> 
     resourceType: 'import',
     resourceId: null,
     result: failures.length > 0 ? 'failure' : 'success',
-    reason: `import ${input.dryRun ? 'dry-run' : 'commit'}: ${created}/${input.rows.length} created`,
+    reason: input.dryRun ? 'import.dry_run' : 'import.committed',
+    after: {
+      data: { created, total: input.rows.length },
+      allow: ['created', 'total'],
+    },
   });
 
   return { dryRun: input.dryRun ?? false, total: input.rows.length, created, failures };
