@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { Page } from '@playwright/test';
+import postgres from 'postgres';
 import { expect, test } from './helpers/page';
 import {
   ADMIN_EMAIL,
@@ -78,6 +80,31 @@ test('teams: staff can create team and register assigned client', async ({ page 
   await expect(page.getByRole('heading', { name: 'Teams and groups' })).toBeVisible();
 });
 
+/**
+ * Staff MFA policy gates the staff shell. Give invited case officers a
+ * fixture passkey, like the dev seed and the SSO journey, so the spec reaches
+ * the team-scoping decision rather than the enrolment redirect.
+ */
+async function enrolFixturePasskeys(emails: readonly string[]): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required for staff MFA fixtures.');
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    for (const email of emails) {
+      const [user] = await sql<{ id: string }[]>`
+        select id from users where email = ${email}`;
+      if (!user) throw new Error(`No account was created for ${email}.`);
+      await sql`
+        insert into passkeys (id, user_id, name, credential_id, public_key, counter)
+        select ${randomUUID()}, ${user.id}, 'Team E2E fixture passkey',
+               ${`team-e2e-${user.id}`}, 'team-e2e-fixture-passkey', 0
+        where not exists (select 1 from passkeys where user_id = ${user.id})`;
+    }
+  } finally {
+    await sql.end();
+  }
+}
+
 async function signInFresh(page: Page, email: string, password: string): Promise<void> {
   await isolateSignInClient(page);
   await page.goto('/sign-in');
@@ -140,6 +167,7 @@ test('team member reads a linked case and a non-member is denied', async ({
       );
       expect(created.status()).toBe(201);
     }
+    await enrolFixturePasskeys([memberEmail, outsiderEmail]);
 
     const teamResponse = await page.request.post('/api/teams', {
       data: { slug: `e2e-scope-${stamp}`, name: `Scope ${stamp}` },
