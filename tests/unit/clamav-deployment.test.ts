@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const scanner = readFileSync('infra/k8s/clamav.yaml', 'utf8');
-const mirror = readFileSync('infra/k8s/clamav-mirror.yaml', 'utf8');
-const worker = readFileSync('infra/k8s/worker-deployment.yaml', 'utf8');
-const kustomization = readFileSync('infra/k8s/kustomization.yaml', 'utf8');
+const scanner = readFileSync('infra/k8s/base/clamav.yaml', 'utf8');
+const mirror = readFileSync('infra/k8s/base/clamav-mirror.yaml', 'utf8');
+const worker = readFileSync('infra/k8s/base/worker-deployment.yaml', 'utf8');
+const kustomization = readFileSync('infra/k8s/base/kustomization.yaml', 'utf8');
 
 describe('ClamAV production manifests', () => {
   it('runs two replicas with a disruption budget and node anti-affinity', () => {

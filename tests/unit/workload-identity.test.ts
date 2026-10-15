@@ -95,15 +95,15 @@ function deniedActions(policy: string): string[] {
 }
 
 const podFiles = [
-  'infra/k8s/web-deployment.yaml',
-  'infra/k8s/worker-deployment.yaml',
-  'infra/k8s/clamav.yaml',
-  'infra/k8s/clamav-mirror.yaml',
-  'infra/k8s/jobs/migrate.yaml',
-  'infra/k8s/jobs/seed.yaml',
-  'infra/k8s/jobs/invite-admin.yaml',
-  'infra/k8s/jobs/provision-organisation.yaml',
-  'infra/k8s/release-check/job.yaml',
+  'infra/k8s/base/web-deployment.yaml',
+  'infra/k8s/base/worker-deployment.yaml',
+  'infra/k8s/base/clamav.yaml',
+  'infra/k8s/base/clamav-mirror.yaml',
+  'infra/k8s/base/jobs/migrate.yaml',
+  'infra/k8s/base/jobs/seed.yaml',
+  'infra/k8s/base/jobs/invite-admin.yaml',
+  'infra/k8s/base/jobs/provision-organisation.yaml',
+  'infra/k8s/base/release-check/job.yaml',
 ];
 
 const podKinds = new Set(['Deployment', 'StatefulSet', 'Job']);
@@ -116,10 +116,13 @@ describe('pod security and workload identities', () => {
       .map((doc) => ({ path, doc, name: nameOf(doc)?.replace(/-__RELEASE_ID__$/, '') })),
   );
 
-  it('enforces restricted Pod Security Admission on the namespace', () => {
-    const namespace = read('infra/k8s/namespace.yaml');
+  it.each([
+    ['production', 'blakpath'],
+    ['staging', 'blakpath-staging'],
+  ])('enforces restricted Pod Security Admission on the %s namespace', (env, name) => {
+    const namespace = read(`infra/k8s/overlays/${env}/namespace.yaml`);
     expect(namespace).toContain('pod-security.kubernetes.io/enforce: restricted');
-    expect(namespace).toContain('name: blakpath');
+    expect(namespace).toMatch(new RegExp(`^  name: ${name}$`, 'm'));
   });
 
   it('admits every workload pod under the restricted profile', () => {
@@ -167,7 +170,7 @@ describe('pod security and workload identities', () => {
   });
 
   it('gives ClamAV and the database jobs no AWS credentials', () => {
-    const accounts = read('infra/k8s/serviceaccounts.yaml');
+    const accounts = read('infra/k8s/base/serviceaccounts.yaml');
     expect(accounts).toContain('name: blakpath-web');
     expect(accounts).toContain('name: blakpath-worker');
     expect(accounts).toContain('name: blakpath-migrate');
@@ -180,7 +183,7 @@ describe('pod security and workload identities', () => {
     );
     expect(migrateAccount).toContain('automountServiceAccountToken: false');
 
-    const clamavAccount = documents(read('infra/k8s/clamav.yaml')).find(
+    const clamavAccount = documents(read('infra/k8s/base/clamav.yaml')).find(
       (doc) => kindOf(doc) === 'ServiceAccount',
     );
     expect(clamavAccount).toContain('name: blakpath-clamav');

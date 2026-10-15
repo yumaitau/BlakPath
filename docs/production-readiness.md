@@ -80,12 +80,12 @@ never mount the migrator secret.
       An invitation and a password reset must reach an external mailbox with
       `dkim=pass spf=pass dmarc=pass`, and simulator bounce/complaint events
       must create suppressions in staging (`docs/eks-runbook.md#email`).
-- [ ] Narrow the RFC1918 blocks in `infra/k8s/network-policy.yaml` to the live
+- [ ] Narrow the RFC1918 blocks in `infra/k8s/base/network-policy.yaml` to the live
       VPC database, Redis and endpoint subnets. Webhook delivery stays off
       in-cluster and link-local addresses. Rotate any webhook endpoint whose
       stored secret is not envelope ciphertext.
 - [ ] Enable the EKS Auto Mode network policy controller and apply
-      `infra/k8s/network-policy.yaml`. A pod outside `blakpath` must not reach
+      `infra/k8s/base/network-policy.yaml`. A pod outside `blakpath` must not reach
       BlakPath ports. Steps and the allow list are in `docs/eks-runbook.md`.
 - [ ] Deploy `infra/aws/account-guardrails.example.yaml` in `ap-southeast-2`
       (or align the existing Config recorder, CloudTrail trail, GuardDuty

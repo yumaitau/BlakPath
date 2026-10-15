@@ -3,7 +3,7 @@
 Limits are counted in Redis and shared by every app replica. A store error
 denies the request. The client address is `cf-connecting-ip` only. That header
 is the client because the load balancer accepts Cloudflare ranges and nothing
-else (`infra/k8s/service-ingress.yaml`, `inbound-cidrs`). Do not widen those
+else (`infra/k8s/base/service-ingress.yaml`, `inbound-cidrs`). Do not widen those
 ranges, and do not key limits on `x-forwarded-for`.
 
 Auth windows are enforced by Better Auth with the same Redis counter. Other

@@ -307,7 +307,7 @@ When something goes wrong, BlakPath **denies rather than exposes**:
   secrets are envelope-encrypted, returned once on create or rotation, and
   omitted from list responses. Cluster-specific ranges can be added with
   `WEBHOOK_DENY_CIDRS`. The worker is the only pod with public egress, and
-  only on TCP 443 outside private ranges (`infra/k8s/network-policy.yaml`).
+  only on TCP 443 outside private ranges (`infra/k8s/base/network-policy.yaml`).
 - **AI off by default.** `AI_FEATURES_ENABLED` defaults to `false`, and even when
   on, AI can never decide, score or infer identity. External tool access also
   needs a tenant opt-in (step-up, recorded governance approval) and an `mcp:`
@@ -323,7 +323,7 @@ When something goes wrong, BlakPath **denies rather than exposes**:
 
 - Cultural governance and the correctness of human determinations sit with the
   organisation; BlakPath assures process integrity, not the merits of a decision.
-- Namespace network policy is defined in `infra/k8s/network-policy.yaml`
+- Namespace network policy is defined in `infra/k8s/base/network-policy.yaml`
   (default deny). It takes effect only after the EKS Auto Mode controller is
   enabled and the manifests are applied (`docs/eks-runbook.md`). Node
   placement, backups and patching are enforced in the `ap-southeast-2`

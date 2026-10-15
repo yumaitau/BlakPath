@@ -1,7 +1,7 @@
 /**
  * The migrate Job and the web Deployment must use one image digest.
- * Tokens in `infra/k8s/jobs/migrate.yaml` are replaced per release; the Job
- * stays out of kustomization.yaml because a Job name is immutable.
+ * Tokens in `infra/k8s/base/jobs/migrate.yaml` are replaced per release; the
+ * Job stays out of every kustomization because a Job name is immutable.
  */
 
 export const APP_IMAGE_REPOSITORY =
@@ -54,12 +54,38 @@ export function renderMigrateJob(template: string, release: ReleaseImages): stri
   return rendered;
 }
 
-/** Replace floating tags in the kustomization image list with release digests. */
+/** Image names in the public base. Overlays map them to the registry. */
+const APP_IMAGE_NAME = 'blakpath/app';
+const WORKER_IMAGE_NAME = 'blakpath/worker';
+
+/** Deploy environments and their namespaces (infra/k8s/overlays/<environment>). */
+export const DEPLOY_NAMESPACES = {
+  production: 'blakpath',
+  staging: 'blakpath-staging',
+} as const;
+
+export type DeployEnvironment = keyof typeof DEPLOY_NAMESPACES;
+
+export function assertDeployEnvironment(
+  value: string,
+): asserts value is DeployEnvironment {
+  if (!Object.hasOwn(DEPLOY_NAMESPACES, value)) {
+    throw new Error(
+      `environment must be one of ${Object.keys(DEPLOY_NAMESPACES).join(', ')}`,
+    );
+  }
+}
+
+/**
+ * Replace the overlay's `__ECR_REGISTRY__` / `__IMAGE_TAG__` image entries
+ * with the release repositories and digests.
+ */
 export function pinKustomizationImages(source: string, release: ReleaseImages): string {
   assertDigestImage(release.appImage, APP_IMAGE_REPOSITORY);
   assertDigestImage(release.workerImage, WORKER_IMAGE_REPOSITORY);
   const pinned = pinOne(
-    pinOne(source, APP_IMAGE_REPOSITORY, release.appImage),
+    pinOne(source, APP_IMAGE_NAME, APP_IMAGE_REPOSITORY, release.appImage),
+    WORKER_IMAGE_NAME,
     WORKER_IMAGE_REPOSITORY,
     release.workerImage,
   );
@@ -69,15 +95,66 @@ export function pinKustomizationImages(source: string, release: ReleaseImages): 
   return pinned;
 }
 
-function pinOne(source: string, repository: string, image: string): string {
+function pinOne(source: string, name: string, repository: string, image: string): string {
   const digest = image.slice(repository.length + 1);
   const pattern = new RegExp(
-    `(- name: ${escapeRegExp(repository)}\\r?\\n\\s+)newTag:\\s*\\S+`,
+    `(- name: ${escapeRegExp(name)}\\r?\\n)([ \\t]+)newName:\\s*\\S+(\\r?\\n)[ \\t]+newTag:\\s*\\S+`,
   );
   if (!pattern.test(source)) {
-    throw new Error(`kustomization is missing image ${repository}`);
+    throw new Error(`kustomization is missing image ${name}`);
   }
-  return source.replace(pattern, `$1digest: ${digest}`);
+  return source.replace(
+    pattern,
+    (_match, head: string, indent: string, eol: string) =>
+      `${head}${indent}newName: ${repository}${eol}${indent}digest: ${digest}`,
+  );
+}
+
+/** Private CD values that fill overlay tokens. Names match the deploy env vars. */
+export const DEPLOY_VALUE_NAMES = [
+  'AWS_ACCOUNT_ID',
+  'S3_BUCKET_EVIDENCE',
+  'S3_BUCKET_QUARANTINE',
+  'S3_BUCKET_AUDIT_ANCHORS',
+  'S3_KMS_KEY_ID',
+] as const;
+
+const DEPLOY_TOKEN = /__([A-Z0-9_]+?)__/g;
+const SAFE_VALUE = /^[A-Za-z0-9][A-Za-z0-9:/._-]*$/;
+
+/**
+ * Fill `__AWS_ACCOUNT_ID__` and `__<ENVIRONMENT>_<NAME>__` overlay tokens from
+ * private CD values. Refuses a missing or unsafe value, another environment's
+ * token, and any token left over.
+ */
+export function substituteDeployTokens(
+  source: string,
+  environment: DeployEnvironment,
+  values: Readonly<Record<string, string | undefined>>,
+): string {
+  const prefix = `${environment.toUpperCase()}_`;
+  const names: readonly string[] = DEPLOY_VALUE_NAMES;
+  const filled = source.replace(DEPLOY_TOKEN, (token, inner: string) => {
+    const name =
+      inner === 'AWS_ACCOUNT_ID'
+        ? inner
+        : inner.startsWith(prefix)
+          ? inner.slice(prefix.length)
+          : '';
+    if (!names.includes(name)) return token;
+    const value = values[name];
+    if (!value) throw new Error(`${name} is required for ${token}`);
+    if (!SAFE_VALUE.test(value)) {
+      throw new Error(`${name} has characters a manifest value cannot hold`);
+    }
+    if (name === 'AWS_ACCOUNT_ID' && !/^\d{12}$/.test(value)) {
+      throw new Error('AWS_ACCOUNT_ID must be a 12-digit account id');
+    }
+    return value;
+  });
+  const left = filled.match(/__[A-Z0-9_]+__/);
+  if (left) throw new Error(`unresolved deploy token ${left[0]}`);
+  return filled;
 }
 
 function imageFromJob(rendered: string): string {

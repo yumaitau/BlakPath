@@ -27,6 +27,7 @@ import {
   completeFormFileUpload,
   requestFormFileUpload,
 } from '@/domains/evidence/service';
+import { readPublicConsentWording } from '@/domains/organisation-settings';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { assertOrganisationOperational } from '@/lib/tenancy/organisation-status';
 import { env } from '@/lib/env';
@@ -476,6 +477,8 @@ export interface PublicForm {
   description: string | null;
   fields: FormField[];
   draft: PublicFormDraft | null;
+  /** Organisation consent wording, when the organisation has published any. */
+  consentWording: { title: string | null; body: string; version: string | null } | null;
 }
 
 /** A submitted response as shown on the case it belongs to. */
@@ -570,12 +573,20 @@ export async function getPublicForm(token: string): Promise<PublicForm> {
   }
 
   const fields = parseFieldsJson(form.fields);
+  const consent = await readPublicConsentWording(form.organisationId);
   return {
     formId: form.id,
     title: form.title,
     description: form.description,
     fields,
     draft: await readDraft(invitation, fields),
+    consentWording: consent
+      ? {
+          title: consent.title ?? null,
+          body: consent.body,
+          version: consent.version ?? null,
+        }
+      : null,
   };
 }
 

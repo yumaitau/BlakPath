@@ -4,7 +4,7 @@ Description: >-
   Pull trust store for ap-southeast-2. Deploy only after the CA bundle object
   exists. Do not put the shared Cloudflare origin-pull CA in that bundle.
   Publish the ACM validation name in the zone as DNS-only, then copy the
-  stack outputs into infra/k8s/service-ingress.yaml. Set the zone SSL/TLS
+  stack outputs into infra/k8s/base/service-ingress.yaml. Set the zone SSL/TLS
   mode to Full (strict) before sending production traffic.
 
 Parameters:

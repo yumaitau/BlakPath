@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const root = join(import.meta.dirname, '../..');
 
 describe('origin listener manifest', () => {
-  const ingress = readFileSync(join(root, 'infra/k8s/service-ingress.yaml'), 'utf8');
+  const ingress = readFileSync(join(root, 'infra/k8s/base/service-ingress.yaml'), 'utf8');
   const edge = readFileSync(join(root, 'infra/aws/origin-edge.example.yaml'), 'utf8');
 
   it('redirects port 80 and serves the app only on TLS 1.2 and 1.3', () => {

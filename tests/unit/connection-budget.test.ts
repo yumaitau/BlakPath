@@ -67,10 +67,13 @@ describe('database connection budget', () => {
   });
 
   it('matches the EKS manifests', () => {
-    const hpa = documentNamed('infra/k8s/autoscaling.yaml', 'blakpath-app');
-    const web = documentNamed('infra/k8s/web-deployment.yaml', 'blakpath-app');
-    const worker = documentNamed('infra/k8s/worker-deployment.yaml', 'blakpath-worker');
-    const config = read('infra/k8s/configmap.yaml');
+    const hpa = documentNamed('infra/k8s/base/autoscaling.yaml', 'blakpath-app');
+    const web = documentNamed('infra/k8s/base/web-deployment.yaml', 'blakpath-app');
+    const worker = documentNamed(
+      'infra/k8s/base/worker-deployment.yaml',
+      'blakpath-worker',
+    );
+    const config = read('infra/k8s/base/configmap.yaml');
 
     expect(field(hpa, 'minReplicas')).toBe(String(WEB_HPA_MIN_REPLICAS));
     expect(field(hpa, 'maxReplicas')).toBe(String(WEB_HPA_MAX_REPLICAS));

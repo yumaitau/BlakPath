@@ -8,8 +8,8 @@ function probeBlock(source: string, name: string): string {
 }
 
 describe('probe manifests', () => {
-  const deployment = readFileSync('infra/k8s/web-deployment.yaml', 'utf8');
-  const ingress = readFileSync('infra/k8s/service-ingress.yaml', 'utf8');
+  const deployment = readFileSync('infra/k8s/base/web-deployment.yaml', 'utf8');
+  const ingress = readFileSync('infra/k8s/base/service-ingress.yaml', 'utf8');
   const dockerfile = readFileSync('Dockerfile', 'utf8');
   const prodCompose = readFileSync('docker-compose.prod.example.yml', 'utf8');
 

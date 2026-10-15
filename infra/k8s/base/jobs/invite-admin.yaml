@@ -1,0 +1,64 @@
+# One-shot: email the first organisation administrator.
+# Run after migrate and seed. Does not create a password or print a join link.
+# Replace the three REPLACE_* values, then:
+#   see "Hand-applied jobs" in docs/eks-runbook.md (image and namespace).
+# The invitee must enrol a passkey or authenticator before organisation access.
+# NOT in kustomization.yaml.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blakpath-invite-admin
+  namespace: blakpath
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blakpath-admin-job
+    spec:
+      # Sends the invitation through SES, so it runs as the web identity
+      # (Pod Identity role blakpath-web). The old shared account is gone.
+      serviceAccountName: blakpath-web
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: invite-admin
+          image: blakpath/worker:unset
+          imagePullPolicy: IfNotPresent
+          command: [pnpm, exec, tsx, scripts/invite-first-admin.ts]
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          env:
+            - name: HOME
+              value: /tmp
+            - name: FIRST_ADMIN_EMAIL
+              value: REPLACE_WITH_ADMIN_EMAIL
+            - name: ORGANISATION_LEGAL_NAME
+              value: REPLACE_WITH_LEGAL_NAME
+            - name: ORGANISATION_SLUG
+              value: REPLACE_WITH_SLUG
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

@@ -15,6 +15,7 @@ import {
   APP_IMAGE_REPOSITORY,
   pinKustomizationImages,
   renderMigrateJob,
+  substituteDeployTokens,
   WORKER_IMAGE_REPOSITORY,
 } from '@/db/release-job';
 
@@ -100,8 +101,8 @@ describe('db:push guard', () => {
 });
 
 describe('release migrate job', () => {
-  const template = fs.readFileSync('infra/k8s/jobs/migrate.yaml', 'utf8');
-  const kustomization = fs.readFileSync('infra/k8s/kustomization.yaml', 'utf8');
+  const template = fs.readFileSync('infra/k8s/base/jobs/migrate.yaml', 'utf8');
+  const overlay = (path: string) => fs.readFileSync(`infra/k8s/overlays/${path}`, 'utf8');
 
   it('pins the job to the app digest, a per-release name and a TTL', () => {
     const rendered = renderMigrateJob(template, release);
@@ -123,19 +124,70 @@ describe('release migrate job', () => {
     ).toThrow(/digest/);
   });
 
-  it('replaces kustomize tags with the release digests', () => {
-    const pinned = pinKustomizationImages(kustomization, release);
-    expect(pinned).toContain(`digest: sha256:${appDigest}`);
-    expect(pinned).toContain(`digest: sha256:${workerDigest}`);
-    expect(pinned).not.toMatch(/newTag/);
+  it.each(['production', 'staging'])(
+    'replaces the %s overlay registry and tag tokens with the release digests',
+    (environment) => {
+      for (const file of ['kustomization.yaml', 'release-check/kustomization.yaml']) {
+        const pinned = pinKustomizationImages(overlay(`${environment}/${file}`), release);
+        expect(pinned).toContain(`newName: ${APP_IMAGE_REPOSITORY}\n`);
+        expect(pinned).toContain(`newName: ${WORKER_IMAGE_REPOSITORY}\n`);
+        expect(pinned).toContain(`digest: sha256:${appDigest}`);
+        expect(pinned).toContain(`digest: sha256:${workerDigest}`);
+        expect(pinned).not.toMatch(/newTag|__ECR_REGISTRY__|__IMAGE_TAG__/);
+      }
+    },
+  );
+
+  const deployValues = {
+    AWS_ACCOUNT_ID: '123456789012',
+    S3_BUCKET_EVIDENCE: 'example-evidence',
+    S3_BUCKET_QUARANTINE: 'example-quarantine',
+    S3_BUCKET_AUDIT_ANCHORS: 'example-anchors',
+    S3_KMS_KEY_ID: 'arn:aws:kms:ap-southeast-2:123456789012:key/example',
+  };
+
+  it('fills the overlay tokens from private deploy values', () => {
+    const config = overlay('production/configmap-patch.yaml');
+    const filled = substituteDeployTokens(config, 'production', deployValues);
+    expect(filled).toContain('S3_BUCKET_EVIDENCE: example-evidence');
+    expect(filled).toContain('S3_BUCKET_AUDIT_ANCHORS: example-anchors');
+    expect(filled).toContain(
+      'EMAIL_SNS_TOPIC_ARN: arn:aws:sns:ap-southeast-2:123456789012:blakpath-email-events',
+    );
+    expect(filled).not.toMatch(/__[A-Z0-9_]+__/);
+    const account = substituteDeployTokens(
+      overlay('staging/serviceaccount-patch.yaml'),
+      'staging',
+      deployValues,
+    );
+    expect(account).toContain(
+      'arn:aws:iam::123456789012:role/blakpath-staging-external-secrets',
+    );
   });
 
-  it('pins the release gate to the same digests', () => {
-    const gate = fs.readFileSync('infra/k8s/release-check/kustomization.yaml', 'utf8');
-    const pinned = pinKustomizationImages(gate, release);
-    expect(pinned).toContain(`digest: sha256:${appDigest}`);
-    expect(pinned).toContain(`digest: sha256:${workerDigest}`);
-    expect(pinned).not.toMatch(/newTag/);
+  it('refuses a missing value, a bad account id and another environment token', () => {
+    const config = overlay('production/configmap-patch.yaml');
+    expect(() =>
+      substituteDeployTokens(config, 'production', {
+        ...deployValues,
+        S3_BUCKET_AUDIT_ANCHORS: undefined,
+      }),
+    ).toThrow(/S3_BUCKET_AUDIT_ANCHORS is required/);
+    expect(() =>
+      substituteDeployTokens(config, 'production', {
+        ...deployValues,
+        AWS_ACCOUNT_ID: '1234',
+      }),
+    ).toThrow(/12-digit/);
+    expect(() =>
+      substituteDeployTokens(config, 'production', {
+        ...deployValues,
+        S3_BUCKET_EVIDENCE: 'evil\nkey: value',
+      }),
+    ).toThrow(/characters/);
+    expect(() => substituteDeployTokens(config, 'staging', deployValues)).toThrow(
+      /unresolved deploy token __PRODUCTION_/,
+    );
   });
 
   it('deploys through one script: gate, then migrate, then rollout', () => {
