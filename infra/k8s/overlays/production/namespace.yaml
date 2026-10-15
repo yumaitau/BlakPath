@@ -7,3 +7,7 @@ metadata:
     # Restricted Pod Security Admission. Every pod in this namespace must
     # run non-root, drop all capabilities, and set a seccomp profile.
     pod-security.kubernetes.io/enforce: restricted
+    # AWS Load Balancer Controller injects target-health readiness gates.
+    # Pods stay out of the ALB until the target is healthy, including during
+    # a rolling start. Requires the controller; the label alone does nothing.
+    elbv2.k8s.aws/pod-readiness-gate-inject: enabled

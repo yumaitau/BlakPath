@@ -1,3 +1,5 @@
+# maxReplicas is WEB_HPA_MAX_REPLICAS in src/db/connection-budget.ts.
+# Do not edit the number here without updating that module.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

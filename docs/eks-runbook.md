@@ -317,6 +317,49 @@ manifest is `infra/k8s/base/service-ingress.yaml`. The example stack is
    client certificate is rejected. A request that presents the secret records
    `CF-Connecting-IP`. A different `X-Forwarded-For` value does not change it.
 
+## Rollouts and the database connection budget
+
+The namespace label `elbv2.k8s.aws/pod-readiness-gate-inject: enabled` tells the
+AWS Load Balancer Controller to inject a target-health readiness gate. Install
+that controller before the first deploy. Without it the label does nothing and
+the ALB can still route to a pod that is not registered. Both the production
+and staging namespace overlays set the label.
+
+Web pods sleep 15 seconds in `preStop`. That matches the Ingress attribute
+`deregistration_delay.timeout_seconds=15`, so in-flight requests finish before
+SIGTERM. `terminationGracePeriodSeconds` on web is 40. The kubelet counts the
+sleep against that period, then the process still has 25 seconds to exit.
+
+Workers do not sleep in `preStop`. SIGTERM starts their job drain
+(`WORKER_SHUTDOWN_GRACE_SECONDS`, 25 seconds). Their grace period is 30 seconds.
+
+Web, worker and ClamAV use `topologySpreadConstraints` on
+`topology.kubernetes.io/zone` and `kubernetes.io/hostname` with `maxSkew: 1`
+and `whenUnsatisfiable: DoNotSchedule`. The node group must already span at
+least two AZs, with a schedulable node in each, or the second web or worker
+replica stays Pending.
+
+Pool sizes, HPA max and the 225-connection floor are in
+`src/db/connection-budget.ts`, in the section below. Do not raise
+`maxReplicas` without changing that module.
+
+### Check a rollout
+
+Applying these manifests, and the load test below, is a human step. This
+repository does not apply them to a cluster.
+
+On a cluster whose nodes already span two AZs:
+
+1. Send load through the ALB at `https://blakpath.yumait.au/api/ready`.
+2. Roll web (`kubectl rollout restart deployment/blakpath-app -n blakpath`)
+   and drain one node.
+3. ALB `HTTPCode_Target_5XX_Count` and `HTTPCode_ELB_5XX_Count` stay at 0
+   for that window.
+4. `kubectl get pods -n blakpath -o wide` shows web and worker pods in at
+   least two zones.
+5. RDS `DatabaseConnections` stays at or under the connection budget (157, 70%
+   of 225) while the HPA is at max and a rollout is in progress.
+
 ## Secrets and keys
 
 - Dedicated folder: every BlakPath production secret lives under

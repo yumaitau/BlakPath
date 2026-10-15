@@ -30,6 +30,9 @@ never mount the migrator secret.
       The source for Postgres and Redis is `infra/aws/data-tier.example.yaml`
       (settings in `docs/data-tier-capacity.md`). This box
       stays open until that stack is applied and `/api/ready` returns 200.
+      Size RDS `max_connections` at or above the budget in
+      [`eks-runbook.md`](eks-runbook.md). Leave the pool pins on the manifests.
+      Do not raise HPA `maxReplicas` without updating `src/db/connection-budget.ts`.
 - [ ] Inject runtime secrets from managed secret storage. Do not place real
       values in images, source control, CI logs or long-lived environment files.
 - [ ] Apply `infra/aws/eks-boundary.example.yaml` and the workload trust policy
