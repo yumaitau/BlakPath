@@ -59,6 +59,12 @@ interface CaseNote {
   createdAt: string;
 }
 
+interface EvidenceRequirementItem {
+  label: string;
+  detail?: string | undefined;
+  required?: boolean | undefined;
+}
+
 interface WorkspacePermissions {
   updateIntake: boolean;
   assign: boolean;
@@ -95,6 +101,11 @@ export interface ApplicationCaseWorkspaceProps {
   availableActions: Array<{ value: string; label: string }>;
   evidence: CaseEvidence[];
   evidenceRequests: CaseRequest[];
+  /** Organisation-authored guidance. Null or absent when none has been published. */
+  evidenceRequirements?: {
+    intro?: string | undefined;
+    items: EvidenceRequirementItem[];
+  } | null;
   history: CaseHistory[];
   notes: CaseNote[];
   permissions: WorkspacePermissions;
@@ -541,6 +552,35 @@ export function ApplicationCaseWorkspace(props: ApplicationCaseWorkspaceProps) {
               ? ' Classification is an administrative label your organisation records. It is not a decision about a person’s identity.'
               : ''}
           </p>
+
+          {props.evidenceRequirements &&
+          (props.evidenceRequirements.intro ||
+            props.evidenceRequirements.items.length > 0) ? (
+            <div className="mt-4">
+              <h3 className="text-sm font-semibold">What this organisation asks for</h3>
+              {props.evidenceRequirements.intro ? (
+                <p className="text-muted-foreground mt-1 text-sm whitespace-pre-wrap">
+                  {props.evidenceRequirements.intro}
+                </p>
+              ) : null}
+              {props.evidenceRequirements.items.length > 0 ? (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+                  {props.evidenceRequirements.items.map((item, index) => (
+                    <li key={`${item.label}-${index}`}>
+                      <span className="font-medium">{item.label}</span>
+                      {item.required ? ' (asked for)' : ''}
+                      {item.detail ? (
+                        <span className="text-muted-foreground"> — {item.detail}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <p className="text-muted-foreground mt-2 text-xs">
+                Guidance from the organisation. It does not decide an application.
+              </p>
+            </div>
+          ) : null}
 
           {props.evidence.length === 0 ? (
             <p className="text-muted-foreground mt-4 text-sm">
