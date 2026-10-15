@@ -9,7 +9,7 @@ import { processExport } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
 import { scopeFor } from '@/db/tenant-db';
-import { notifications, users } from '@/db/schema';
+import { memberships, notifications, users } from '@/db/schema';
 import {
   deliverInvitationEmail,
   invitationKindFromJobName,
@@ -21,6 +21,7 @@ import {
   runBackfillBatch,
 } from '@/lib/encryption/backfill';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
+import { wantsNotificationEmail } from '@/domains/notifications/workflow';
 import { processOrganisationKeyRewrap } from '@/domains/organisation-keys/rewrap-job';
 import { isPlatformAuditJob, processAuditVerifyJob } from './audit-verify';
 import { acceptTenantJob } from './tenant-job';
@@ -157,6 +158,25 @@ const notificationProcessor: ProcessorFn = async (job, logger) => {
     return;
   }
 
+  const preferenceRows = await scope.db
+    .select({ emailNotifications: memberships.emailNotifications })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.userId, notification.userId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .limit(1);
+  if (!wantsNotificationEmail(preferenceRows[0]?.emailNotifications)) {
+    logger.info(
+      { jobId: job.id, organisationId },
+      'notification email skipped — member has not asked for a copy',
+    );
+    return;
+  }
+
   const userRows = await scope.db
     .select({ email: users.email, name: users.name })
     .from(users)
@@ -279,14 +299,18 @@ const encryptionBackfillProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Reminder processor. Dispatches due calendar reminders for the tenant as
- * notifications (email copies queued by the notification system). Idempotent
- * per reminder row: dispatched rows are marked sent.
+ * Reminder processor. Dispatches due calendar reminders, then overdue evidence
+ * requests, for the tenant. Both paths record in-app notices and queue an email
+ * copy only when the member has asked for one. Each source is idempotent: a
+ * calendar reminder is marked sent, and an evidence request is claimed once.
  */
 const reminderProcessor: ProcessorFn = async (job) => {
   const { organisationId, correlationId } = job.data;
   const { processReminderSweep } = await import('@/domains/calendar/service');
   await processReminderSweep({ organisationId, correlationId });
+  const { processOverdueEvidenceSweep } =
+    await import('@/domains/notifications/dispatch');
+  await processOverdueEvidenceSweep({ organisationId, correlationId });
 };
 
 /**
