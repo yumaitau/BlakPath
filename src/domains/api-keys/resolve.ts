@@ -3,6 +3,7 @@ import { db } from '@/db/client';
 import { apiKeys } from '@/db/schema';
 import { isPermission, type Permission } from '@/lib/permissions/catalog';
 import type { TenantContext } from '@/lib/tenancy/context';
+import { assertOrganisationOperational } from '@/lib/tenancy/organisation-status';
 import { hashApiKey } from './keys';
 
 /**
@@ -11,7 +12,8 @@ import { hashApiKey } from './keys';
  * `resolveApiKeyContext` turns a raw bearer key into a verified, SCOPED
  * TenantContext — or rejects it. There is no session and no membership lookup:
  * the key IS the capability. It is matched by hash (never trusting the raw
- * value), checked for revocation/expiry, and yields a context whose permission
+ * value), checked for revocation/expiry and for an operational organisation,
+ * and yields a context whose permission
  * set is exactly the key's granted scopes (intersected with the live catalogue,
  * so a scope removed from the catalogue can never confer access).
  *
@@ -50,6 +52,8 @@ export async function resolveApiKeyContext(
   if (!key) throw new ApiKeyError();
   if (key.revokedAt) throw new ApiKeyError();
   if (key.expiresAt && key.expiresAt.getTime() < Date.now()) throw new ApiKeyError();
+  // Refuse before recording use, so a suspended organisation is not touched.
+  await assertOrganisationOperational(key.organisationId);
 
   // Record last use (best-effort; a failure here must not deny a valid request).
   try {

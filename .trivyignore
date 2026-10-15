@@ -1,0 +1,5 @@
+# Prometheus exporter denial of service. BlakPath loads only the OTLP/HTTP
+# trace exporter (src/lib/observability/otel.ts); this package is never
+# imported. Same exception as pnpm.auditConfig.ignoreGhsas. Drop when
+# OpenTelemetry v2 lands (#30).
+CVE-2026-44902

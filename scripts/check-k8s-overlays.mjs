@@ -5,8 +5,8 @@
  *   node scripts/check-k8s-overlays.mjs --source
  *   node scripts/check-k8s-overlays.mjs <dir-with-rendered-yaml>
  *
- * The rendered directory must contain staging.yaml, production.yaml,
- * staging-jobs.yaml and production-jobs.yaml.
+ * The rendered directory must contain <env>.yaml, <env>-jobs.yaml and
+ * <env>-release-check.yaml for staging and production.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -21,10 +21,20 @@ function readTree(dir) {
   return out;
 }
 
-/** True when the production hostname appears outside the staging host. */
+/**
+ * True when the production hostname appears outside the staging host. A
+ * label or annotation key prefix (`blakpath.yumait.au/release:`) is not a host.
+ */
 function hasProductionHost(text) {
-  return /(?<!staging\.)blakpath\.yumait\.au/.test(text);
+  return /(?<!staging\.)blakpath\.yumait\.au(?!\/[\w.-]+:)/.test(text);
 }
+
+/** Production identities that a staging render must never name. */
+const PRODUCTION_ONLY = [
+  'role/blakpath-external-secrets',
+  ':blakpath-email-events',
+  'SES_CONFIGURATION_SET: blakpath-production',
+];
 
 function missing(errors, label, text, tokens) {
   for (const token of tokens) {
@@ -38,11 +48,25 @@ function forbidden(errors, label, text, tokens) {
   }
 }
 
+/**
+ * ARN account fields that are placeholders, not account ids. `__AWS_ACCOUNT_ID__`
+ * is substituted by scripts/eks-deploy.sh. `ACCOUNT_ID` is the hand-filled
+ * placeholder in the ingress annotations (docs/eks-runbook.md, Edge and origin).
+ */
+const ARN_ACCOUNT_PLACEHOLDER = /^(?:__AWS_ACCOUNT_ID__|ACCOUNT_ID)$/;
+
+/** ARNs whose account field is empty or a real value. */
+function concreteArns(text) {
+  return [...text.matchAll(/arn:aws[\w-]*:[\w-]*:[\w-]*:([^:\s'"]*):/g)].filter(
+    (match) => !ARN_ACCOUNT_PLACEHOLDER.test(match[1] ?? ''),
+  );
+}
+
 /** Account ids and key ARNs must not be committed. Patterns, not stored values. */
 function identifierErrors(label, text) {
   const errors = [];
   if (/\b\d{12}\b/.test(text)) errors.push(`${label} contains a 12-digit account id`);
-  if (text.includes('arn:aws:')) errors.push(`${label} contains an AWS ARN`);
+  if (concreteArns(text).length > 0) errors.push(`${label} contains an AWS ARN`);
   if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) {
     errors.push(`${label} contains a key id`);
   }
@@ -54,15 +78,22 @@ function sourceErrors(root) {
   const base = readTree(path.join(root, 'infra/k8s/base'));
   const staging = readTree(path.join(root, 'infra/k8s/overlays/staging'));
   const production = readTree(path.join(root, 'infra/k8s/overlays/production'));
+  const cluster = readTree(path.join(root, 'infra/k8s/cluster'));
   const runbook = readFileSync(path.join(root, 'docs/eks-runbook.md'), 'utf8');
 
-  errors.push(...identifierErrors('k8s manifests', base + staging + production));
+  errors.push(
+    ...identifierErrors('k8s manifests', base + staging + production + cluster),
+  );
   forbidden(errors, 'k8s manifests', base + staging + production, [
     'blakpath-prod-evidence',
     'blakpath-prod-quarantine',
   ]);
   if (/\b\d{12}\b/.test(runbook)) errors.push('runbook contains a 12-digit account id');
-  forbidden(errors, 'runbook', runbook, ['blakpath-eks-runtime', 'WAF ACL ARN']);
+  // The root kustomization is gone. Render an overlay instead.
+  forbidden(errors, 'runbook', runbook, [
+    'kubectl kustomize infra/k8s |',
+    'kubectl apply -k infra/k8s ',
+  ]);
   if (hasProductionHost(base)) errors.push('base contains the production host');
   forbidden(errors, 'base', base, [
     '/blakpath/production/',
@@ -73,17 +104,23 @@ function sourceErrors(root) {
   ]);
   missing(errors, 'base', base, [
     'aws-secretsmanager',
+    'name: blakpath-secrets',
     'name: blakpath-runtime',
     'blakpath/app:unset',
+    'blakpath/worker:unset',
   ]);
 
   missing(errors, 'staging overlay', staging, [
     'namespace: blakpath-staging',
     '/blakpath/staging/runtime',
+    '/blakpath/staging/migrator',
     'staging.blakpath.yumait.au',
     '__STAGING_S3_BUCKET_EVIDENCE__',
     '__STAGING_S3_BUCKET_QUARANTINE__',
+    '__STAGING_S3_BUCKET_AUDIT_ANCHORS__',
     '__STAGING_S3_KMS_KEY_ID__',
+    'role/blakpath-staging-external-secrets',
+    'SES_CONFIGURATION_SET: blakpath-staging',
     '__ECR_REGISTRY__',
     '__IMAGE_TAG__',
   ]);
@@ -92,6 +129,7 @@ function sourceErrors(root) {
   forbidden(errors, 'staging overlay', staging, [
     '/blakpath/production/',
     '__PRODUCTION_',
+    ...PRODUCTION_ONLY,
     'blakpath-prod-evidence',
     'blakpath-prod-quarantine',
   ]);
@@ -99,10 +137,13 @@ function sourceErrors(root) {
   missing(errors, 'production overlay', production, [
     'namespace: blakpath\n',
     '/blakpath/production/runtime',
+    '/blakpath/production/migrator',
     'https://blakpath.yumait.au',
     '__PRODUCTION_S3_BUCKET_EVIDENCE__',
     '__PRODUCTION_S3_BUCKET_QUARANTINE__',
+    '__PRODUCTION_S3_BUCKET_AUDIT_ANCHORS__',
     '__PRODUCTION_S3_KMS_KEY_ID__',
+    ...PRODUCTION_ONLY,
     '__ECR_REGISTRY__',
     '__IMAGE_TAG__',
   ]);
@@ -119,6 +160,8 @@ function sourceErrors(root) {
     'blakpath-runtime',
     'infra/k8s/overlays/staging',
     'infra/k8s/overlays/production',
+    '__AWS_ACCOUNT_ID__',
+    '__PRODUCTION_S3_BUCKET_AUDIT_ANCHORS__',
     '__STAGING_S3_KMS_KEY_ID__',
     '__PRODUCTION_S3_KMS_KEY_ID__',
     '__STAGING_S3_BUCKET_EVIDENCE__',
@@ -135,6 +178,7 @@ function renderedErrors(staging, production) {
   forbidden(errors, 'rendered staging', staging, [
     '/blakpath/production/',
     '__PRODUCTION_',
+    ...PRODUCTION_ONLY,
     'blakpath-prod-evidence',
     'blakpath-prod-quarantine',
     'placeholder.invalid',
@@ -147,10 +191,14 @@ function renderedErrors(staging, production) {
   missing(errors, 'rendered staging', staging, [
     'namespace: blakpath-staging',
     '/blakpath/staging/runtime',
+    '/blakpath/staging/migrator',
     'staging.blakpath.yumait.au',
     '__STAGING_S3_BUCKET_EVIDENCE__',
     '__STAGING_S3_BUCKET_QUARANTINE__',
+    '__STAGING_S3_BUCKET_AUDIT_ANCHORS__',
     '__STAGING_S3_KMS_KEY_ID__',
+    'role/blakpath-staging-external-secrets',
+    'name: blakpath-release-check',
     '__ECR_REGISTRY__/blakpath/app:__IMAGE_TAG__',
     '__ECR_REGISTRY__/blakpath/worker:__IMAGE_TAG__',
     'aws-secretsmanager',
@@ -171,11 +219,15 @@ function renderedErrors(staging, production) {
     'namespace: blakpath\n',
     'name: blakpath\n',
     '/blakpath/production/runtime',
+    '/blakpath/production/migrator',
     'https://blakpath.yumait.au',
     'host: blakpath.yumait.au',
     '__PRODUCTION_S3_BUCKET_EVIDENCE__',
     '__PRODUCTION_S3_BUCKET_QUARANTINE__',
+    '__PRODUCTION_S3_BUCKET_AUDIT_ANCHORS__',
     '__PRODUCTION_S3_KMS_KEY_ID__',
+    ...PRODUCTION_ONLY,
+    'name: blakpath-release-check',
     '__ECR_REGISTRY__/blakpath/app:__IMAGE_TAG__',
     '__ECR_REGISTRY__/blakpath/worker:__IMAGE_TAG__',
     'aws-secretsmanager',
@@ -191,13 +243,11 @@ function main() {
   }
   const errors = sourceErrors(process.cwd());
   if (arg !== '--source') {
-    const staging =
-      readFileSync(path.join(arg, 'staging.yaml'), 'utf8') +
-      readFileSync(path.join(arg, 'staging-jobs.yaml'), 'utf8');
-    const production =
-      readFileSync(path.join(arg, 'production.yaml'), 'utf8') +
-      readFileSync(path.join(arg, 'production-jobs.yaml'), 'utf8');
-    errors.push(...renderedErrors(staging, production));
+    const rendered = (env) =>
+      ['', '-jobs', '-release-check']
+        .map((suffix) => readFileSync(path.join(arg, `${env}${suffix}.yaml`), 'utf8'))
+        .join('\n---\n');
+    errors.push(...renderedErrors(rendered('staging'), rendered('production')));
   }
   if (errors.length > 0) {
     for (const error of errors) console.error(error);

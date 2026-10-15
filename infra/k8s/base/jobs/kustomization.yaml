@@ -1,5 +1,7 @@
+# Hand-applied catalogue seed. Render overlays/<environment>/jobs.
+# migrate.yaml is rendered per release by scripts/eks-deploy.sh.
+# invite-admin.yaml and provision-organisation.yaml are filled in by hand.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - migrate.yaml
   - seed.yaml

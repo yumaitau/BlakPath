@@ -7,5 +7,13 @@ data:
   BETTER_AUTH_URL: https://blakpath.yumait.au
   S3_BUCKET_EVIDENCE: __PRODUCTION_S3_BUCKET_EVIDENCE__
   S3_BUCKET_QUARANTINE: __PRODUCTION_S3_BUCKET_QUARANTINE__
+  S3_BUCKET_AUDIT_ANCHORS: __PRODUCTION_S3_BUCKET_AUDIT_ANCHORS__
+  # Bucket default CMK only. Per-object SSE-KMS uses the tenant key.
   S3_KMS_KEY_ID: __PRODUCTION_S3_KMS_KEY_ID__
+  SES_CONFIGURATION_SET: blakpath-production
   SMTP_FROM: BlakPath <no-reply@blakpath.yumait.au>
+  # SES permanent-bounce and complaint topic. Must match the live topic.
+  # EMAIL_WEBHOOK_SECRET stays in Secrets Manager and is sent as the
+  # x-email-webhook-secret header, not in the URL.
+  EMAIL_SNS_TOPIC_ARN: arn:aws:sns:ap-southeast-2:__AWS_ACCOUNT_ID__:blakpath-email-events
+  # OPERATOR_ONCALL_EMAIL: oncall@blakpath.yumait.au

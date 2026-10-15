@@ -27,10 +27,12 @@ export const PERMISSION_CATEGORIES = [
   'client',
   'decision',
   'certificate',
+  'correspondence',
   'reporting',
   'audit',
   'retention',
   'administration',
+  'mcp',
   'break-glass',
 ] as const;
 
@@ -88,6 +90,12 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'evidence:upload-own',
     category: 'evidence',
     description: 'Upload supporting evidence to one’s own application.',
+  },
+  'evidence:upload-on-behalf': {
+    key: 'evidence:upload-on-behalf',
+    category: 'evidence',
+    description:
+      'Record evidence received on behalf of an applicant (post, email, in person or other), on an application the actor can read.',
   },
   'evidence:read-assigned': {
     key: 'evidence:read-assigned',
@@ -185,6 +193,17 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'certificate:revoke',
     category: 'certificate',
     description: 'Revoke a previously issued certificate.',
+  },
+  'correspondence:send': {
+    key: 'correspondence:send',
+    category: 'correspondence',
+    description:
+      'Prepare and send a letter or email to an applicant. Sending is a separate human action. The software never sends an outcome by itself.',
+  },
+  'correspondence:manage-templates': {
+    key: 'correspondence:manage-templates',
+    category: 'correspondence',
+    description: 'Create and edit the organisation’s letter templates.',
   },
   'report:view': {
     key: 'report:view',
@@ -288,6 +307,18 @@ export const PERMISSION_CATALOG = Object.freeze({
     key: 'calendar:delete-any',
     category: 'calendar',
     description: 'Delete a calendar event.',
+  },
+  'mcp:read': {
+    key: 'mcp:read',
+    category: 'mcp',
+    description:
+      'Call read-only external tool access for this organisation. Responses omit applicant names and other direct identifiers.',
+  },
+  'mcp:read-pii': {
+    key: 'mcp:read-pii',
+    category: 'mcp',
+    description:
+      'Include applicant names and recorded decision outcomes in external tool responses. Grant only for an approved, declared destination.',
   },
 } as const satisfies Record<string, PermissionDefinition>);
 

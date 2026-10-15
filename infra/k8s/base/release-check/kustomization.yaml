@@ -1,0 +1,8 @@
+# Pre-deploy gate. Environment-neutral; render
+# overlays/<environment>/release-check. scripts/eks-deploy.sh pins it to the
+# release digests.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: blakpath
+resources:
+  - job.yaml

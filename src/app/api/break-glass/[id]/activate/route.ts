@@ -1,28 +1,25 @@
 import { NextResponse } from 'next/server';
-import {
-  breakGlassErrorResponse,
-  requirePlatformOperator,
-} from '@/lib/http/platform-route';
+import { STEP_UP_ROUTES } from '@/lib/auth/step-up-policy';
+import { requirePlatformOperator } from '@/lib/http/platform-route';
 import { activateBreakGlass } from '@/domains/break-glass';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * POST /api/break-glass/[id]/activate — the requesting platform operator
  * activates an approved grant (requires step-up; notifies the tenant).
  */
-export async function POST(
+export const POST = tenantHandler(async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { userId } = await requirePlatformOperator();
-    const { id } = await params;
-    const row = await activateBreakGlass({
-      requestId: id,
-      activatingUserId: userId,
-      correlationId: globalThis.crypto.randomUUID(),
-    });
-    return NextResponse.json({ id: row.id, status: row.status });
-  } catch (error) {
-    return breakGlassErrorResponse(error);
-  }
-}
+  const { userId } = await requirePlatformOperator(
+    STEP_UP_ROUTES['POST /api/break-glass/[id]/activate'],
+  );
+  const { id } = await params;
+  const row = await activateBreakGlass({
+    requestId: id,
+    activatingUserId: userId,
+    correlationId: globalThis.crypto.randomUUID(),
+  });
+  return NextResponse.json({ id: row.id, status: row.status });
+});

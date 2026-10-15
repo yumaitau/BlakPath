@@ -3,14 +3,15 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/client';
 import { emailSuppressions } from '@/db/schema';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 
 /**
- * Email suppression service — SES bounce/complaint handling.
+ * Email suppression service — SES permanent-bounce and complaint handling.
  *
- * Prod mail goes through SES (SMTP interface); SES posts bounce/complaint
+ * Prod mail goes through the SES v2 API; the SES configuration set publishes
  * events via SNS to POST /api/email/events. Suppressed addresses are skipped
- * in `sendEmail` until explicitly cleared. Only address hashes persist.
+ * in `sendEmail` until a platform operator clears them. Only address hashes
+ * persist.
  */
 
 /** SHA-256 hex of lower-cased address. No plaintext PII stored. */
@@ -57,20 +58,71 @@ export async function recordSuppression(raw: {
     )
     .limit(1);
   if (existing.length > 0) return { suppressed: true };
-  const inserted = await db
-    .insert(emailSuppressions)
-    .values({
-      addressHash,
-      kind: input.kind ?? 'bounce',
-      sourceMessageId: input.sourceMessageId ?? null,
-    })
-    .returning({ id: emailSuppressions.id });
-  await recordAudit({
-    action: 'email.suppressed',
-    resourceType: 'email_suppression',
-    resourceId: inserted[0]?.id ?? null,
-    result: 'success',
-    organisationId: null,
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(emailSuppressions)
+      .values({
+        addressHash,
+        kind: input.kind ?? 'bounce',
+        sourceMessageId: input.sourceMessageId ?? null,
+      })
+      .returning({ id: emailSuppressions.id });
+    await recordAudit(
+      {
+        action: 'email.suppressed',
+        resourceType: 'email_suppression',
+        resourceId: inserted[0]?.id ?? null,
+        result: 'success',
+        organisationId: null,
+      },
+      tx,
+    );
   });
   return { suppressed: true };
+}
+
+const clearSchema = z.object({
+  address: z.email().max(320),
+  actorUserId: z.uuid(),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+/**
+ * Clear an active suppression. Platform-operator action: the address is hashed
+ * and not stored, and each cleared row is audited.
+ */
+export async function clearSuppression(raw: {
+  address: string;
+  actorUserId: string;
+  reason?: string;
+}): Promise<{ cleared: boolean }> {
+  const input = clearSchema.parse(raw);
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(emailSuppressions)
+      .set({ clearedAt: new Date(), clearedReason: input.reason ?? null })
+      .where(
+        and(
+          eq(emailSuppressions.addressHash, hashAddress(input.address)),
+          isNull(emailSuppressions.clearedAt),
+        ),
+      )
+      .returning({ id: emailSuppressions.id });
+    if (updated.length === 0) return { cleared: false };
+    for (const row of updated) {
+      await recordPlatformAudit(
+        {
+          action: 'email.suppression_cleared',
+          resourceType: 'email_suppression',
+          resourceId: row.id,
+          result: 'success',
+          actorUserId: input.actorUserId,
+          // Free text stays on the suppression row; the trail records the code.
+          reason: input.reason ? 'email.suppression_note' : null,
+        },
+        tx,
+      );
+    }
+    return { cleared: true };
+  });
 }

@@ -1,0 +1,89 @@
+# Pre-deploy gate. Not part of the environment overlay.
+# scripts/eks-deploy.sh applies this Job and blocks the workload rollout
+# unless both containers exit 0.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blakpath-release-check
+  namespace: blakpath
+  labels:
+    app.kubernetes.io/name: blakpath-release-check
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blakpath-release-check
+    spec:
+      # Reads env only: no AWS role and no API token.
+      serviceAccountName: blakpath-migrate
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: blakpath/app:unset
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ['node', 'release-check.cjs']
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          env:
+            # The gate checks the migration role is distinct and uses TLS.
+            # Web and worker pods never mount blakpath-migrator; this Job does.
+            - name: DATABASE_MIGRATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-migrator
+                  key: DATABASE_MIGRATION_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+        - name: worker
+          image: blakpath/worker:unset
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ['node', 'release-check.cjs']
+          envFrom:
+            - configMapRef:
+                name: blakpath-config
+            - secretRef:
+                name: blakpath-runtime
+          env:
+            # The gate checks the migration role is distinct and uses TLS.
+            # Web and worker pods never mount blakpath-migrator; this Job does.
+            - name: DATABASE_MIGRATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blakpath-migrator
+                  key: DATABASE_MIGRATION_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

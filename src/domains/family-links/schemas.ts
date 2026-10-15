@@ -11,6 +11,8 @@ export const requestFamilyLinkSchema = z.object({
   relativeName: z.string().trim().min(1).max(200),
   community: z.string().trim().min(1).max(200).optional(),
   notes: z.string().trim().max(5000).optional(),
+  /** Cultural-safety flag. True when the relative has passed. */
+  relativeDeceased: z.boolean().optional(),
 });
 export type RequestFamilyLinkInput = z.input<typeof requestFamilyLinkSchema>;
 

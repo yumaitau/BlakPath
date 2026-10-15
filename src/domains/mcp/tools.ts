@@ -3,9 +3,10 @@ import type { Permission } from '@/lib/permissions/catalog';
 /**
  * MCP tool registry — pure metadata.
  *
- * Every tool is READ-ONLY and permission-scoped. Authorisation is enforced by
- * the underlying domain services (the tool runs inside the API key's scoped
- * tenant context), so the key's permissions decide what a tool can see.
+ * Every tool is READ-ONLY and permission-scoped. Calling any tool requires an
+ * `mcp:` scope. The underlying domain services still enforce their own read
+ * permissions inside the API key's tenant context. Applicant names and
+ * recorded outcomes are omitted unless the key also holds `mcp:read-pii`.
  *
  * PRODUCT INVARIANT: there is NO tool that scores, ranks, predicts, approves,
  * rejects, determines or finalises anything about a person's Aboriginality —
@@ -22,7 +23,7 @@ export interface McpToolDef {
     readonly properties: Record<string, unknown>;
     readonly required?: readonly string[];
   };
-  /** Permission keys, ANY of which the calling key must hold. */
+  /** MCP scopes, ANY of which the calling key must hold. */
   readonly scopes: readonly Permission[];
 }
 
@@ -30,16 +31,32 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
   {
     name: 'list_applications',
     description:
-      'List applications in the organisation the key may read. Optional status filter and paging.',
+      'List applications the key may read. Optional text search (reference or name), status, assignee, and cursor paging.',
     inputSchema: {
       type: 'object',
       properties: {
         status: { type: 'string', description: 'Filter by application status.' },
+        assigneeUserId: {
+          type: 'string',
+          description: 'Filter by the current assignee user id.',
+        },
+        q: {
+          type: 'string',
+          description:
+            'Exact reference, full applicant name, or one whole name word (blind index).',
+        },
+        cursor: {
+          type: 'string',
+          description: 'Opaque cursor returned by the previous page.',
+        },
         limit: { type: 'number', description: 'Max rows (1-100).' },
-        offset: { type: 'number', description: 'Rows to skip.' },
+        offset: {
+          type: 'number',
+          description: 'Rows to skip when no cursor is given.',
+        },
       },
     },
-    scopes: ['application:read-any', 'application:read-assigned'],
+    scopes: ['mcp:read', 'mcp:read-pii'],
   },
   {
     name: 'get_application',
@@ -49,7 +66,18 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
       properties: { id: { type: 'string', description: 'Application id.' } },
       required: ['id'],
     },
-    scopes: ['application:read-any', 'application:read-assigned', 'application:read-own'],
+    scopes: ['mcp:read', 'mcp:read-pii'],
+  },
+  {
+    name: 'list_family_links',
+    description:
+      'List family connections recorded on an application. This is a human record, not a determination. The key also needs a family-link permission and a staff case read. Names and notes need mcp:read-pii. When relativeDeceased is true, show a warning before displaying the relative name.',
+    inputSchema: {
+      type: 'object',
+      properties: { applicationId: { type: 'string' } },
+      required: ['applicationId'],
+    },
+    scopes: ['mcp:read', 'mcp:read-pii'],
   },
   {
     name: 'list_decisions',
@@ -59,19 +87,19 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
       properties: { applicationId: { type: 'string' } },
       required: ['applicationId'],
     },
-    scopes: ['application:read-any', 'application:read-assigned'],
+    scopes: ['mcp:read', 'mcp:read-pii'],
   },
   {
     name: 'list_meetings',
     description: 'List the committee meetings in the organisation.',
     inputSchema: { type: 'object', properties: {} },
-    scopes: ['meeting:pack-access', 'meeting:create', 'meeting:agenda-manage'],
+    scopes: ['mcp:read', 'mcp:read-pii'],
   },
   {
     name: 'organisation_stats',
     description: 'Return pipeline counts and what needs attention for the organisation.',
     inputSchema: { type: 'object', properties: {} },
-    scopes: ['report:view', 'application:read-any'],
+    scopes: ['mcp:read', 'mcp:read-pii'],
   },
 ] as const;
 

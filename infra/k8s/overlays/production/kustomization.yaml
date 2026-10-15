@@ -1,6 +1,6 @@
-# Production overlay. Bucket names and the evidence KMS key id are tokens.
-# Substitute them, the ECR registry and the image tag from private CD config.
-# See docs/eks-runbook.md.
+# Production overlay. Bucket names, the bucket default KMS key and the
+# account id are tokens. scripts/eks-deploy.sh substitutes them from private
+# CD config and pins the images to the release digests. See docs/eks-runbook.md.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: blakpath
@@ -12,6 +12,10 @@ patches:
     target:
       kind: ConfigMap
       name: blakpath-config
+  - path: serviceaccount-patch.yaml
+    target:
+      kind: ServiceAccount
+      name: blakpath-external-secrets
   - path: ingress-patch.yaml
     target:
       group: networking.k8s.io
@@ -24,6 +28,12 @@ patches:
       version: v1
       kind: ExternalSecret
       name: blakpath-runtime
+  - path: migrator-externalsecret-patch.yaml
+    target:
+      group: external-secrets.io
+      version: v1
+      kind: ExternalSecret
+      name: blakpath-migrator
 images:
   - name: blakpath/app
     newName: __ECR_REGISTRY__/blakpath/app
