@@ -117,6 +117,25 @@ export const applications = pgTable(
       table.organisationId,
       table.applicantUserId,
     ),
+    // Keyset pages walk created_at DESC, id DESC. Status and assignee filters
+    // keep that order without sorting the whole tenant.
+    index('applications_org_created_id_idx').on(
+      table.organisationId,
+      table.createdAt.desc(),
+      table.id.desc(),
+    ),
+    index('applications_org_status_created_id_idx').on(
+      table.organisationId,
+      table.status,
+      table.createdAt.desc(),
+      table.id.desc(),
+    ),
+    index('applications_org_assignee_created_id_idx').on(
+      table.organisationId,
+      table.currentAssigneeUserId,
+      table.createdAt.desc(),
+      table.id.desc(),
+    ),
   ],
 );
 

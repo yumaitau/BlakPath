@@ -24,6 +24,9 @@ export const GET = tenantHandler(async function GET(
     : undefined;
   const input: ListApplicationsInput = {
     status,
+    assigneeUserId: params.get('assigneeUserId') || undefined,
+    q: params.get('q') || undefined,
+    cursor: params.get('cursor') || undefined,
     limit: params.get('limit') || undefined,
     offset: params.get('offset') || undefined,
   };

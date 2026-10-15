@@ -3,6 +3,7 @@ import { desc, eq } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { certificateTemplates } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -42,11 +43,6 @@ export interface CertificateTemplateView {
   hasLogo: boolean;
   contentHash: string;
   publishedAt: string;
-}
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
 }
 
 function toView(row: CertificateTemplateRow): CertificateTemplateView {
@@ -143,7 +139,7 @@ export async function publishCertificateTemplate(
           }),
         )
         .returning();
-      const created = must(inserted[0], 'certificate template');
+      const created = expectRow(inserted[0], 'certificate template');
 
       // Version and content hash only; the wording itself stays on the row.
       await recordAudit(

@@ -7,6 +7,7 @@ import {
   sealFamilyFields,
 } from '@/lib/encryption/tenant-fields';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { getApplication } from '@/domains/applications';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -78,13 +79,6 @@ export function canReadFamilyLinks(subject: Subject): boolean {
   return hasAny(subject, FAMILY_LINK_PERMISSIONS) && hasAny(subject, STAFF_CASE_READ);
 }
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
-
 /** Project an opened row to the fields routes and the case page may show. */
 function presentFamilyLink(row: FamilyLinkRow): FamilyLinkRecord {
   return {
@@ -109,7 +103,7 @@ async function openOne(
   row: FamilyLinkRow,
 ): Promise<FamilyLinkRecord> {
   const [opened] = await openFamilyRows(organisationId, [row]);
-  return presentFamilyLink(must(opened, 'family link'));
+  return presentFamilyLink(expectRow(opened, 'family link'));
 }
 
 /** Load a live family link within the active tenant scope. */
@@ -179,7 +173,7 @@ export async function requestFamilyLink(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'family link');
+    const created = expectRow(inserted[0], 'family link');
 
     await recordAudit(
       {
@@ -249,7 +243,7 @@ async function decideLink(
       })
       .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
       .returning();
-    const decided = must(updated[0], 'family link');
+    const decided = expectRow(updated[0], 'family link');
 
     await recordAudit(
       {
@@ -309,7 +303,7 @@ export async function withdrawFamilyLink(
       .set({ status: 'withdrawn' })
       .where(scope.where(familyLinks.organisationId, eq(familyLinks.id, linkId)))
       .returning();
-    const withdrawn = must(updated[0], 'family link');
+    const withdrawn = expectRow(updated[0], 'family link');
 
     await recordAudit(
       {

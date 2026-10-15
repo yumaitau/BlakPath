@@ -1,4 +1,14 @@
-import { and, desc, eq, exists, isNull, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  isNull,
+  notInArray,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import type { Database } from '@/db/client';
 import {
@@ -23,6 +33,7 @@ import {
   users,
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
@@ -44,6 +55,7 @@ import {
   sealApplicationFields,
   sealNoteBody,
 } from '@/lib/encryption/tenant-fields';
+import { decodeApplicationCursor, encodeApplicationCursor } from './cursor';
 import { canReadApplication, readsAllApplications } from './policies';
 import {
   addNoteSchema,
@@ -123,13 +135,21 @@ export interface ApplicationParticipant {
   readonly email: string;
 }
 
-/** Assert a row was returned from an insert/update `.returning()`. */
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
+/** A staff member the register may offer in the assignee filter. */
+export interface RegisterAssignee {
+  readonly userId: string;
+  readonly name: string;
 }
+
+export interface ApplicationListResult {
+  readonly items: ApplicationRow[];
+  readonly limit: number;
+  readonly offset: number;
+  readonly nextCursor: string | null;
+}
+
+/** Roles that do not hold a case. Kept out of the assignee filter. */
+const NON_ASSIGNEE_ROLE_SLUGS = ['applicant', 'applicant-representative'] as const;
 
 /** Build a human-friendly per-organisation reference from a fresh id. */
 function makeReference(id: string): string {
@@ -330,6 +350,27 @@ export async function listApplicationParticipants(): Promise<ApplicationParticip
     .orderBy(users.name);
 }
 
+/** Active staff the register can filter by. Requires `application:read-any`. */
+export async function listRegisterAssignees(): Promise<RegisterAssignee[]> {
+  const ctx = requireTenantContext();
+  requirePermission(subjectFromContext(ctx), 'application:read-any');
+  const scope = currentScope();
+  return scope.db
+    .selectDistinct({ userId: users.id, name: users.name })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
+    .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
+    .where(
+      scope.where(
+        memberships.organisationId,
+        eq(memberships.status, 'active'),
+        notInArray(roles.slug, [...NON_ASSIGNEE_ROLE_SLUGS]),
+      ),
+    )
+    .orderBy(users.name);
+}
+
 /** Create a new application in `draft`. Requires `application:create`. */
 export async function createApplication(
   rawInput: CreateApplicationInput,
@@ -419,7 +460,7 @@ export async function createApplication(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'application');
+    const created = expectRow(inserted[0], 'application');
 
     await tx.insert(applicationStatusHistory).values(
       scope.insertValues({
@@ -447,7 +488,7 @@ export async function createApplication(
     return created;
   });
   const [row] = await openApplicationRows(scope.organisationId, [stored]);
-  return must(row, 'application');
+  return expectRow(row, 'application');
 }
 
 /** Update intake details. Requires `application:update-intake`. */
@@ -500,7 +541,7 @@ export async function updateIntake(
       .set(patch)
       .where(scope.where(applications.organisationId, eq(applications.id, id)))
       .returning();
-    const saved = must(updated[0], 'application');
+    const saved = expectRow(updated[0], 'application');
 
     const intakeAudit = applicationIntakeAuditMeta({
       beforePriority: existing.priority,
@@ -522,7 +563,7 @@ export async function updateIntake(
     return saved;
   });
   const [row] = await openApplicationRows(scope.organisationId, [stored]);
-  return must(row, 'application');
+  return expectRow(row, 'application');
 }
 
 /** Assign (or reassign) an application to a worker. Requires `application:assign`. */
@@ -566,7 +607,7 @@ export async function assignApplication(
         }),
       )
       .returning();
-    const assignment = must(insertedAssignment[0], 'assignment');
+    const assignment = expectRow(insertedAssignment[0], 'assignment');
 
     await tx
       .update(applications)
@@ -686,7 +727,7 @@ export async function applyApplicationTransition(
     .returning({ id: applicationStatusHistory.id });
   const statusHistoryId = history[0]?.id ?? null;
 
-  return { row: must(updated[0], 'application'), from, to, note, statusHistoryId };
+  return { row: expectRow(updated[0], 'application'), from, to, note, statusHistoryId };
 }
 
 /** Audit a transition inside the transaction that wrote it. */
@@ -754,21 +795,30 @@ export async function transitionApplication(
     throw error;
   }
   const [opened] = await openApplicationRows(applied.row.organisationId, [applied.row]);
-  return must(opened, 'application');
+  return expectRow(opened, 'application');
 }
 
 /**
  * List applications within the tenant. Actors with `application:read-any` see
  * every application; everyone else sees only applications they are the
  * applicant on or actively assigned to.
+ *
+ * Text search is an equality lookup on the tenant blind index (reference, full
+ * name, or one whole name word), then a keyset page on `(created_at, id)`
+ * descending. Results stay in record order. Search does not rank or score a
+ * person.
  */
 export async function listApplications(
   rawInput: ListApplicationsInput = {},
-): Promise<{ items: ApplicationRow[]; limit: number; offset: number }> {
+): Promise<ApplicationListResult> {
   const ctx = requireTenantContext();
   const subject = subjectFromContext(ctx);
   const input = listApplicationsSchema.parse(rawInput);
   const scope = currentScope();
+  const position = input.cursor ? decodeApplicationCursor(input.cursor) : null;
+  if (input.cursor && !position) {
+    throw new Error('Invalid page cursor.');
+  }
 
   const filters: Array<SQL | undefined> = [isNull(applications.deletedAt)];
   if (input.status) filters.push(eq(applications.status, input.status));
@@ -777,6 +827,13 @@ export async function listApplications(
   }
   if (input.applicantUserId) {
     filters.push(eq(applications.applicantUserId, input.applicantUserId));
+  }
+  if (position) {
+    // Row comparison at Postgres precision: created_at is microseconds, so
+    // the cursor carries the exact text value rather than a JS Date.
+    filters.push(
+      sql`(${applications.createdAt}, ${applications.id}) < (${position.createdAt}::timestamptz, ${position.id}::uuid)`,
+    );
   }
   if (input.q) {
     const mac = await applicationSearchMac(scope.organisationId, input.q);
@@ -824,18 +881,34 @@ export async function listApplications(
     );
   }
 
-  const items = await scope.db
-    .select()
+  const offset = position ? 0 : input.offset;
+  const rows = await scope.db
+    .select({
+      row: applications,
+      cursorAt: sql<string>`to_char(${applications.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+    })
     .from(applications)
     .where(scope.where(applications.organisationId, ...filters))
-    .orderBy(desc(applications.createdAt))
-    .limit(input.limit)
-    .offset(input.offset);
+    .orderBy(desc(applications.createdAt), desc(applications.id))
+    .limit(input.limit + 1)
+    .offset(offset);
+
+  const hasMore = rows.length > input.limit;
+  const page = hasMore ? rows.slice(0, input.limit) : rows;
+  const last = page.at(-1);
+  const nextCursor =
+    hasMore && last
+      ? encodeApplicationCursor({ createdAt: last.cursorAt, id: last.row.id })
+      : null;
 
   return {
-    items: await openApplicationRows(scope.organisationId, items),
+    items: await openApplicationRows(
+      scope.organisationId,
+      page.map((entry) => entry.row),
+    ),
     limit: input.limit,
-    offset: input.offset,
+    offset,
+    nextCursor,
   };
 }
 
@@ -874,7 +947,7 @@ export async function addNote(
         }),
       )
       .returning();
-    const created = must(insertedNote[0], 'note');
+    const created = expectRow(insertedNote[0], 'note');
 
     await recordAudit(
       {
@@ -892,7 +965,7 @@ export async function addNote(
     return created;
   });
   const [note] = await openNoteRows(scope.organisationId, [stored]);
-  return must(note, 'note');
+  return expectRow(note, 'note');
 }
 
 /** Re-export the context type for callers that thread it explicitly. */

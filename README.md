@@ -168,7 +168,7 @@ The app runs at <http://localhost:3000>.
 | `pnpm dev`            | Run the Next.js app in development            |
 | `pnpm worker:dev`     | Run the BullMQ background worker (watch mode) |
 | `pnpm typecheck`      | `tsc --noEmit` (strict)                       |
-| `pnpm lint`           | ESLint                                        |
+| `pnpm lint`           | ESLint; any warning fails                     |
 | `pnpm test`           | Unit + integration tests (Vitest)             |
 | `pnpm test:e2e`       | End-to-end tests (Playwright)                 |
 | `pnpm test:e2e:smoke` | Smoke a running production image (staging)    |
@@ -189,31 +189,33 @@ documented in [`docs/accessibility-acceptance.md`](docs/accessibility-acceptance
 
 ```text
 BlakPath/
+├── .github/                      CI workflows
+├── certs/                        RDS CA bundle for verify-full Postgres TLS
+├── docker/                       Local service config (MinIO init, OpenTelemetry)
+├── docs/                         Architecture, security, and operations docs
+├── infra/                        AWS and Kubernetes manifests (humans apply these)
+├── public/                       Static assets
+├── scripts/                      Operational and verification scripts
 ├── LICENSE                       Source licence, AGPL-3.0-only
 ├── SECURITY.md                   Private vulnerability reporting
 ├── README.md                     This file
-├── docs/                         Architecture & security documentation (below)
 ├── src/
-│   ├── db/
-│   │   ├── client.ts             Drizzle instance (raw, non-tenant-scoped)
-│   │   ├── tenant-db.ts          Tenant-scoped data access (scopeFor / currentScope)
-│   │   ├── migrate.ts            Migration entrypoint
-│   │   ├── migrations/           Generated SQL migrations
-│   │   ├── seeds/                Baseline data seeds
-│   │   └── schema/
-│   │       ├── _helpers.ts       primaryId / refId / organisationId / timestamps ...
-│   │       ├── enums.ts          Postgres enums (lifecycle & outcome states)
-│   │       ├── auth.ts           Better Auth tables (user/session/account/...)
-│   │       ├── tenancy.ts        organisations + settings/domains/feature flags
-│   │       ├── membership.ts     memberships, roles, permissions (RBAC)
-│   │       ├── audit.ts          Append-only audit + integrity checkpoints
-│   │       └── index.ts          Schema barrel (must stay exhaustive)
-│   └── lib/
-│       ├── env.ts                Validated environment config (import { env })
-│       └── tenancy/context.ts    AsyncLocalStorage TenantContext
-├── worker/                       Background worker entrypoint & jobs
-└── tests/                        unit / integration / e2e
+│   ├── app/                      App Router pages and layouts
+│   │   └── api/                  Route handlers
+│   ├── components/               React UI
+│   ├── db/                       Drizzle client, tenant scope, migrations, seeds
+│   │   └── schema/               Postgres schema, one module per area
+│   ├── domains/                  Tenant-scoped domain services
+│   ├── instrumentation.ts        Next.js instrumentation hook
+│   ├── lib/                      Shared libraries (auth, env, queues, storage)
+│   ├── proxy.ts                  Next.js proxy: CSP, request limits, mutation guard
+│   └── styles/                   Global CSS
+├── tests/                        unit / integration / e2e / live
+└── worker/                       BullMQ worker entrypoint and processors
 ```
+
+App config (`package.json`, Dockerfiles, Drizzle, ESLint, Playwright, TypeScript)
+lives at the repository root.
 
 ## Documentation
 

@@ -1,6 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { exportRequests } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import {
@@ -23,11 +24,6 @@ import { requestExportSchema, type RequestExportInput } from './schemas';
 
 export type ExportRequestRow = typeof exportRequests.$inferSelect;
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
-
 /** Request an export. Requires `report:export`. */
 export async function requestExport(
   rawInput: RequestExportInput,
@@ -36,6 +32,11 @@ export async function requestExport(
   requirePermission(subjectFromContext(ctx), 'report:export');
 
   const input = requestExportSchema.parse(rawInput);
+  const filters = {
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.from ? { from: input.from } : {}),
+    ...(input.to ? { to: input.to } : {}),
+  };
   const scope = currentScope();
   const row = await scope.db.transaction(async (tx) => {
     const inserted = await tx
@@ -45,17 +46,21 @@ export async function requestExport(
           requestedByUserId: ctx.userId,
           type: input.type,
           status: 'pending',
+          params: Object.keys(filters).length > 0 ? filters : null,
         }),
       )
       .returning();
-    const created = must(inserted[0], 'export request');
+    const created = expectRow(inserted[0], 'export request');
     await recordAudit(
       {
         action: 'export.requested',
         resourceType: 'export',
         resourceId: created.id,
         result: 'success',
-        after: { data: { type: input.type }, allow: ['type'] },
+        after: {
+          data: { type: input.type, ...filters },
+          allow: ['type', 'status', 'from', 'to'],
+        },
       },
       tx,
     );

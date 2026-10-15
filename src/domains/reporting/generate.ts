@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, lte, type AnyColumn, type SQL } from 'drizzle-orm';
 import {
   applications,
   certificates,
@@ -14,6 +14,11 @@ import { openApplicationRows } from '@/lib/encryption/tenant-fields';
 import { EVIDENCE_BUCKET, objectKey, putObjectBytes } from '@/lib/storage/s3';
 import { toCsv, type CsvCell } from './csv';
 import { REPORT_COLUMNS, isReportType, type ReportType } from './reports';
+import {
+  exportRange,
+  readStoredExportFilters,
+  type StoredExportFilters,
+} from './schemas';
 
 /**
  * Export generation (worker side).
@@ -34,10 +39,27 @@ export interface ProcessExportInput {
 
 type Scope = ReturnType<typeof scopeFor>;
 
+/** Inclusive created-at bounds. Undefined ends are left open. */
+function ranged(column: AnyColumn, filters: StoredExportFilters): SQL[] {
+  const { start, end } = exportRange(filters);
+  const predicates: SQL[] = [];
+  if (start) predicates.push(gte(column, start));
+  if (end) predicates.push(lte(column, end));
+  return predicates;
+}
+
+function whereLive(...predicates: Array<SQL | undefined>): SQL {
+  const defined = predicates.filter(
+    (predicate): predicate is SQL => predicate !== undefined,
+  );
+  return and(...defined) as SQL;
+}
+
 /** Build the header + data rows for a report type. */
 async function buildReport(
   scope: Scope,
   type: ReportType,
+  filters: StoredExportFilters,
 ): Promise<{ headers: readonly string[]; rows: CsvCell[][] }> {
   const headers = REPORT_COLUMNS[type];
 
@@ -46,9 +68,11 @@ async function buildReport(
       .select()
       .from(applications)
       .where(
-        and(
+        whereLive(
           eq(applications.organisationId, scope.organisationId),
           isNull(applications.deletedAt),
+          filters.status ? eq(applications.status, filters.status) : undefined,
+          ...ranged(applications.createdAt, filters),
         ),
       )
       .orderBy(desc(applications.createdAt));
@@ -72,9 +96,10 @@ async function buildReport(
       .select()
       .from(decisions)
       .where(
-        and(
+        whereLive(
           eq(decisions.organisationId, scope.organisationId),
           isNull(decisions.deletedAt),
+          ...ranged(decisions.createdAt, filters),
         ),
       )
       .orderBy(desc(decisions.createdAt));
@@ -95,9 +120,10 @@ async function buildReport(
       .select()
       .from(certificates)
       .where(
-        and(
+        whereLive(
           eq(certificates.organisationId, scope.organisationId),
           isNull(certificates.deletedAt),
+          ...ranged(certificates.createdAt, filters),
         ),
       )
       .orderBy(desc(certificates.createdAt));
@@ -110,7 +136,12 @@ async function buildReport(
   const items = await scope.db
     .select()
     .from(destructionRegister)
-    .where(eq(destructionRegister.organisationId, scope.organisationId))
+    .where(
+      whereLive(
+        eq(destructionRegister.organisationId, scope.organisationId),
+        ...ranged(destructionRegister.destroyedAt, filters),
+      ),
+    )
     .orderBy(desc(destructionRegister.destroyedAt));
   return {
     headers,
@@ -152,7 +183,8 @@ export async function processExport(input: ProcessExportInput): Promise<void> {
     if (!isReportType(request.type)) {
       throw new Error(`Unknown report type: ${request.type}`);
     }
-    const report = await buildReport(scope, request.type);
+    const filters = readStoredExportFilters(request.params);
+    const report = await buildReport(scope, request.type, filters);
     const csv = toCsv(report.headers, report.rows);
     const key = objectKey(organisationId, 'exports', `${exportRequestId}.csv`);
     await putObjectBytes({
@@ -190,8 +222,14 @@ export async function processExport(input: ProcessExportInput): Promise<void> {
           sessionId: null,
           correlationId,
           after: {
-            data: { type: request.type, rows: report.rows.length },
-            allow: ['type', 'rows'],
+            data: {
+              type: request.type,
+              rows: report.rows.length,
+              status: filters.status ?? null,
+              from: filters.from ?? null,
+              to: filters.to ?? null,
+            },
+            allow: ['type', 'rows', 'status', 'from', 'to'],
           },
         },
         tx,

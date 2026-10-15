@@ -56,6 +56,7 @@ export function StartApplicationForm({
         setPending(false);
         return;
       }
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load so Server Components read the newly active organisation
       window.location.assign(`/portal/${payload.application.id}`);
     } catch {
       setError(

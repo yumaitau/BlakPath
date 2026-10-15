@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { uuidv7 } from 'uuidv7';
 import { consentRecords, organisationSettings } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
@@ -23,11 +24,6 @@ const recordSchema = z.object({
   expiresAt: z.coerce.date().optional(),
   notes: z.string().trim().max(2000).optional(),
 });
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} from database.`);
-  return row;
-}
 
 export async function recordConsent(
   raw: z.input<typeof recordSchema>,
@@ -63,7 +59,7 @@ export async function recordConsent(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'consent record');
+    const created = expectRow(inserted[0], 'consent record');
     await recordAudit(
       {
         action: 'consent.recorded',
@@ -76,7 +72,7 @@ export async function recordConsent(
     return created;
   });
   const [row] = await openConsentRows(scope.organisationId, [stored]);
-  return must(row, 'consent record');
+  return expectRow(row, 'consent record');
 }
 
 export async function withdrawConsent(id: string): Promise<ConsentRow> {
@@ -106,7 +102,7 @@ export async function withdrawConsent(id: string): Promise<ConsentRow> {
     return withdrawn;
   });
   const [row] = await openConsentRows(scope.organisationId, [stored]);
-  return must(row, 'consent record');
+  return expectRow(row, 'consent record');
 }
 
 export async function listConsents(subjectUserId: string): Promise<ConsentRow[]> {

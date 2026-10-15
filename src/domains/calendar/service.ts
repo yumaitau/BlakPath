@@ -6,6 +6,7 @@ import {
   featureFlags,
 } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
@@ -37,11 +38,6 @@ import { CalendarConflictError } from './errors';
 export type CalendarEventRow = typeof calendarEvents.$inferSelect;
 
 const CALENDAR_READ = ['calendar:read-any', 'meeting:pack-access'] as const;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} from database.`);
-  return row;
-}
 
 async function loadEvent(id: string): Promise<CalendarEventRow | null> {
   const scope = currentScope();
@@ -161,7 +157,7 @@ export async function createCalendarEvent(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'calendar event');
+    const created = expectRow(inserted[0], 'calendar event');
     await recordAudit(
       {
         action: 'calendar.created',
@@ -259,7 +255,7 @@ export async function updateCalendarEvent(
       })
       .where(scope.where(calendarEvents.organisationId, eq(calendarEvents.id, id)))
       .returning();
-    const saved = must(updated[0], 'calendar event');
+    const saved = expectRow(updated[0], 'calendar event');
     await recordAudit(
       {
         action: 'calendar.updated',
@@ -322,7 +318,7 @@ export async function addAttendee(eventId: string, raw: AddAttendeeInput) {
       }),
     )
     .returning();
-  return must(inserted[0], 'attendee');
+  return expectRow(inserted[0], 'attendee');
 }
 
 /**
@@ -393,7 +389,7 @@ export async function addReminder(eventId: string, raw: AddReminderInput) {
       }),
     )
     .returning();
-  return must(inserted[0], 'reminder');
+  return expectRow(inserted[0], 'reminder');
 }
 
 /** Keep `and` import used for future scoped filters. */
@@ -449,7 +445,7 @@ export async function countUpcoming(): Promise<number> {
         ),
       )
       .returning();
-    const updatedRow = must(updated[0], 'attendee');
+    const updatedRow = expectRow(updated[0], 'attendee');
     await recordAudit(
       {
         action: 'calendar.updated',
