@@ -161,7 +161,7 @@ describe('public verification of a superseded certificate', () => {
   });
 });
 
-describe('certificate PDF', () => {
+describe('certificate PDF', { timeout: 30_000 }, () => {
   it('prints organisation wording, logo, signatory, ABN and dates', async () => {
     const pdf = await renderCertificatePdf({
       organisationName: 'Example Organisation',

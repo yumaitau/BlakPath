@@ -9,7 +9,13 @@
  */
 export { toCsv, type CsvCell } from './csv';
 export { REPORT_COLUMNS, REPORT_TYPES, isReportType, type ReportType } from './reports';
-export { requestExportSchema, type RequestExportInput } from './schemas';
+export {
+  exportRange,
+  readStoredExportFilters,
+  requestExportSchema,
+  type RequestExportInput,
+  type StoredExportFilters,
+} from './schemas';
 export {
   getExportDownloadUrl,
   listExports,

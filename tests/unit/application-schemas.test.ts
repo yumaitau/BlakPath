@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { encodeApplicationCursor } from '@/domains/applications/cursor';
 import {
   addNoteSchema,
   assignApplicationSchema,
@@ -83,6 +84,24 @@ describe('listApplicationsSchema', () => {
     expect(listApplicationsSchema.safeParse({ limit: 0 }).success).toBe(false);
     expect(listApplicationsSchema.safeParse({ limit: 1000 }).success).toBe(false);
     expect(listApplicationsSchema.safeParse({ status: 'approved' }).success).toBe(false);
+  });
+
+  it('accepts search, assignee, and a cursor, and treats blanks as unset', () => {
+    const cursor = encodeApplicationCursor({
+      createdAt: '2026-04-01T00:00:00.000000Z',
+      id: '018f5b3a-0000-7000-8000-0000000000ab',
+    });
+    const parsed = listApplicationsSchema.parse({
+      q: '  smith ',
+      status: 'draft',
+      assigneeUserId: '018f5b3a-0000-7000-8000-000000000000',
+      cursor,
+    });
+    expect(parsed.q).toBe('smith');
+    expect(parsed.cursor).toBe(cursor);
+    expect(listApplicationsSchema.parse({ q: '', cursor: '' }).q).toBeUndefined();
+    expect(listApplicationsSchema.safeParse({ cursor: 'nope' }).success).toBe(false);
+    expect(listApplicationsSchema.safeParse({ q: 'x'.repeat(201) }).success).toBe(false);
   });
 });
 

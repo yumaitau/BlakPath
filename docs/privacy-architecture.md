@@ -161,6 +161,13 @@ inside a word does not match. The unique index is
 `(organisation_id, reference_bidx)`. There is no unique index on the plaintext
 reference.
 
+The register (`/applications?q=`, `GET /api/applications`, `GET
+/api/v1/applications`, MCP `list_applications`) filters by this index on the
+server, then pages with an opaque keyset cursor on `(created_at, id)`
+descending. The cursor holds only a timestamp and a row id; every page query
+is still scoped to the caller's organisation and read policy. Search never
+decrypts rows to filter them.
+
 The blind index is a lookup aid. It does not score, rank, predict, or infer
 Aboriginality, and it never approves or rejects an application.
 

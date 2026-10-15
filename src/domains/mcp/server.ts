@@ -113,6 +113,7 @@ async function callTool(
           })),
           limit: result.limit,
           offset: result.offset,
+          nextCursor: result.nextCursor,
         });
       }
       case 'get_application': {
