@@ -53,12 +53,19 @@ export const evidenceRequests = pgTable(
     dueAt: timestamp('due_at', { withTimezone: true }),
     fulfilledAt: timestamp('fulfilled_at', { withTimezone: true }),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    /** Set once an overdue notice has been issued, so the sweep does not repeat. */
+    overdueNotifiedAt: timestamp('overdue_notified_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
     index('evidence_requests_org_application_idx').on(
       table.organisationId,
       table.applicationId,
+    ),
+    index('evidence_requests_org_status_due_idx').on(
+      table.organisationId,
+      table.status,
+      table.dueAt,
     ),
   ],
 );

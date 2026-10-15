@@ -287,6 +287,7 @@ describe('worker processors', () => {
           emailedAt: null,
         },
       ],
+      [{ emailNotifications: true }],
       [],
     );
     await PROCESSORS[QueueName.Notification](
@@ -294,6 +295,26 @@ describe('worker processors', () => {
       asLogger(log),
     );
     expect(deps.sendEmail).not.toHaveBeenCalled();
+
+    // The member turned the email copy off after the job was queued.
+    script.results.push(
+      [
+        {
+          id: 'note-1',
+          userId: 'user-1',
+          title: 'Update',
+          body: 'Body',
+          emailedAt: null,
+        },
+      ],
+      [{ emailNotifications: false }],
+    );
+    await PROCESSORS[QueueName.Notification](
+      job({ notificationId: 'note-1' }),
+      asLogger(log),
+    );
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+    expect(deps.markEmailed).not.toHaveBeenCalled();
 
     script.results.push(
       [
@@ -305,6 +326,7 @@ describe('worker processors', () => {
           emailedAt: null,
         },
       ],
+      [{ emailNotifications: true }],
       [{ email: 'person@council.example', name: 'Person' }],
     );
     await PROCESSORS[QueueName.Notification](

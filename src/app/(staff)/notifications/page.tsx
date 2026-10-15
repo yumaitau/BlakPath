@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { EmailCopyToggle } from '@/components/notifications/email-copy-toggle';
 import { NotificationList } from '@/components/notifications/notification-list';
 
 export const metadata: Metadata = {
@@ -12,6 +13,7 @@ export default function NotificationsPage() {
       <p className="text-muted-foreground mt-2">
         Updates about work in your current organisation.
       </p>
+      <EmailCopyToggle />
       <div className="border-border bg-surface mt-6 rounded-lg border p-4 sm:p-5">
         <NotificationList />
       </div>

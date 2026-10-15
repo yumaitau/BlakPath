@@ -1,4 +1,3 @@
-/* eslint-disable no-restricted-properties -- Playwright config runs before app env loading. */
 import { defineConfig, devices } from '@playwright/test';
 
 /**

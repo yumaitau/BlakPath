@@ -1,6 +1,7 @@
 import { desc, eq, isNull } from 'drizzle-orm';
 import { scimCredentials } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -18,11 +19,6 @@ import { generateScimToken, hashScimToken, scimDisplayPrefix } from './tokens';
 export type ScimCredentialRow = typeof scimCredentials.$inferSelect;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
-}
 
 /** Create a credential. Returns the raw token once; only the hash is stored. */
 export async function createScimCredential(
@@ -49,7 +45,7 @@ export async function createScimCredential(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'scim credential');
+    const created = expectRow(inserted[0], 'scim credential');
 
     await recordAudit(
       {
@@ -186,7 +182,7 @@ export async function rotateScimCredential(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'scim credential');
+    const created = expectRow(inserted[0], 'scim credential');
 
     await recordAudit(
       {

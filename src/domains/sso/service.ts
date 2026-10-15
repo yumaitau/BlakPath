@@ -2,6 +2,7 @@ import { asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { organisationDomains, organisationSsoProviders } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requirePermission, subjectFromContext } from '@/lib/permissions/check';
@@ -21,11 +22,6 @@ const bindingSchema = z.object({
   clientId: z.string().trim().min(1).max(300),
   domain: z.string().trim().toLowerCase().max(253),
 });
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} from database.`);
-  return row;
-}
 
 export async function createSsoBinding(
   raw: z.input<typeof bindingSchema>,
@@ -47,7 +43,7 @@ export async function createSsoBinding(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'sso binding');
+    const row = expectRow(inserted[0], 'sso binding');
     await recordAudit(
       {
         action: 'admin.settings_updated',
@@ -120,7 +116,7 @@ export async function setSsoBindingEnabled(
         ),
       )
       .returning();
-    const row = must(updated[0], 'sso binding');
+    const row = expectRow(updated[0], 'sso binding');
     await recordAudit(
       {
         action: 'admin.settings_updated',
