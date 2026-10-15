@@ -1,13 +1,7 @@
-import type { Page } from '@playwright/test';
 import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { ADMIN_PASSWORD, signInAndSelectOrganisation } from './helpers/auth';
-
-function watchForPageErrors(page: Page): Error[] {
-  const errors: Error[] = [];
-  page.on('pageerror', (error) => errors.push(error));
-  return errors;
-}
+import { watchForPageErrors } from './helpers/page-errors';
 
 test('task changes persist and are reflected on the dashboard', async ({ page }) => {
   const pageErrors = watchForPageErrors(page);

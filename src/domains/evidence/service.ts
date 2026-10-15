@@ -3,6 +3,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { evidence, evidenceRequests } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import {
   recordAudit,
   type AuditMetaInput,
@@ -62,13 +63,6 @@ import { assertCanCompleteEvidenceUpload, decideEvidenceUpload } from './upload-
 export type EvidenceRow = typeof evidence.$inferSelect;
 export type EvidenceRequestRow = typeof evidenceRequests.$inferSelect;
 type EvidencePatch = Partial<typeof evidence.$inferInsert>;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 /** Load a live (non-deleted) evidence row within the active tenant scope. */
 async function loadEvidence(id: string): Promise<EvidenceRow | null> {
@@ -151,7 +145,7 @@ export async function requestUpload(
       }),
     )
     .returning();
-  const row = must(inserted[0], 'evidence');
+  const row = expectRow(inserted[0], 'evidence');
 
   const upload = await presignUpload({
     organisationId: scope.organisationId,
@@ -204,7 +198,7 @@ export async function completeUpload(evidenceId: string): Promise<EvidenceRow> {
       .set({ status: 'quarantined' })
       .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
       .returning();
-    const saved = must(updated[0], 'evidence');
+    const saved = expectRow(updated[0], 'evidence');
 
     const after: { data: Record<string, unknown>; allow: string[] } = {
       data: { applicationId: saved.applicationId },
@@ -290,7 +284,7 @@ export async function requestFormFileUpload(input: {
       }),
     )
     .returning();
-  const row = must(inserted[0], 'evidence');
+  const row = expectRow(inserted[0], 'evidence');
 
   const upload = await presignUpload({
     organisationId: scope.organisationId,
@@ -539,7 +533,7 @@ export async function classifyEvidence(
       })
       .where(scope.where(evidence.organisationId, eq(evidence.id, evidenceId)))
       .returning();
-    const row = must(updated[0], 'evidence');
+    const row = expectRow(updated[0], 'evidence');
 
     await recordAudit(
       {
@@ -589,7 +583,7 @@ export async function requestFurtherEvidence(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'evidence request');
+    const row = expectRow(inserted[0], 'evidence request');
 
     await recordAudit(
       {

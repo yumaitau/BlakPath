@@ -42,11 +42,11 @@ import { acceptTenantJob } from './tenant-job';
  * payload and checks the organisation is active before a processor opens a
  * tenant scope. A job that fails either check is dropped and audited.
  *
- * Phase-1: these are thin, REAL stubs. They log structured operational context
- * and acknowledge the job so queues drain and the system is observable end to
- * end. Full implementations (ClamAV scan, certificate/export rendering, SMTP
- * delivery, audit verification, retention sweeps, webhooks) land in later
- * phases and will import domain services from `@/lib/*`.
+ * Each processor runs a real domain operation: evidence scan, invitation email,
+ * notification email, audit-chain verification, webhook delivery, export,
+ * retention sweep, calendar reminders, encryption backfill, tenant key health,
+ * or key re-wrap. A processor records or moves work. It never scores, ranks,
+ * predicts, or decides an application outcome.
  */
 
 /** A single job processor. Receives the BullMQ job and a scoped logger. */

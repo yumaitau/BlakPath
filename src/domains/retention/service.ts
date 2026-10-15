@@ -9,6 +9,7 @@ import {
   retentionPolicies,
 } from '@/db/schema';
 import { currentScope, type TenantScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
 import { toCsv } from '@/domains/reporting/csv';
 import {
@@ -66,11 +67,6 @@ export class RetentionTargetError extends Error {
     super('Legal hold target does not exist.');
     this.name = 'RetentionTargetError';
   }
-}
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) throw new Error(`Expected ${what} to be returned.`);
-  return row;
 }
 
 async function currentSignoff(
@@ -172,7 +168,7 @@ export async function createPolicy(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'retention policy');
+    const row = expectRow(inserted[0], 'retention policy');
 
     await recordAudit(
       {
@@ -355,7 +351,7 @@ export async function signDisposalAuthority(
         }),
       )
       .returning();
-    const signed = must(inserted[0], 'disposal authority sign-off');
+    const signed = expectRow(inserted[0], 'disposal authority sign-off');
 
     await recordAudit(
       {
@@ -468,7 +464,7 @@ export async function placeHold(rawInput: PlaceHoldInput): Promise<LegalHoldRow>
         }),
       )
       .returning();
-    const row = must(inserted[0], 'legal hold');
+    const row = expectRow(inserted[0], 'legal hold');
 
     await recordAudit(
       {
@@ -503,7 +499,7 @@ export async function releaseHold(id: string): Promise<LegalHoldRow> {
         ),
       )
       .returning();
-    const row = must(updated[0], 'legal hold');
+    const row = expectRow(updated[0], 'legal hold');
 
     await recordAudit(
       {
