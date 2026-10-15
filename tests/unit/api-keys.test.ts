@@ -52,6 +52,27 @@ describe('createApiKeySchema', () => {
     ).toBe(false);
   });
 
+  it('requires a declared purpose and destination for mcp scopes', () => {
+    expect(
+      createApiKeySchema.safeParse({ name: 'MCP', scopes: ['mcp:read'] }).success,
+    ).toBe(false);
+    const parsed = createApiKeySchema.safeParse({
+      name: 'MCP',
+      scopes: ['mcp:read'],
+      purpose: 'Draft neutral status replies',
+      destination: 'Council records assistant, ap-southeast-2',
+    });
+    expect(parsed.success).toBe(true);
+    expect(
+      createApiKeySchema.safeParse({
+        name: 'MCP',
+        scopes: ['mcp:read-pii'],
+        purpose: 'Named correspondence',
+        destination: '',
+      }).success,
+    ).toBe(false);
+  });
+
   it('defaults and caps expiry', () => {
     expect(
       createApiKeySchema.parse({ name: 'CI', scopes: ['application:read-any'] })

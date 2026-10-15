@@ -1,8 +1,13 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/client';
-import { memberships } from '@/db/schema/membership';
+import { membershipRoles, memberships, roles } from '@/db/schema/membership';
 import { organisations } from '@/db/schema/tenancy';
 import type { ServerSession } from '@/lib/auth/session';
+import {
+  isOrganisationOperational,
+  OPERATIONAL_ORGANISATION_STATUSES,
+  UNAVAILABLE_ORGANISATION_STATUSES,
+} from './organisation-status';
 
 /**
  * Pre-tenant reads for organisation selection.
@@ -25,8 +30,9 @@ export interface UserMembership {
 /**
  * List the organisations the given user has an ACTIVE membership of, ordered
  * by display name. `userId` must come from the verified session — never from
- * client input. Only active memberships are returned, so a suspended or revoked
- * membership never appears as a selectable option.
+ * client input. Only active memberships of an operational organisation are
+ * returned, so a suspended or revoked membership, and a suspended or closed
+ * organisation, never appear as a selectable option.
  */
 export async function listMembershipsForUser(userId: string): Promise<UserMembership[]> {
   const rows = await db
@@ -40,7 +46,13 @@ export async function listMembershipsForUser(userId: string): Promise<UserMember
     })
     .from(memberships)
     .innerJoin(organisations, eq(memberships.organisationId, organisations.id))
-    .where(and(eq(memberships.userId, userId), eq(memberships.status, 'active')))
+    .where(
+      and(
+        eq(memberships.userId, userId),
+        eq(memberships.status, 'active'),
+        inArray(organisations.status, [...OPERATIONAL_ORGANISATION_STATUSES]),
+      ),
+    )
     .orderBy(asc(organisations.legalName));
 
   return rows.map((row) => ({
@@ -49,6 +61,82 @@ export async function listMembershipsForUser(userId: string): Promise<UserMember
     slug: row.slug,
     status: row.status,
   }));
+}
+
+export type OrganisationAccess = 'operational' | 'unavailable' | 'none';
+
+/**
+ * Classify the caller's active membership of one organisation.
+ *
+ * `none` covers a missing or inactive membership and does not reveal whether
+ * the organisation exists. `unavailable` is only returned to someone who still
+ * has an active membership, so the staff shell can show a generic message.
+ */
+export async function organisationAccessForUser(
+  userId: string,
+  organisationId: string,
+): Promise<OrganisationAccess> {
+  const rows = await db
+    .select({ status: organisations.status })
+    .from(memberships)
+    .innerJoin(organisations, eq(memberships.organisationId, organisations.id))
+    .where(
+      and(
+        eq(memberships.userId, userId),
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.status, 'active'),
+      ),
+    )
+    .limit(1);
+  const status = rows[0]?.status;
+  if (!status) return 'none';
+  return isOrganisationOperational(status) ? 'operational' : 'unavailable';
+}
+
+/**
+ * True when the user has an active membership only of a suspended or closed
+ * organisation. Used to choose the unavailable message over "no organisations".
+ */
+export async function hasUnavailableOrganisationMembership(
+  userId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .innerJoin(organisations, eq(memberships.organisationId, organisations.id))
+    .where(
+      and(
+        eq(memberships.userId, userId),
+        eq(memberships.status, 'active'),
+        inArray(organisations.status, [...UNAVAILABLE_ORGANISATION_STATUSES]),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Role slugs on the caller's active membership. `userId` comes from the
+ * session. Used to choose the applicant portal or the staff shell before any
+ * staff navigation is rendered.
+ */
+export async function listRoleSlugsForUserOrganisation(
+  userId: string,
+  organisationId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ slug: roles.slug })
+    .from(memberships)
+    .innerJoin(membershipRoles, eq(membershipRoles.membershipId, memberships.id))
+    .innerJoin(roles, eq(roles.id, membershipRoles.roleId))
+    .where(
+      and(
+        eq(memberships.userId, userId),
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.status, 'active'),
+      ),
+    );
+  return rows.map((row) => row.slug);
 }
 
 /**

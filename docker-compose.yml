@@ -72,8 +72,14 @@ services:
           memory: 256M
 
   # --- Object storage (S3-compatible) --------------------------------------
+  # Docker Hub removed the MinIO repositories, which failed the Browser CI job
+  # on pull. Chainguard publishes a maintained MinIO build; pin the multi-arch
+  # manifest digest (linux/amd64 + linux/arm64) and keep it identical in CI.
+  # The image includes `mc` (healthcheck) and a shell (minio-init). It runs as
+  # uid 65532. A new volume is writable; an existing root-owned `minio_data`
+  # volume has to be chowned to 65532 or recreated.
   minio:
-    image: minio/minio:latest
+    image: chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56
     restart: unless-stopped
     command: ['server', '/data', '--console-address', ':9001']
     environment:
@@ -102,7 +108,8 @@ services:
   # freshly uploaded evidence lands until a malware scan passes — evidence is
   # NEVER served from quarantine.
   minio-init:
-    image: minio/mc:latest
+    # Same digest as `minio`. The old client image had no remaining registry.
+    image: chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56
     depends_on:
       minio:
         condition: service_healthy
@@ -111,6 +118,7 @@ services:
       MC_HOST_local: http://${S3_ACCESS_KEY_ID:-blakpath}:${S3_SECRET_ACCESS_KEY:-blakpath-dev-secret}@minio:9000
       S3_BUCKET_EVIDENCE: ${S3_BUCKET_EVIDENCE:-blakpath-evidence}
       S3_BUCKET_QUARANTINE: ${S3_BUCKET_QUARANTINE:-blakpath-quarantine}
+      S3_BUCKET_AUDIT_ANCHORS: ${S3_BUCKET_AUDIT_ANCHORS:-blakpath-audit-anchors}
     volumes:
       - ./docker/minio-init:/init:ro
     restart: 'no'
@@ -118,7 +126,7 @@ services:
 
   # --- Malware scanning -----------------------------------------------------
   clamav:
-    image: clamav/clamav:latest
+    image: clamav/clamav:1.5.4
     # The upstream image currently publishes amd64 only. Docker Desktop can
     # emulate it on Apple Silicon for this local-development stack.
     platform: linux/amd64
@@ -144,7 +152,7 @@ services:
 
   # --- Email (dev mailbox) --------------------------------------------------
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.31.5
     restart: unless-stopped
     ports:
       - '${BLAKPATH_SMTP_PORT:-1025}:1025' # SMTP
@@ -268,7 +276,7 @@ services:
   # --- Observability (optional) --------------------------------------------
   # Enable with: docker compose --profile observability up -d
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.162.0
     profiles: ['observability']
     restart: unless-stopped
     command: ['--config=/etc/otel/config.yaml']

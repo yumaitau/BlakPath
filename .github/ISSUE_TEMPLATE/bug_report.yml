@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in BlakPath behaves incorrectly
+title: 'fix: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include personal information, genealogy, evidence or secrets.
+        A suspected vulnerability belongs in private reporting. See SECURITY.md.
+        Stop here if this report is a vulnerability.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What the software did, without record contents or secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use fake data. Name the page or API route.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Before you submit
+      options:
+        - label: This is not a vulnerability report
+          required: true
+        - label: I removed personal information, evidence, genealogy and secrets
+          required: true
+        - label: I am not asking the software to determine Aboriginality
+          required: true

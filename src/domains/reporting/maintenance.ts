@@ -1,10 +1,10 @@
 import { and, eq, lt, lte, or } from 'drizzle-orm';
 import { exportRequests } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
-import { recordAudit } from '@/domains/audit/service';
+import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
 import { logger } from '@/lib/observability/logger';
 import { addJob, QueueName } from '@/lib/queues';
-import { EVIDENCE_BUCKET, purgeObjectVersions } from '@/lib/storage/s3';
+import { deleteAllObjectVersions, EVIDENCE_BUCKET } from '@/lib/storage/s3';
 import { EXPORT_STALE_MS, MAX_EXPORT_ATTEMPTS } from './generate';
 
 /**
@@ -41,18 +41,22 @@ function sysAudit(
   correlationId: string,
   action: 'export.expired' | 'export.failed',
   resourceId: string,
+  tx: AuditTransaction,
 ) {
-  return recordAudit({
-    action,
-    resourceType: 'export',
-    resourceId,
-    result: action === 'export.failed' ? 'failure' : 'success',
-    organisationId,
-    actorUserId: null,
-    actingRole: 'system',
-    sessionId: null,
-    correlationId,
-  });
+  return recordAudit(
+    {
+      action,
+      resourceType: 'export',
+      resourceId,
+      result: action === 'export.failed' ? 'failure' : 'success',
+      organisationId,
+      actorUserId: null,
+      actingRole: 'system',
+      sessionId: null,
+      correlationId,
+    },
+    tx,
+  );
 }
 
 export async function processExportMaintenance(
@@ -80,7 +84,7 @@ export async function processExportMaintenance(
   for (const row of due) {
     if (row.objectKey) {
       try {
-        await purgeObjectVersions({ bucket: EVIDENCE_BUCKET, key: row.objectKey });
+        await deleteAllObjectVersions({ bucket: EVIDENCE_BUCKET, key: row.objectKey });
       } catch (err) {
         logger.warn(
           { organisationId, exportRequestId: row.id, err },
@@ -89,14 +93,17 @@ export async function processExportMaintenance(
         continue;
       }
     }
-    const marked = await scope.db
-      .update(exportRequests)
-      .set({ status: 'expired', objectKey: null })
-      .where(and(inOrg(row.id), eq(exportRequests.status, 'ready')))
-      .returning({ id: exportRequests.id });
-    if (marked.length === 0) continue;
-    await sysAudit(organisationId, correlationId, 'export.expired', row.id);
-    result.expired += 1;
+    const marked = await scope.db.transaction(async (tx) => {
+      const rows = await tx
+        .update(exportRequests)
+        .set({ status: 'expired', objectKey: null })
+        .where(and(inOrg(row.id), eq(exportRequests.status, 'ready')))
+        .returning({ id: exportRequests.id });
+      if (rows.length === 0) return false;
+      await sysAudit(organisationId, correlationId, 'export.expired', row.id, tx);
+      return true;
+    });
+    if (marked) result.expired += 1;
   }
 
   // 2. Recover stranded exports.
@@ -128,29 +135,31 @@ export async function processExportMaintenance(
     .limit(BATCH);
   for (const row of stranded) {
     if (row.attempts >= MAX_EXPORT_ATTEMPTS) {
-      const failed = await scope.db
-        .update(exportRequests)
-        .set({
-          status: 'failed',
-          error: `export abandoned after ${row.attempts} interrupted attempts`,
-          completedAt: now,
-        })
-        .where(
-          and(
-            inOrg(row.id),
-            eq(exportRequests.status, row.status),
-            lt(exportRequests.startedAt, staleBefore),
-          ),
-        )
-        .returning({ id: exportRequests.id });
-      if (failed.length === 0) continue;
-      await sysAudit(organisationId, correlationId, 'export.failed', row.id);
-      result.abandoned += 1;
+      const failed = await scope.db.transaction(async (tx) => {
+        const rows = await tx
+          .update(exportRequests)
+          .set({
+            status: 'failed',
+            error: `export abandoned after ${row.attempts} interrupted attempts`,
+            completedAt: now,
+          })
+          .where(
+            and(
+              inOrg(row.id),
+              eq(exportRequests.status, row.status),
+              lt(exportRequests.startedAt, staleBefore),
+            ),
+          )
+          .returning({ id: exportRequests.id });
+        if (rows.length === 0) return false;
+        await sysAudit(organisationId, correlationId, 'export.failed', row.id, tx);
+        return true;
+      });
+      if (failed) result.abandoned += 1;
       continue;
     }
     // One recovery job per claim: the id is stable while the row stays stuck,
-    // so repeated sweeps do not pile up duplicates. BullMQ ids may not contain
-    // ':' — hyphens only.
+    // so repeated sweeps do not pile up duplicates.
     const since = (row.startedAt ?? row.createdAt).getTime();
     await addJob(
       QueueName.Export,

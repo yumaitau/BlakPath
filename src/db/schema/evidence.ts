@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { bigint, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { bigint, date, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -8,10 +8,11 @@ import {
   softDelete,
   timestamps,
 } from './_helpers';
-import { evidenceRequestStatus, evidenceStatus } from './enums';
+import { evidenceReceiptChannel, evidenceRequestStatus, evidenceStatus } from './enums';
 import { users } from './auth';
 import { organisations } from './tenancy';
 import { applications } from './applications';
+import { formInvitations } from './forms';
 
 /**
  * Evidence tables (Phase 3).
@@ -63,9 +64,13 @@ export const evidenceRequests = pgTable(
 );
 
 /**
- * A single uploaded file attached to an application. `status` drives the
- * fail-secure lifecycle: pending → quarantined → (clean | infected | rejected).
- * Only `clean` items expose an `evidenceKey` and may ever be downloaded.
+ * A single uploaded file. `status` drives the fail-secure lifecycle:
+ * pending → quarantined → (clean | infected | rejected). Only `clean` items
+ * expose an `evidenceKey` and may ever be downloaded.
+ *
+ * `applicationId` is set for case uploads. A public form file may be
+ * quarantined and scanned before staff link the response to a case, so the
+ * application is null until then and `formInvitationId` is the binding.
  */
 export const evidence = pgTable(
   'evidence',
@@ -74,12 +79,23 @@ export const evidence = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    applicationId: refId('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
+    applicationId: refId('application_id').references(() => applications.id, {
+      onDelete: 'cascade',
+    }),
+    /** Set when the bytes came from a public form file field. */
+    formInvitationId: refId('form_invitation_id').references(() => formInvitations.id, {
+      onDelete: 'set null',
+    }),
     uploadedByUserId: refId('uploaded_by_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
+    /**
+     * Set when staff record a file received for the applicant. Null when the
+     * applicant uploaded it themselves. Always stored with `receivedOn`.
+     */
+    receiptChannel: evidenceReceiptChannel('receipt_channel'),
+    /** Civil date the file was received. Null on an applicant's own upload. */
+    receivedOn: date('received_on', { mode: 'string' }),
     /** The upload that fulfils a specific staff request, when applicable. */
     fulfilsRequestId: refId('fulfils_request_id').references(() => evidenceRequests.id, {
       onDelete: 'set null',
@@ -108,12 +124,18 @@ export const evidence = pgTable(
       onDelete: 'set null',
     }),
     classifiedAt: timestamp('classified_at', { withTimezone: true }),
+    /** Set once retention has anonymised this item. A later sweep skips it. */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
     ...rowVersion,
     ...softDelete,
   },
   (table) => [
     index('evidence_org_application_idx').on(table.organisationId, table.applicationId),
+    index('evidence_org_form_invitation_idx').on(
+      table.organisationId,
+      table.formInvitationId,
+    ),
     index('evidence_org_status_idx').on(table.organisationId, table.status),
   ],
 );
@@ -142,6 +164,10 @@ export const evidenceRelations = relations(evidence, ({ one }) => ({
   application: one(applications, {
     fields: [evidence.applicationId],
     references: [applications.id],
+  }),
+  formInvitation: one(formInvitations, {
+    fields: [evidence.formInvitationId],
+    references: [formInvitations.id],
   }),
   uploadedBy: one(users, {
     fields: [evidence.uploadedByUserId],

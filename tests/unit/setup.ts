@@ -8,4 +8,4 @@
 process.env.DATABASE_URL ??= 'postgres://test:test@localhost:5432/test';
 process.env.REDIS_URL ??= 'redis://localhost:6379';
 process.env.BETTER_AUTH_SECRET ??= 'test-secret-value-at-least-32-characters-long';
-process.env.ENCRYPTION_MASTER_KEY ??= 'dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtMTIzNDU=';
+process.env.ENCRYPTION_MASTER_KEY ??= 'Ymxha3BhdGgtY2ktdGVzdC1tYXN0ZXIta2V5LTMyYiE=';
