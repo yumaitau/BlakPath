@@ -56,6 +56,7 @@ import {
 } from '@/domains/family-links';
 import { listResponsesForApplication } from '@/domains/forms';
 import { listReviewComments, listReviewsForApplication } from '@/domains/reviews';
+import { readEvidenceRequirements } from '@/domains/organisation-settings';
 import { listActiveStaff, listClients } from '@/domains/teams';
 import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
@@ -126,6 +127,7 @@ export default async function ApplicationDetailPage({
         formResponses,
         familyLinks,
         deceasedWarning,
+        evidenceRequirements,
         staff,
         clients,
       ] = await Promise.all([
@@ -138,6 +140,7 @@ export default async function ApplicationDetailPage({
         listResponsesForApplication(id),
         readFamilyLinks ? listFamilyLinks(id) : Promise.resolve(null),
         readFamilyLinks ? loadDeceasedNameWarning() : Promise.resolve(''),
+        readEvidenceRequirements(),
         mayAssign ? listActiveStaff() : Promise.resolve([]),
         mayLinkClient ? listClients() : Promise.resolve([]),
       ]);
@@ -205,6 +208,7 @@ export default async function ApplicationDetailPage({
             dueAt: request.dueAt?.toISOString() ?? null,
             createdAt: request.createdAt.toISOString(),
           })),
+          evidenceRequirements,
           history: record.statusHistory.map((entry) => ({
             id: entry.id,
             action: entry.action,

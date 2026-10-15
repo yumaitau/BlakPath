@@ -44,6 +44,10 @@ export const STEP_UP_ROUTES = {
   'POST /api/webhooks': STEP_UP_WINDOWS.privileged,
   'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver': STEP_UP_WINDOWS.privileged,
   'POST /api/sso/providers': STEP_UP_WINDOWS.privileged,
+  // A verified domain is what lets an SSO binding sign staff in.
+  'POST /api/organisation-domains': STEP_UP_WINDOWS.privileged,
+  'POST /api/organisation-domains/[id]/verify': STEP_UP_WINDOWS.privileged,
+  'DELETE /api/organisation-domains/[id]': STEP_UP_WINDOWS.privileged,
   'DELETE /api/retention/holds/[id]': STEP_UP_WINDOWS.destructive,
   'DELETE /api/retention/policies/[id]': STEP_UP_WINDOWS.destructive,
   'POST /api/retention/policies/[id]/activate': STEP_UP_WINDOWS.destructive,

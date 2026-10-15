@@ -30,6 +30,9 @@ export default function SecuritySettingsPage() {
           <Link href="/settings/people">Manage people and access</Link>
         </Button>
         <Button asChild variant="outline" size="sm">
+          <Link href="/settings/organisation">Organisation settings</Link>
+        </Button>
+        <Button asChild variant="outline" size="sm">
           <Link href="/settings/encryption-keys">Encryption keys</Link>
         </Button>
         <Button asChild variant="outline" size="sm">

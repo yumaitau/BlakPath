@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blakpath-config
+data:
+  APP_URL: https://staging.blakpath.yumait.au
+  BETTER_AUTH_URL: https://staging.blakpath.yumait.au
+  S3_BUCKET_EVIDENCE: __STAGING_S3_BUCKET_EVIDENCE__
+  S3_BUCKET_QUARANTINE: __STAGING_S3_BUCKET_QUARANTINE__
+  S3_BUCKET_AUDIT_ANCHORS: __STAGING_S3_BUCKET_AUDIT_ANCHORS__
+  # Bucket default CMK only. Per-object SSE-KMS uses the tenant key.
+  S3_KMS_KEY_ID: __STAGING_S3_KMS_KEY_ID__
+  SES_CONFIGURATION_SET: blakpath-staging
+  SMTP_FROM: BlakPath <no-reply@staging.blakpath.yumait.au>
+  # Staging bounce/complaint topic. Never the production topic.
+  EMAIL_SNS_TOPIC_ARN: arn:aws:sns:ap-southeast-2:__AWS_ACCOUNT_ID__:blakpath-staging-email-events

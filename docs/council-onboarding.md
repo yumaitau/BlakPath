@@ -8,8 +8,8 @@ BlakPath. Data residency stays `ap-southeast-2` throughout.
 `pnpm db:seed` loads the permission catalogue and system role templates only.
 It does not create a production organisation. Do not insert the organisation
 row by hand. Provision with the operator command (or the Kubernetes Job
-`infra/k8s/jobs/provision-organisation.yaml`). `pnpm admin:invite`
-(`infra/k8s/jobs/invite-admin.yaml`) still covers the very first organisation
+`infra/k8s/base/jobs/provision-organisation.yaml`). `pnpm admin:invite`
+(`infra/k8s/base/jobs/invite-admin.yaml`) still covers the very first organisation
 on an empty database, but refuses once any organisation exists.
 
 The command runs with the application database role (`DATABASE_URL`), never
@@ -40,8 +40,12 @@ passkey or authenticator before organisation tools open.
 
 Teams (Intake, Casework, Committee support) and groups are still created by
 the organisation after sign-in, via `/settings/teams` or `POST /api/teams` and
-`POST /api/groups`. Consent wording and evidence requirements are recorded in
-`organisation_settings`.
+`POST /api/groups`. An organisation administrator sets terminology, guidance,
+consent wording, evidence requirements, escalation contacts and retention
+defaults at `/settings/organisation` (`organisation_settings`). Consent wording
+is shown on public form links. Evidence requirements are shown in the case
+evidence section. Retention numbers recorded there do not themselves delete
+records.
 
 Checklist items are recorded by a person. The software does not mark them
 complete. An organisation administrator can record items at
@@ -89,8 +93,11 @@ link again with `resend-invite` and the same slug and operator email.
   `SSO_ENTRA_CLIENT_ID`, `SSO_ENTRA_CLIENT_SECRET` and `SSO_STATE_SECRET` in
   the Secrets Manager runtime secret; add binding `POST /api/sso/providers`
   with the tenant-specific issuer
-  `https://login.microsoftonline.com/<tenant-id>/v2.0`; verify the domain in
-  `organisation_domains`, then enable. In the Entra app registration, add
+  `https://login.microsoftonline.com/<tenant-id>/v2.0`; claim the council
+  domain at `/settings/organisation`, publish the TXT record shown there
+  (`_blakpath-verify.<domain>` = `blakpath-verify=<token>`) at the council's
+  DNS host and check DNS, then enable. Removing a domain disables SSO bindings
+  that used it. In the Entra app registration, add
   `amr` as an optional ID token claim, and require MFA with Conditional
   Access. BlakPath rejects the sign-in unless `amr` includes a second factor.
   First sign-in links the invited user by UPN on that verified domain, not by

@@ -11,11 +11,16 @@ function read(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
+/** The production view: the base object plus the production overlay patch. */
+function production(base: string, patch: string): string {
+  return `${read(`infra/k8s/base/${base}`)}\n---\n${read(`infra/k8s/overlays/production/${patch}`)}`;
+}
+
 const docs: BoundaryDocuments = {
-  externalSecret: read('infra/k8s/externalsecret.yaml'),
-  secretStore: read('infra/k8s/secretstore.yaml'),
-  serviceAccounts: read('infra/k8s/serviceaccounts.yaml'),
-  kustomization: read('infra/k8s/kustomization.yaml'),
+  externalSecret: production('externalsecret.yaml', 'externalsecret-patch.yaml'),
+  secretStore: read('infra/k8s/base/secretstore.yaml'),
+  serviceAccounts: production('serviceaccounts.yaml', 'serviceaccount-patch.yaml'),
+  kustomization: read('infra/k8s/base/kustomization.yaml'),
   boundaryTemplate: read('infra/aws/eks-boundary.example.yaml'),
   workloadRoles: read('infra/aws/workload-roles.example.yaml'),
   endpointConfig: read('infra/aws/eks-api-endpoint.example.yaml'),

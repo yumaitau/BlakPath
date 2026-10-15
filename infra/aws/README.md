@@ -40,7 +40,7 @@ with resources owned by the production environment.
 - `origin-edge.example.yaml` requests the origin ACM certificate, a regional
   WAFv2 web ACL (managed IP reputation, common, known-bad-inputs and SQLi rule
   groups) and the Authenticated Origin Pull trust store. Copy its outputs into
-  `infra/k8s/service-ingress.yaml`. The CA bundle is the zone certificate, not
+  `infra/k8s/base/service-ingress.yaml`. The CA bundle is the zone certificate, not
   the shared Cloudflare origin-pull CA, and must not include a private key.
 - `tenant-cmk/` is the per-tenant CMK an operator applies. It does not run
   itself. Client-account keys live in `infra/client-kms/`.

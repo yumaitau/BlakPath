@@ -641,12 +641,28 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
     body: { item: 'consent_wording', complete: true },
   }),
   route('POST', '/api/organisation-key/health-check', anyOf(['tenant:configure'])),
+  route('GET', '/api/organisation-domains', anyOf(['tenant:configure']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('POST', '/api/organisation-domains', anyOf(['tenant:configure']), {
+    body: { domain: 'matrix-probe.example.org' },
+  }),
+  route('DELETE', '/api/organisation-domains/[id]', anyOf(['tenant:configure'])),
+  route('POST', '/api/organisation-domains/[id]/verify', anyOf(['tenant:configure'])),
   route('GET', '/api/organisation-keys', anyOf(['tenant:configure']), {
     allowRole: 'organisation-admin',
     allowProbe: true,
   }),
   route('POST', '/api/organisation-keys', anyOf(['tenant:configure']), {
     body: { kmsKeyArn: KMS_KEY_ARN, custodyMode: 'client_owned' },
+  }),
+  route('GET', '/api/organisation-settings', anyOf(['tenant:configure']), {
+    allowRole: 'organisation-admin',
+    allowProbe: true,
+  }),
+  route('PATCH', '/api/organisation-settings', anyOf(['tenant:configure']), {
+    body: { field: 'terminology', value: null },
   }),
   route(
     'GET',

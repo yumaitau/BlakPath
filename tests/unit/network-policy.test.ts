@@ -21,7 +21,7 @@ function documents(yaml: string): Map<string, string> {
   return docs;
 }
 
-const policies = documents(read('infra/k8s/network-policy.yaml'));
+const policies = documents(read('infra/k8s/base/network-policy.yaml'));
 
 function policy(name: string): string {
   const doc = policies.get(name);
@@ -31,7 +31,7 @@ function policy(name: string): string {
 
 describe('blakpath network policy', () => {
   it('is on the kustomize path and the controller manifest', () => {
-    expect(read('infra/k8s/kustomization.yaml')).toContain('network-policy.yaml');
+    expect(read('infra/k8s/base/kustomization.yaml')).toContain('network-policy.yaml');
     expect(read('.github/workflows/ci.yml')).toContain(
       'kubectl kustomize infra/k8s/cluster',
     );
@@ -61,7 +61,7 @@ describe('blakpath network policy', () => {
     expect(ingress).not.toContain('namespaceSelector:');
     expect(ingress).not.toContain('podSelector:\n            matchLabels:');
 
-    const service = read('infra/k8s/service-ingress.yaml');
+    const service = read('infra/k8s/base/service-ingress.yaml');
     expect(service).toContain('port: 3000');
     expect(service).toContain('number: 3000');
     expect(service).not.toMatch(/port: 80\b/);
@@ -70,7 +70,7 @@ describe('blakpath network policy', () => {
   it('lets only web and worker reach ClamAV', () => {
     // Ingress lives with the workload in clamav.yaml.
     const ingress =
-      read('infra/k8s/clamav.yaml')
+      read('infra/k8s/base/clamav.yaml')
         .split(/^---$/m)
         .find((doc) => doc.includes('kind: NetworkPolicy')) ?? '';
     const ingressRules = ingress.slice(0, ingress.indexOf('  egress:'));
@@ -115,7 +115,7 @@ describe('blakpath network policy', () => {
     expect(identity).not.toContain('- blakpath-job\n');
     expect(identity).not.toContain('169.254.169.254');
 
-    expect(read('infra/k8s/network-policy.yaml')).not.toContain('169.254.169.254');
+    expect(read('infra/k8s/base/network-policy.yaml')).not.toContain('169.254.169.254');
   });
 
   it('pins web egress to named dependencies and not the open internet', () => {
@@ -171,10 +171,10 @@ describe('blakpath network policy', () => {
 
     // The scanner talks only to the in-namespace mirror (clamav.yaml); the
     // mirror is the one ClamAV pod with public 80/443, never private ranges.
-    const scanner = read('infra/k8s/clamav.yaml');
+    const scanner = read('infra/k8s/base/clamav.yaml');
     expect(scanner).not.toContain('0.0.0.0/0');
     expect(scanner).toContain('app.kubernetes.io/name: blakpath-clamav-mirror');
-    const mirror = read('infra/k8s/clamav-mirror.yaml');
+    const mirror = read('infra/k8s/base/clamav-mirror.yaml');
     for (const excluded of [
       '10.0.0.0/8',
       '172.16.0.0/12',
@@ -194,7 +194,7 @@ describe('blakpath network policy', () => {
     const admin = policy('blakpath-admin-job-egress');
     expect(admin).toContain('app.kubernetes.io/name: blakpath-admin-job');
     // provision-organisation shares the admin-job label and its egress.
-    expect(read('infra/k8s/jobs/provision-organisation.yaml')).toContain(
+    expect(read('infra/k8s/base/jobs/provision-organisation.yaml')).toContain(
       'app.kubernetes.io/name: blakpath-admin-job',
     );
     expect(admin).toContain('email.ap-southeast-2.amazonaws.com');
@@ -204,16 +204,16 @@ describe('blakpath network policy', () => {
   });
 
   it('selects every workload in infra/k8s with at least one allow policy', () => {
-    // Every manifest under infra/k8s, including the jobs/ and release-check/
+    // Every manifest under infra/k8s, including base/jobs/ and base/release-check/
     // directories that are applied outside the main kustomization.
     const manifests = readdirSync(resolve(root, 'infra/k8s'), { recursive: true })
       .map(String)
       .filter((file) => file.endsWith('.yaml'));
     // Pod selectors of every allow policy other than default-deny and DNS.
     const selectors = [
-      read('infra/k8s/network-policy.yaml'),
-      read('infra/k8s/clamav.yaml'),
-      read('infra/k8s/clamav-mirror.yaml'),
+      read('infra/k8s/base/network-policy.yaml'),
+      read('infra/k8s/base/clamav.yaml'),
+      read('infra/k8s/base/clamav-mirror.yaml'),
     ]
       .join('\n---\n')
       .split(/^---$/m)
@@ -245,14 +245,15 @@ describe('blakpath network policy', () => {
     }
     expect(seen).toEqual(
       expect.arrayContaining([
-        'web-deployment.yaml',
-        'worker-deployment.yaml',
-        'clamav.yaml',
-        'clamav-mirror.yaml',
-        'jobs/migrate.yaml',
-        'jobs/seed.yaml',
-        'jobs/invite-admin.yaml',
-        'release-check/job.yaml',
+        'base/web-deployment.yaml',
+        'base/worker-deployment.yaml',
+        'base/clamav.yaml',
+        'base/clamav-mirror.yaml',
+        'base/jobs/migrate.yaml',
+        'base/jobs/seed.yaml',
+        'base/jobs/invite-admin.yaml',
+        'base/jobs/provision-organisation.yaml',
+        'base/release-check/job.yaml',
       ]),
     );
   });

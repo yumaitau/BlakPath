@@ -3,12 +3,57 @@
 Region: `ap-southeast-2` for everything (cluster, RDS, ElastiCache, S3,
 SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
 
+## Layout
+
+Manifests live in `infra/k8s`.
+
+- `base` is environment-neutral. It has no account id, no bucket name and no
+  key ARN. Do not apply it on its own.
+- `overlays/staging` renders namespace `blakpath-staging`, host
+  `staging.blakpath.yumait.au`, Secrets Manager paths
+  `/blakpath/staging/runtime` and `/blakpath/staging/migrator`, SES
+  configuration set `blakpath-staging` and External Secrets role
+  `blakpath-staging-external-secrets`.
+- `overlays/production` renders namespace `blakpath`, host
+  `blakpath.yumait.au`, Secrets Manager paths `/blakpath/production/runtime`
+  and `/blakpath/production/migrator`, SES configuration set
+  `blakpath-production` and External Secrets role `blakpath-external-secrets`.
+- `overlays/<environment>/release-check` is the pre-deploy gate.
+  `overlays/<environment>/jobs` renders the catalogue seed Job.
+  `base/jobs/migrate.yaml` is rendered per release by `scripts/eks-deploy.sh`.
+  None of these are part of the main overlay.
+- `cluster` is cluster-scoped (network policy controller) and has no
+  environment.
+
+The ECR registry, image tag, account id, buckets and bucket default KMS key
+are tokens. They are filled at deploy time from private CD config and are
+never committed:
+
+| Token                                                       | Deploy variable           |
+| ----------------------------------------------------------- | ------------------------- |
+| `__ECR_REGISTRY__`, `__IMAGE_TAG__`                         | `IMAGE`, `WORKER_IMAGE`   |
+| `__AWS_ACCOUNT_ID__`                                        | `AWS_ACCOUNT_ID`          |
+| `__PRODUCTION_S3_BUCKET_EVIDENCE__`, `__STAGING_…`          | `S3_BUCKET_EVIDENCE`      |
+| `__PRODUCTION_S3_BUCKET_QUARANTINE__`, `__STAGING_…`        | `S3_BUCKET_QUARANTINE`    |
+| `__PRODUCTION_S3_BUCKET_AUDIT_ANCHORS__`, `__STAGING_…`     | `S3_BUCKET_AUDIT_ANCHORS` |
+| `__PRODUCTION_S3_KMS_KEY_ID__`, `__STAGING_S3_KMS_KEY_ID__` | `S3_KMS_KEY_ID`           |
+
+The staging tokens are `__STAGING_S3_BUCKET_EVIDENCE__`,
+`__STAGING_S3_BUCKET_QUARANTINE__`, `__STAGING_S3_BUCKET_AUDIT_ANCHORS__` and
+`__STAGING_S3_KMS_KEY_ID__`. `scripts/eks-deploy.sh` pins the images to the
+release digests, fills the tokens for the chosen `ENVIRONMENT`, and refuses
+a missing value or any token left over. The Deploy workflow reads the values
+from variables on the GitHub `production` environment.
+`node scripts/check-k8s-overlays.mjs --source` rejects a committed account
+id, key id, or ARN with a real account field.
+
 ## Deploy
 
 1. Build web + worker images from the same commit, push to ECR
    ap-southeast-2, and record both digests. The migrate Job uses the **app**
    image digest, not a separate tag and not the worker image.
-2. Create Secrets Manager JSON at `/blakpath/production/runtime` with
+2. Create Secrets Manager JSON at `/blakpath/<environment>/runtime`
+   (`/blakpath/production/runtime` or `/blakpath/staging/runtime`) with
    `DATABASE_URL` (role `blakpath_app`), `REDIS_URL`, `BETTER_AUTH_SECRET`,
    `EMAIL_WEBHOOK_SECRET`, `ORIGIN_VERIFY_SECRET`,
    `AUDIT_ANCHOR_SIGNING_KEY_ID`. `EMAIL_SNS_TOPIC_ARN` is not a secret; it
@@ -18,7 +63,7 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    (see [Email](#email)). `ENCRYPTION_MASTER_KEY` is optional and
    only reads version-1 ciphertext; nothing writes it. Drop it once the
    encryption backfill has completed for every organisation. Create a separate secret at
-   `/blakpath/production/migrator` with only `DATABASE_MIGRATION_URL` (role
+   `/blakpath/<environment>/migrator` with only `DATABASE_MIGRATION_URL` (role
    `blakpath_migrator`). Do not put the migrator URL in the runtime secret.
    Apply `infra/postgres/audit-roles.sql` once as the RDS master before the
    first migrate (see [Database roles](#database-roles)).
@@ -35,21 +80,27 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    CMK. It creates roles `blakpath-web` and `blakpath-worker` and associations
    for service accounts `blakpath-web` and `blakpath-worker` only. ClamAV and
    the migrate/seed jobs have no AWS role and mount no API token.
-5. Install External Secrets Operator + ClusterSecretStore `blakpath` (IRSA).
-6. Roll out with the Deploy workflow or `scripts/eks-deploy.sh` after
-   replacing `ACCOUNT_ID`, host, role ARNs, certificate ARN, trust store ARN
-   and WAF ACL ARN. Pass `IMAGE` and `WORKER_IMAGE` as `@sha256` digests and
-   `RELEASE_ID` as the git sha. The script applies namespace, config and
-   ExternalSecrets, then runs three steps in order, each only after the
-   previous one succeeds:
+5. Install External Secrets Operator and a ClusterSecretStore named
+   `aws-secretsmanager` (the migrator ExternalSecret uses it). The runtime
+   secret syncs through the namespaced SecretStore `blakpath-secrets` and
+   its own IRSA role (see [Secrets and keys](#secrets-and-keys)).
+6. Roll out with the Deploy workflow or `scripts/eks-deploy.sh`. Set
+   `ENVIRONMENT` (`production`, the default, or `staging`) and the deploy
+   variables in [Layout](#layout). Pass `IMAGE` and `WORKER_IMAGE` as
+   `@sha256` digests and `RELEASE_ID` as the git sha. Before the first
+   apply, replace the `ACCOUNT_ID`, `CERT_ID`, `TRUST_STORE_ID` and
+   `WEB_ACL_ID` placeholders in the ingress annotations (see
+   [Edge and origin](#edge-and-origin)). The script applies namespace,
+   service accounts, config and ExternalSecrets, then runs three steps in
+   order, each only after the previous one succeeds:
    1. the release-check Job (`node release-check.cjs`) in the candidate web
       and worker images;
    2. the per-release migrate Job (`blakpath-migrate-<git sha>`,
       `ttlSecondsAfterFinished` 86400) from the app digest;
    3. the web and worker Deployments at those digests.
       A failed gate or migration does not roll the workloads. `DRY_RUN=1`
-      renders without applying. `kubectl apply -k infra/k8s` alone skips the
-      gate and the migration. Complete the edge section below first.
+      renders without applying. Applying `infra/k8s/overlays/<environment>`
+      alone skips the gate and the migration. Complete the edge section below first.
       Rolling the app before the origin-verify header is live makes production
       requests return 403. The namespace enforces Pod Security `restricted`;
       every pod runs non-root with a read-only root filesystem. Enable the
@@ -65,8 +116,10 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
    `COA_SIGNING_LOCAL_KEY_PEM`, and requires the SES sender config. SDK uses
    the EKS Pod Identity role. Do not put `PILOT_BOOTSTRAP_TOKEN` in the
    runtime secret.
-9. After the first release, apply the seed job, then
-   `infra/k8s/jobs/invite-admin.yaml` with the first administrator's email.
+9. After the first release, apply the seed job from
+   `infra/k8s/overlays/<environment>/jobs`, then
+   `infra/k8s/base/jobs/invite-admin.yaml` with the first administrator's
+   email (see [Hand-applied jobs](#hand-applied-jobs)).
    The job emails an organisation-administrator invitation and does not create
    a password. That person enrols a passkey or authenticator before the
    organisation tools open.
@@ -75,9 +128,61 @@ SES, Secrets Manager, ECR, CloudWatch). No cross-region data movement.
     refused; read that report from inside the VPC. From a pod in another
     namespace, confirm it cannot open BlakPath ports.
 
+## Hand-applied jobs
+
+The seed Job renders from the jobs overlay. Fill the image tokens with the
+worker image you are releasing:
+
+```sh
+kubectl kustomize infra/k8s/overlays/production/jobs \
+  | sed \
+    -e "s|__ECR_REGISTRY__|${ECR_REGISTRY}|g" \
+    -e "s|__IMAGE_TAG__|${IMAGE_TAG}|g" \
+  | kubectl apply -f -
+```
+
+`ECR_REGISTRY` is `<account-id>.dkr.ecr.ap-southeast-2.amazonaws.com`. Use
+`infra/k8s/overlays/staging/jobs` for staging. Re-applying a finished Job
+fails until the old Job is deleted, which is why Jobs stay out of the main
+overlay.
+
+`infra/k8s/base/jobs/invite-admin.yaml` and
+`infra/k8s/base/jobs/provision-organisation.yaml` take names and email
+addresses, so they are filled in by hand and never committed filled. In a
+copy outside the repo, replace every `REPLACE_*` value,
+`blakpath/worker:unset` with the worker image, and, for staging,
+`namespace: blakpath` with `namespace: blakpath-staging`. Then
+`kubectl apply -f` the copy.
+
+## Staging
+
+Staging has its own namespace, secret folder, host, buckets, bucket key, SES
+configuration set, SNS topic and External Secrets role. A staging render
+names no production secret path, host, role, topic or configuration set.
+Evidence journeys that need object storage and cannot run on local MinIO
+are covered here (`docs/e2e-journeys.md`). Council onboarding runs
+`tests/e2e/team-isolation.spec.ts` against this environment
+(`docs/council-onboarding.md`).
+
+Before the first apply, create these for staging. Do not point staging at
+production resources.
+
+- Secrets Manager `/blakpath/staging/runtime` and `/blakpath/staging/migrator`.
+- IRSA role `blakpath-staging-external-secrets` for
+  `system:serviceaccount:blakpath-staging:blakpath-external-secrets`, reading
+  only `/blakpath/staging/*`.
+- Evidence, quarantine and audit-anchor buckets, and the staging bucket key.
+- SES configuration set `blakpath-staging` and SNS topic
+  `blakpath-staging-email-events`.
+- DNS name `staging.blakpath.yumait.au`, with its own certificate, trust
+  store and WAF ACL for the ingress annotations.
+- Pod Identity associations for `blakpath-web` and `blakpath-worker` in
+  namespace `blakpath-staging`. `infra/aws/workload-roles.example.yaml` and
+  `infra/aws/eks-boundary.example.yaml` describe production only.
+
 ## Network policy
 
-The namespace is default-deny (`infra/k8s/network-policy.yaml`, plus the
+The namespace is default-deny (`infra/k8s/base/network-policy.yaml`, plus the
 ClamAV policies in `clamav.yaml` and `clamav-mirror.yaml`). Nothing is
 enforced until the controller is on. This cluster is shared, so do not set
 the NodeClass `networkPolicy` field to `DefaultDeny` — that drops every pod
@@ -101,12 +206,13 @@ optional.
 3. Narrow the worker and job RFC1918 blocks to the RDS, ElastiCache and VPC
    endpoint subnet CIDRs. The checked-in ranges are wide enough for a first
    apply in `ap-southeast-2` and are not the final boundary.
-4. Apply: `kubectl kustomize infra/k8s | kubectl apply -f -`
-   and `kubectl kustomize infra/k8s/cluster` only as a merge, per step 1.
+4. Apply through `scripts/eks-deploy.sh` (it renders
+   `infra/k8s/overlays/<environment>`), and `kubectl kustomize infra/k8s/cluster`
+   only as a merge, per step 1.
    The one-shot jobs carry their own pod labels (`blakpath-migrate` for the
    per-release migrate Job, `blakpath-job` for seed, `blakpath-admin-job` for
    invite-admin, `blakpath-release-check` for the `scripts/eks-deploy.sh`
-   gate). The policies ship in `infra/k8s`, so on a first deploy they apply
+   gate). The policies ship in `infra/k8s/base`, so on a first deploy they apply
    after the gate and migration; from the second release on they cover both.
 
 Allows, and nothing else:
@@ -146,9 +252,9 @@ Check after apply:
 Add the OTLP collector hostname to `blakpath-web-egress` before tracing is
 required. Export failure does not fail readiness.
 
-Image tags in `infra/k8s/kustomization.yaml` are local defaults. A release
-replaces them with digests. Do not `kubectl apply` `infra/k8s/jobs/migrate.yaml`
-by hand.
+Image references in `infra/k8s/overlays/<environment>` are
+`__ECR_REGISTRY__` / `__IMAGE_TAG__` tokens. A release replaces them with
+digests. Do not `kubectl apply` `infra/k8s/base/jobs/migrate.yaml` by hand.
 
 ## Rollback
 
@@ -185,7 +291,7 @@ something this repository can apply by itself.
 ## Edge and origin
 
 Do this before the deployment above accepts production traffic. The listener
-manifest is `infra/k8s/service-ingress.yaml`. The example stack is
+manifest is `infra/k8s/base/service-ingress.yaml`. The example stack is
 `infra/aws/origin-edge.example.yaml`.
 
 1. Create a private CA and a client certificate signed by it. Keep the private
@@ -213,12 +319,14 @@ manifest is `infra/k8s/service-ingress.yaml`. The example stack is
 
 ## Secrets and keys
 
-- Dedicated folder: every BlakPath secret lives under
-  `/blakpath/production/` in Secrets Manager. The app reads one synced
-  `blakpath-runtime` Secret. The store is namespace-local
-  (`infra/k8s/secretstore.yaml`). Its role
+- Dedicated folder: every BlakPath production secret lives under
+  `/blakpath/production/` in Secrets Manager (staging: `/blakpath/staging/`).
+  The app reads one synced `blakpath-runtime` Secret. The store is
+  namespace-local (`infra/k8s/base/secretstore.yaml`). Its role
   `blakpath-external-secrets` can read that folder only, and only when the
   IRSA subject is `system:serviceaccount:blakpath:blakpath-external-secrets`.
+  The production overlay sets that role ARN on the service account, with
+  `__AWS_ACCOUNT_ID__` for the account.
 - The shared External Secrets role is denied `GetSecretValue` on
   `secret:/blakpath/production/*` and `kms:Decrypt` on
   `alias/blakpath-app-secrets`. Do not point BlakPath at the cluster-wide
@@ -418,7 +526,7 @@ Verify before accepting records (staging first, then production):
 The application role must not own the tables. As the RDS master, run
 `infra/postgres/audit-roles.sql` once: create `blakpath_migrator` and
 `blakpath_app`, then reassign existing objects to the migrator. Store their
-connection URLs in the two secrets above. `infra/k8s/jobs/migrate.yaml` reads
+connection URLs in the two secrets above. `infra/k8s/base/jobs/migrate.yaml` reads
 `DATABASE_MIGRATION_URL` from `blakpath-migrator` and refuses to run in
 production when that role matches `DATABASE_URL`. After migrate, the app role
 has `SELECT` and `INSERT` only on `audit_events` and
@@ -479,7 +587,8 @@ verification can check a name the verifier types; it never displays that name.
 Version 1 seals continue to verify.
 
 1. Create the key: RSA_2048 (or ECC_NIST_P256), usage SIGN_VERIFY, alias
-   `alias/blakpath-coa-signing`, ap-southeast-2.
+   `alias/blakpath-coa-signing`, ap-southeast-2. Staging uses its own key,
+   alias `alias/blakpath-staging-coa-signing`.
 2. Grant only the web role `kms:Sign` and `kms:GetPublicKey` on that key
    (`CoaSigningKeyArn` in `infra/aws/workload-roles.example.yaml`). The worker
    role denies `kms:Sign` on every key except the audit anchor key. Public
@@ -519,8 +628,8 @@ refuses in production.
 
 ## Restore drill (EKS variant)
 
-1. Snapshot RDS + S3 point-in-time into isolated namespace with separate
-   secret copy. Never restore into live namespace.
+1. Snapshot RDS + S3 point-in-time into an isolated namespace with a
+   separate secret copy. Never restore into `blakpath` or `blakpath-staging`.
 2. Run migrations, sign in as seeded admin, confirm records present.
    Re-establish the client CMK grant before expecting tenant plaintext. A
    restored backup does not recreate a deleted key.
@@ -548,9 +657,9 @@ changing the shared cluster; the target is the dedicated cluster in
 
 ## ClamAV
 
-`infra/k8s/clamav.yaml` runs two non-root scanner pods. Each has a signature
+`infra/k8s/base/clamav.yaml` runs two non-root scanner pods. Each has a signature
 volume and a readiness PING, so the Service stays empty until clamd answers and
-a node drain keeps one pod Ready. `infra/k8s/clamav-mirror.yaml` is the only
+a node drain keeps one pod Ready. `infra/k8s/base/clamav-mirror.yaml` is the only
 pod allowed to download signatures from the public mirrors.
 
 The `blakpath-clamav` ServiceAccount must not get an IRSA annotation or a Pod

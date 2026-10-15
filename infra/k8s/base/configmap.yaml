@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blakpath-config
+  namespace: blakpath
+data:
+  # Overlays set APP_URL, BETTER_AUTH_URL, the buckets, the bucket default
+  # CMK, the SES configuration set, SMTP_FROM and EMAIL_SNS_TOPIC_ARN.
+  APP_REGION: ap-southeast-2
+  HOSTNAME: 0.0.0.0
+  PORT: '3000'
+  NODE_ENV: production
+  NEXT_TELEMETRY_DISABLED: '1'
+  # Web pool. The worker deployment overrides BLAKPATH_PROCESS and
+  # DATABASE_WORKER_POOL_MAX. Budget: docs/eks-runbook.md.
+  DATABASE_POOL_MAX: '10'
+  LOG_LEVEL: info
+  S3_REGION: ap-southeast-2
+  AUDIT_ANCHOR_OBJECT_LOCK: 'true'
+  # Platform CMK for non-tenant envelope encryption (PLATFORM_KMS_KEY_ARN).
+  # Not a secret. Set it in the overlay before production; release:check
+  # rejects a missing or local key.
+  S3_FORCE_PATH_STYLE: 'false'
+  # The one production sender: SES v2 API in ap-southeast-2 under the
+  # workload role (no SMTP, no static mail credentials). The configuration
+  # set publishes bounce/complaint events via SNS to /api/email/events.
+  # See docs/adr/0090-production-email-sender.md and infra/aws/ses-sending.example.yaml.
+  EMAIL_TRANSPORT: ses
+  # Sender quota (messages/second); worker paces Email + Notification queues
+  # beneath it with headroom for synchronous auth mail. Match the live quota.
+  EMAIL_SEND_RATE_PER_SECOND: '10'
+  CLAMAV_HOST: blakpath-clamav
+  CLAMAV_PORT: '3310'
+  AI_FEATURES_ENABLED: 'false'
+  MCP_RATE_LIMIT_PER_MINUTE: '60'
+  # OPERATOR_ONCALL_EMAIL (on-call mailbox for tenant key health changes) is
+  # not a secret. Overlays may set it.
+  OTEL_SERVICE_NAME: blakpath
+  # OTEL_EXPORTER_OTLP_ENDPOINT is optional. Leave it unset to keep tracing
+  # off. When set, the release gate requires https on a non-local host.
