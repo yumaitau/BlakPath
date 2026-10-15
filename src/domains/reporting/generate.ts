@@ -1,8 +1,16 @@
 import { and, desc, eq, gte, isNull, lte, type AnyColumn, type SQL } from 'drizzle-orm';
-import { applications, certificates, decisions, exportRequests } from '@/db/schema';
+import {
+  applications,
+  certificates,
+  decisions,
+  destructionRegister,
+  exportRequests,
+} from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import { destructionRegisterRows } from '@/domains/retention/register';
 import { logger } from '@/lib/observability/logger';
+import { openApplicationRows } from '@/lib/encryption/tenant-fields';
 import { EVIDENCE_BUCKET, objectKey, putObjectBytes } from '@/lib/storage/s3';
 import { toCsv, type CsvCell } from './csv';
 import { REPORT_COLUMNS, isReportType, type ReportType } from './reports';
@@ -68,9 +76,10 @@ async function buildReport(
         ),
       )
       .orderBy(desc(applications.createdAt));
+    const opened = await openApplicationRows(scope.organisationId, items);
     return {
       headers,
-      rows: items.map((a) => [
+      rows: opened.map((a) => [
         a.reference,
         a.applicantName,
         a.status,
@@ -106,20 +115,37 @@ async function buildReport(
     };
   }
 
+  if (type === 'certificates') {
+    const items = await scope.db
+      .select()
+      .from(certificates)
+      .where(
+        whereLive(
+          eq(certificates.organisationId, scope.organisationId),
+          isNull(certificates.deletedAt),
+          ...ranged(certificates.createdAt, filters),
+        ),
+      )
+      .orderBy(desc(certificates.createdAt));
+    return {
+      headers,
+      rows: items.map((c) => [c.reference, c.status, c.signedAt, c.revokedAt]),
+    };
+  }
+
   const items = await scope.db
     .select()
-    .from(certificates)
+    .from(destructionRegister)
     .where(
       whereLive(
-        eq(certificates.organisationId, scope.organisationId),
-        isNull(certificates.deletedAt),
-        ...ranged(certificates.createdAt, filters),
+        eq(destructionRegister.organisationId, scope.organisationId),
+        ...ranged(destructionRegister.destroyedAt, filters),
       ),
     )
-    .orderBy(desc(certificates.createdAt));
+    .orderBy(desc(destructionRegister.destroyedAt));
   return {
     headers,
-    rows: items.map((c) => [c.reference, c.status, c.signedAt, c.revokedAt]),
+    rows: destructionRegisterRows(items),
   };
 }
 
@@ -166,52 +192,77 @@ export async function processExport(input: ProcessExportInput): Promise<void> {
       key,
       body: Buffer.from(csv, 'utf8'),
       contentType: 'text/csv; charset=utf-8',
+      organisationId,
     });
 
-    await settle({
-      status: 'ready',
-      objectKey: key,
-      rowCount: report.rows.length,
-      expiresAt: new Date(Date.now() + EXPORT_TTL_MS),
-      completedAt: new Date(),
-    });
-    await recordAudit({
-      action: 'export.generated',
-      resourceType: 'export',
-      resourceId: exportRequestId,
-      result: 'success',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
-      correlationId,
-      after: {
-        data: {
-          type: request.type,
-          rows: report.rows.length,
-          status: filters.status ?? null,
-          from: filters.from ?? null,
-          to: filters.to ?? null,
+    const whereRequest = and(
+      eq(exportRequests.organisationId, organisationId),
+      eq(exportRequests.id, exportRequestId),
+    );
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(exportRequests)
+        .set({
+          status: 'ready',
+          objectKey: key,
+          rowCount: report.rows.length,
+          expiresAt: new Date(Date.now() + EXPORT_TTL_MS),
+          completedAt: new Date(),
+        })
+        .where(whereRequest);
+      await recordAudit(
+        {
+          action: 'export.generated',
+          resourceType: 'export',
+          resourceId: exportRequestId,
+          result: 'success',
+          organisationId,
+          actorUserId: null,
+          actingRole: 'system',
+          sessionId: null,
+          correlationId,
+          after: {
+            data: {
+              type: request.type,
+              rows: report.rows.length,
+              status: filters.status ?? null,
+              from: filters.from ?? null,
+              to: filters.to ?? null,
+            },
+            allow: ['type', 'rows', 'status', 'from', 'to'],
+          },
         },
-        allow: ['type', 'rows', 'status', 'from', 'to'],
-      },
+        tx,
+      );
     });
   } catch (err) {
-    await settle({
-      status: 'failed',
-      error: err instanceof Error ? err.message : 'export failed',
-      completedAt: new Date(),
-    });
-    await recordAudit({
-      action: 'export.failed',
-      resourceType: 'export',
-      resourceId: exportRequestId,
-      result: 'failure',
-      organisationId,
-      actorUserId: null,
-      actingRole: 'system',
-      sessionId: null,
-      correlationId,
+    const whereRequest = and(
+      eq(exportRequests.organisationId, organisationId),
+      eq(exportRequests.id, exportRequestId),
+    );
+    await scope.db.transaction(async (tx) => {
+      await tx
+        .update(exportRequests)
+        .set({
+          status: 'failed',
+          error: err instanceof Error ? err.message : 'export failed',
+          completedAt: new Date(),
+        })
+        .where(whereRequest);
+      await recordAudit(
+        {
+          action: 'export.failed',
+          resourceType: 'export',
+          resourceId: exportRequestId,
+          result: 'failure',
+          organisationId,
+          actorUserId: null,
+          actingRole: 'system',
+          sessionId: null,
+          correlationId,
+        },
+        tx,
+      );
     });
     logger.error({ organisationId, exportRequestId, err }, 'export generation failed');
   }

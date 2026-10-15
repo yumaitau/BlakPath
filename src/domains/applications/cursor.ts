@@ -7,6 +7,12 @@
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * UTC timestamp with exactly six fractional digits. `created_at` is stored to
+ * the microsecond; a millisecond JS Date would skip or repeat rows that share
+ * a millisecond across a page boundary.
+ */
+const CREATED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
 
 export interface ApplicationCursor {
   readonly createdAt: string;
@@ -29,10 +35,9 @@ export function decodeApplicationCursor(token: string): ApplicationCursor | null
     const createdAt = 'createdAt' in parsed ? parsed.createdAt : undefined;
     const id = 'id' in parsed ? parsed.id : undefined;
     if (typeof createdAt !== 'string' || typeof id !== 'string') return null;
-    if (!UUID.test(id)) return null;
-    const time = Date.parse(createdAt);
-    if (Number.isNaN(time)) return null;
-    const cursor = { createdAt: new Date(time).toISOString(), id };
+    if (!UUID.test(id) || !CREATED_AT.test(createdAt)) return null;
+    if (Number.isNaN(Date.parse(createdAt))) return null;
+    const cursor = { createdAt, id };
     // Node's base64url decoder ignores leftover bits, so a trailing
     // character can still parse. Only the exact encoding is a cursor.
     if (encodeApplicationCursor(cursor) !== token) return null;

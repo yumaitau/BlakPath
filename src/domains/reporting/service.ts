@@ -42,18 +42,34 @@ export async function requestExport(
     ...(input.to ? { to: input.to } : {}),
   };
   const scope = currentScope();
-  const inserted = await scope.db
-    .insert(exportRequests)
-    .values(
-      scope.insertValues({
-        requestedByUserId: ctx.userId,
-        type: input.type,
-        status: 'pending',
-        params: Object.keys(filters).length > 0 ? filters : null,
-      }),
-    )
-    .returning();
-  const row = must(inserted[0], 'export request');
+  const row = await scope.db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(exportRequests)
+      .values(
+        scope.insertValues({
+          requestedByUserId: ctx.userId,
+          type: input.type,
+          status: 'pending',
+          params: Object.keys(filters).length > 0 ? filters : null,
+        }),
+      )
+      .returning();
+    const created = must(inserted[0], 'export request');
+    await recordAudit(
+      {
+        action: 'export.requested',
+        resourceType: 'export',
+        resourceId: created.id,
+        result: 'success',
+        after: {
+          data: { type: input.type, ...filters },
+          allow: ['type', 'status', 'from', 'to'],
+        },
+      },
+      tx,
+    );
+    return created;
+  });
 
   await addJob(
     QueueName.Export,
@@ -66,16 +82,6 @@ export async function requestExport(
     { jobId: row.id },
   );
 
-  await recordAudit({
-    action: 'export.requested',
-    resourceType: 'export',
-    resourceId: row.id,
-    result: 'success',
-    after: {
-      data: { type: input.type, ...filters },
-      allow: ['type', 'status', 'from', 'to'],
-    },
-  });
   return row;
 }
 

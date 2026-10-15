@@ -1,14 +1,5 @@
 import { relations } from 'drizzle-orm';
-import {
-  index,
-  jsonb,
-  pgTable,
-  primaryKey,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { index, jsonb, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import {
   organisationId as organisationIdCol,
   primaryId,
@@ -52,8 +43,14 @@ export const applications = pgTable(
     organisationId: organisationIdCol().references(() => organisations.id, {
       onDelete: 'cascade',
     }),
-    /** Human-friendly per-organisation reference, e.g. "APP-2026-0007". */
+    /**
+     * Human-friendly per-organisation reference, e.g. "APP-2026-0007".
+     * Stored in the clear so staff can read it. Uniqueness and lookup use
+     * `reference_bidx`, not a plaintext index.
+     */
     reference: text('reference').notNull(),
+    /** HMAC of the normalised reference under the tenant blind-index key. */
+    referenceBidx: text('reference_bidx'),
     /**
      * The applicant's account, when they have one. Null while an application is
      * started on someone's behalf before an account is linked.
@@ -61,8 +58,12 @@ export const applications = pgTable(
     applicantUserId: refId('applicant_user_id').references(() => users.id, {
       onDelete: 'set null',
     }),
-    /** The applicant's name as given at intake (no derived judgement). */
+    /** The applicant's name as given at intake, sealed under the tenant key. */
     applicantName: text('applicant_name').notNull(),
+    /** HMAC of the full normalised name. Lookup only — not a judgement. */
+    applicantNameBidx: text('applicant_name_bidx'),
+    /** HMAC of the full name and of each word, for whole-token lookup. */
+    applicantNameTokenBidx: text('applicant_name_token_bidx').array(),
     status: applicationStatus('status').notNull().default('draft'),
     priority: applicationPriority('priority').notNull().default('normal'),
     /** Denormalised active assignee for scoped listings; history is authoritative. */
@@ -88,15 +89,25 @@ export const applications = pgTable(
     withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
     withdrawnReason: text('withdrawn_reason'),
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    /**
+     * Set when retention has anonymised this row. The sweep skips a non-null
+     * value so a later run does not rewrite or re-audit the same matter.
+     */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     ...timestamps,
     ...rowVersion,
     ...softDelete,
   },
   (table) => [
-    uniqueIndex('applications_org_reference_unique').on(
+    uniqueIndex('applications_org_reference_bidx_unique').on(
       table.organisationId,
-      table.reference,
+      table.referenceBidx,
     ),
+    index('applications_org_name_bidx_idx').on(
+      table.organisationId,
+      table.applicantNameBidx,
+    ),
+    index('applications_name_token_bidx_gin').using('gin', table.applicantNameTokenBidx),
     index('applications_org_status_idx').on(table.organisationId, table.status),
     index('applications_org_assignee_idx').on(
       table.organisationId,
@@ -124,43 +135,6 @@ export const applications = pgTable(
       table.currentAssigneeUserId,
       table.createdAt.desc(),
       table.id.desc(),
-    ),
-  ],
-);
-
-/**
- * Blind-index tokens for register search.
- *
- * One row per normalised prefix of the reference or the applicant name. The
- * token column is an HMAC, so the lookup stays an index equality check if the
- * source columns are later encrypted. `field` records which value was hashed
- * (`reference` or `name`) and is not itself a search key. Rows are derived
- * data: the application row remains the record.
- *
- * PRODUCT INVARIANT: these tokens only answer "does this typed prefix occur
- * on this matter?". They do not rank, score, or infer Aboriginality.
- */
-export const applicationSearchTokens = pgTable(
-  'application_search_tokens',
-  {
-    organisationId: organisationIdCol().references(() => organisations.id, {
-      onDelete: 'cascade',
-    }),
-    applicationId: uuid('application_id')
-      .notNull()
-      .references(() => applications.id, { onDelete: 'cascade' }),
-    /** `reference` or `name` — which plaintext field this token came from. */
-    field: text('field').notNull(),
-    /** HMAC-SHA256 of one normalised prefix. Not reversible. */
-    token: text('token').notNull(),
-  },
-  (table) => [
-    primaryKey({
-      columns: [table.organisationId, table.token, table.applicationId],
-    }),
-    index('application_search_tokens_application_idx').on(
-      table.organisationId,
-      table.applicationId,
     ),
   ],
 );
@@ -290,7 +264,6 @@ export const applicationsRelations = relations(applications, ({ one, many }) => 
   assignments: many(applicationAssignments),
   statusHistory: many(applicationStatusHistory),
   notes: many(applicationNotes),
-  searchTokens: many(applicationSearchTokens),
 }));
 
 export const applicationAssignmentsRelations = relations(
@@ -329,20 +302,6 @@ export const applicationStatusHistoryRelations = relations(
     actor: one(users, {
       fields: [applicationStatusHistory.actorUserId],
       references: [users.id],
-    }),
-  }),
-);
-
-export const applicationSearchTokensRelations = relations(
-  applicationSearchTokens,
-  ({ one }) => ({
-    organisation: one(organisations, {
-      fields: [applicationSearchTokens.organisationId],
-      references: [organisations.id],
-    }),
-    application: one(applications, {
-      fields: [applicationSearchTokens.applicationId],
-      references: [applications.id],
     }),
   }),
 );

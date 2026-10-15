@@ -52,6 +52,7 @@ export {
 
 export {
   addNote,
+  applyApplicationTransition,
   assignApplication,
   createApplication,
   getApplication,
@@ -59,8 +60,10 @@ export {
   listApplicationParticipants,
   listApplications,
   listRegisterAssignees,
+  recordApplicationTransitionAudit,
   transitionApplication,
   updateIntake,
+  type AppliedApplicationTransition,
   type ApplicationAssignmentRow,
   type ApplicationCaseRecord,
   type ApplicationDetail,
@@ -71,8 +74,3 @@ export {
   type ApplicationStatusHistoryRow,
   type RegisterAssignee,
 } from './service';
-
-export {
-  clearApplicationSearchTokens,
-  writeApplicationSearchTokens,
-} from './search-index';

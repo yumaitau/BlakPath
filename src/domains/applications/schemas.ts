@@ -69,8 +69,8 @@ const emptyToUndefined = (value: unknown): unknown =>
 /**
  * List/filter applications within the tenant.
  *
- * `q` matches a reference or applicant name through the blind index (a prefix
- * of a word, at least two characters). `cursor` is the opaque keyset position
+ * `q` matches a reference, full applicant name, or one whole name word through
+ * the tenant blind index (exact match, never ILIKE). `cursor` is the opaque keyset position
  * returned by the previous page. `offset` remains for existing API clients; when
  * a cursor is present it is the page position and offset is ignored.
  */
@@ -78,7 +78,7 @@ export const listApplicationsSchema = z.object({
   status: z.preprocess(emptyToUndefined, z.enum(APPLICATION_STATUSES).optional()),
   assigneeUserId: z.preprocess(emptyToUndefined, z.uuid().optional()),
   applicantUserId: z.preprocess(emptyToUndefined, z.uuid().optional()),
-  q: z.preprocess(emptyToUndefined, z.string().trim().max(100).optional()),
+  q: z.preprocess(emptyToUndefined, z.string().trim().max(200).optional()),
   cursor: z.preprocess(
     emptyToUndefined,
     z

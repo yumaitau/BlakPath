@@ -1,13 +1,16 @@
 import { recordAudit } from '@/domains/audit/service';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { requireTenantContext } from '@/lib/tenancy/context';
 import {
   getApplication,
   listApplications,
   type ListApplicationsInput,
 } from '@/domains/applications';
 import { listDecisions } from '@/domains/decisions';
+import { listFamilyLinks } from '@/domains/family-links';
 import { listMeetings } from '@/domains/meetings';
 import { getOrganisationStats } from '@/domains/dashboard';
+import { allowsMcpPii, mcpAuditAfter, minimiseMcpValue } from './policy';
 import { findTool, MCP_TOOLS } from './tools';
 
 /**
@@ -51,25 +54,50 @@ async function callTool(
   args: Record<string, unknown>,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError: boolean }> {
   const tool = findTool(name);
+  if (!tool) {
+    return {
+      content: [{ type: 'text' as const, text: `Unknown tool: ${name}` }],
+      isError: true,
+    };
+  }
+
+  const ctx = requireTenantContext();
+  // API-key requests use the key id as the principal (see resolveApiKeyContext).
+  const keyId = ctx.userId;
+  const allowPii = allowsMcpPii(ctx.permissions);
   const text = (value: unknown, isError = false) => ({
     content: [
       {
         type: 'text' as const,
-        text: typeof value === 'string' ? value : JSON.stringify(value),
+        text:
+          typeof value === 'string'
+            ? value
+            : JSON.stringify(isError ? value : minimiseMcpValue(value, allowPii)),
       },
     ],
     isError,
   });
-
-  if (!tool) return text(`Unknown tool: ${name}`, true);
+  const permitted = tool.scopes.some((scope) => ctx.permissions.has(scope));
+  if (!permitted) {
+    await recordAudit({
+      action: 'search.performed',
+      resourceType: 'api_key',
+      resourceId: keyId,
+      result: 'denied',
+      reason: 'mcp.scope_denied',
+      after: mcpAuditAfter({ keyId, tool: name, piiDisclosed: false }),
+    });
+    return text('Forbidden: the API key lacks the required scope for this tool.', true);
+  }
 
   // Attribute the read to the calling API key on the audit trail.
   await recordAudit({
     action: 'search.performed',
-    resourceType: 'search',
-    resourceId: name,
+    resourceType: 'api_key',
+    resourceId: keyId,
     result: 'success',
-    reason: `mcp:${name}`,
+    reason: 'mcp.tool',
+    after: mcpAuditAfter({ keyId, tool: name, piiDisclosed: allowPii }),
   });
 
   try {
@@ -99,6 +127,23 @@ async function callTool(
           status: application.status,
           priority: application.priority,
         });
+      }
+      case 'list_family_links': {
+        const applicationId = asString(args.applicationId);
+        if (!applicationId) return text('Missing required argument: applicationId', true);
+        const links = await listFamilyLinks(applicationId);
+        return text(
+          links.map((link) => ({
+            id: link.id,
+            relationship: link.relationship,
+            relativeName: link.relativeName,
+            community: link.community,
+            notes: link.notes,
+            relativeDeceased: link.relativeDeceased,
+            status: link.status,
+            decisionNote: link.decisionNote,
+          })),
+        );
       }
       case 'list_decisions': {
         const applicationId = asString(args.applicationId);

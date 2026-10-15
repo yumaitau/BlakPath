@@ -4,7 +4,11 @@ import {
   FORM_FIELD_TYPES,
   FormFieldsArraySchema,
   buildResponseSchema,
+  draftIsCurrent,
+  formatAnswerValue,
+  isSubmittableFormFileStatus,
   parseFieldsJson,
+  validateDraft,
   validateResponse,
   type FormField,
 } from '@/lib/forms/fields';
@@ -103,6 +107,79 @@ describe('typed field validation', () => {
     ];
     expect(validateResponse(fields, { records: [] }).success).toBe(false);
     expect(validateResponse(fields, { records: ['Family record'] }).success).toBe(true);
+  });
+});
+
+describe('file fields', () => {
+  const fields = [
+    field({
+      type: 'file',
+      key: 'birth_record',
+      required: true,
+      label: 'Birth record',
+    }),
+  ];
+  const evidenceId = '018f5b3a-0000-7000-8000-0000000000aa';
+
+  it('allows omitting an optional file', () => {
+    expect(
+      validateResponse([field({ type: 'file', key: 'scan', required: false })], {})
+        .success,
+    ).toBe(true);
+  });
+
+  it('accepts an evidence id and rejects a filename or path', () => {
+    expect(validateResponse(fields, { birth_record: evidenceId }).success).toBe(true);
+    expect(validateResponse(fields, { birth_record: 'certificate.pdf' }).success).toBe(
+      false,
+    );
+    expect(validateResponse(fields, { birth_record: '../secrets.pdf' }).success).toBe(
+      false,
+    );
+  });
+
+  it('treats only quarantined and clean uploads as submittable', () => {
+    expect(isSubmittableFormFileStatus('quarantined')).toBe(true);
+    expect(isSubmittableFormFileStatus('clean')).toBe(true);
+    expect(isSubmittableFormFileStatus('pending')).toBe(false);
+    expect(isSubmittableFormFileStatus('infected')).toBe(false);
+    expect(isSubmittableFormFileStatus('rejected')).toBe(false);
+  });
+
+  it('displays a file answer without the storage id', () => {
+    expect(formatAnswerValue(evidenceId, 'file')).toBe('File uploaded');
+  });
+});
+
+describe('draft answers', () => {
+  const fields: FormField[] = [
+    field({ type: 'text', key: 'full_name', required: true, label: 'Full name' }),
+    field({
+      id: '018f5b3a-0000-7000-8000-000000000002',
+      type: 'email',
+      key: 'email',
+      required: true,
+      label: 'Email',
+    }),
+  ];
+
+  it('keeps a half-finished answer set and drops unknown keys', () => {
+    const parsed = validateDraft(fields, { full_name: 'Jo Blak', injected: 'nope' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).toEqual({ full_name: 'Jo Blak' });
+    }
+  });
+
+  it('rejects a present value of the wrong type', () => {
+    expect(validateDraft(fields, { email: 'not-an-email' }).success).toBe(false);
+  });
+
+  it('is current only before its expiry', () => {
+    const now = new Date('2026-10-13T00:00:00.000Z');
+    expect(draftIsCurrent('2026-10-14T00:00:00.000Z', now)).toBe(true);
+    expect(draftIsCurrent('2026-10-13T00:00:00.000Z', now)).toBe(false);
+    expect(draftIsCurrent(null, now)).toBe(false);
   });
 });
 

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   CERTIFICATE_STATUSES,
+  canReissue,
   canRevoke,
   canSign,
+  caseDecidedForCertificate,
   eligibleDecision,
   isValid,
   isWellFormedVerificationCode,
@@ -29,6 +31,13 @@ describe('certificate eligibility (human decision only)', () => {
     );
     expect(eligibleDecision({ status: 'finalised', finalOutcome: null })).toBe(false);
   });
+
+  it('requires the case itself to be decided', () => {
+    expect(caseDecidedForCertificate('decided')).toBe(true);
+    for (const status of ['in_review', 'ready_for_committee', 'in_committee', 'closed']) {
+      expect(caseDecidedForCertificate(status)).toBe(false);
+    }
+  });
 });
 
 describe('certificate status rules', () => {
@@ -37,6 +46,8 @@ describe('certificate status rules', () => {
     expect(canSign('signed')).toBe(false);
     expect(canRevoke('signed')).toBe(true);
     expect(canRevoke('draft')).toBe(false);
+    expect(canReissue('signed')).toBe(true);
+    expect(canReissue('revoked')).toBe(false);
     expect(isValid('signed')).toBe(true);
     expect(isValid('draft')).toBe(false);
     expect(isValid('revoked')).toBe(false);

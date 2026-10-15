@@ -3,11 +3,14 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { StepUpDialog, useStepUp } from '@/components/auth/step-up-dialog';
+import { staffDownload, staffJson } from '@/components/staff-tools/request';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 export interface RegisterApplication {
   id: string;
@@ -89,6 +92,8 @@ export function ApplicationRegister({
   const [priority, setPriority] = useState('normal');
   const [applicantUserId, setApplicantUserId] = useState('');
   const [busy, setBusy] = useState(false);
+  const hydrated = useHydrated();
+  const stepUp = useStepUp();
   const [error, setError] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -101,6 +106,9 @@ export function ApplicationRegister({
         ? [{ userId: currentUserId, name: 'Assigned to me' }]
         : [];
   const filtered = applications;
+  const hasFilters = Boolean(
+    filters.q || filters.status || filters.assignee || filters.cursor,
+  );
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -137,6 +145,21 @@ export function ApplicationRegister({
     }
   }
 
+  async function download(id: string) {
+    if (exportBusy) return;
+    setExportBusy(true);
+    setExportError(null);
+    try {
+      await staffDownload(`/api/reports/exports/${id}/download`, () => stepUp.request());
+    } catch (caught) {
+      setExportError(
+        caught instanceof Error ? caught.message : 'That file could not be downloaded.',
+      );
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   async function requestExport(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (exportBusy) return;
@@ -148,29 +171,22 @@ export function ApplicationRegister({
     const from = String(form.get('from') ?? '');
     const to = String(form.get('to') ?? '');
     try {
-      const response = await fetch('/api/reports/exports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await staffJson(
+        '/api/reports/exports',
+        'POST',
+        {
           type: 'applications',
           ...(status ? { status } : {}),
           ...(from ? { from } : {}),
           ...(to ? { to } : {}),
-        }),
-      });
-      if (!response.ok) {
-        setExportError(
-          response.status === 403
-            ? 'You do not have access to export applications.'
-            : 'We could not start that export. Check the dates and try again.',
-        );
-        return;
-      }
+        },
+        () => stepUp.request(),
+      );
       setExportMessage('Export requested. The file will appear below when it is ready.');
       router.refresh();
-    } catch {
+    } catch (caught) {
       setExportError(
-        'We could not start that export. Check your connection and try again.',
+        caught instanceof Error ? caught.message : 'We could not start that export.',
       );
     } finally {
       setExportBusy(false);
@@ -179,6 +195,7 @@ export function ApplicationRegister({
 
   return (
     <div className="flex flex-col gap-8">
+      <StepUpDialog open={stepUp.open} onFinish={stepUp.finish} />
       <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div>
           <p className="text-muted-foreground text-sm font-medium">Case register</p>
@@ -210,6 +227,7 @@ export function ApplicationRegister({
                   <select
                     id="applicant-account"
                     value={applicantUserId}
+                    disabled={!hydrated}
                     onChange={(event) => setApplicantUserId(event.target.value)}
                     className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
                   >
@@ -230,6 +248,7 @@ export function ApplicationRegister({
                   <select
                     id="application-priority"
                     value={priority}
+                    disabled={!hydrated}
                     onChange={(event) => setPriority(event.target.value)}
                     className="border-input bg-surface h-10 rounded-md border px-3 text-sm"
                   >
@@ -238,7 +257,7 @@ export function ApplicationRegister({
                     <option value="low">Low</option>
                   </select>
                 </div>
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" disabled={!hydrated || busy}>
                   {busy ? 'Starting…' : 'Start application'}
                 </Button>
               </form>
@@ -266,12 +285,8 @@ export function ApplicationRegister({
               Results are limited to cases you are allowed to view.
             </p>
           </div>
-          <form
-            method="get"
-            action="/applications"
-            className="flex w-full flex-col gap-3 sm:max-w-xl"
-          >
-            <div>
+          <div className="flex w-full flex-col gap-3 sm:max-w-xl">
+            <form method="get" action="/applications">
               <Label htmlFor="application-search" className="sr-only">
                 Search applications
               </Label>
@@ -279,15 +294,25 @@ export function ApplicationRegister({
                 id="application-search"
                 name="q"
                 defaultValue={filters.q}
-                maxLength={100}
+                maxLength={200}
                 placeholder="Search by name or reference"
               />
+              {filters.status ? (
+                <input type="hidden" name="status" value={filters.status} />
+              ) : null}
+              {filters.assignee ? (
+                <input type="hidden" name="assignee" value={filters.assignee} />
+              ) : null}
               <p className="text-muted-foreground mt-1 text-xs">
-                Matches the start of a name, or part of a reference. Use at least two
-                characters.
+                Matches a full reference, a full name, or one whole word of a name.
               </p>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
+            </form>
+            <form
+              method="get"
+              action="/applications"
+              className="flex flex-col gap-3 sm:flex-row"
+            >
+              {filters.q ? <input type="hidden" name="q" value={filters.q} /> : null}
               <div className="grid flex-1 gap-1">
                 <Label htmlFor="application-status">Status</Label>
                 <select
@@ -325,15 +350,15 @@ export function ApplicationRegister({
                   Apply
                 </Button>
               </div>
-            </div>
-          </form>
+            </form>
+          </div>
         </div>
 
         {filtered.length === 0 ? (
           <Card>
             <CardContent className="text-muted-foreground py-8 text-sm">
-              {filters.q || filters.status || filters.assignee || filters.cursor
-                ? 'No applications match these filters.'
+              {hasFilters
+                ? 'No applications match this search.'
                 : 'No applications yet. Start a new application when someone has asked your organisation for support.'}
             </CardContent>
           </Card>
@@ -432,7 +457,7 @@ export function ApplicationRegister({
                 ))}
               </select>
             </div>
-            <Button type="submit" variant="secondary" disabled={exportBusy}>
+            <Button type="submit" variant="secondary" disabled={!hydrated || exportBusy}>
               {exportBusy ? 'Requesting…' : 'Export CSV'}
             </Button>
           </form>
@@ -455,12 +480,14 @@ export function ApplicationRegister({
                     <span>{request.rowCount} rows</span>
                   ) : null}
                   {request.status === 'ready' ? (
-                    <Link
-                      href={`/api/reports/exports/${request.id}/download`}
-                      className="text-primary underline"
+                    <button
+                      type="button"
+                      className="text-primary underline disabled:opacity-60"
+                      disabled={!hydrated || exportBusy}
+                      onClick={() => void download(request.id)}
                     >
                       Download
-                    </Link>
+                    </button>
                   ) : null}
                 </li>
               ))}

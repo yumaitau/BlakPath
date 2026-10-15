@@ -6,6 +6,7 @@ import {
   type RegisterExportRequest,
   type RegisterParticipant,
 } from '@/components/applications/application-register';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import { APPLICATION_STATUSES } from '@/domains/applications/workflow';
 import {
   listApplicationParticipants,
@@ -14,6 +15,11 @@ import {
 } from '@/domains/applications';
 import { listApplicationsSchema } from '@/domains/applications/schemas';
 import { listExports, readStoredExportFilters } from '@/domains/reporting';
+import {
+  isTenantKeyUnavailable,
+  TENANT_KEY_UNAVAILABLE_MESSAGE,
+} from '@/lib/encryption/errors';
+import { handlePageError } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 
 function first(value: string | string[] | undefined): string {
@@ -41,7 +47,6 @@ export default async function ApplicationsPage({
   });
   if (!parsed.success) redirect('/applications');
 
-  let unavailable = false;
   let applications: RegisterApplication[] = [];
   let participants: RegisterParticipant[] = [];
   let assignees: RegisterAssignee[] = [];
@@ -50,6 +55,8 @@ export default async function ApplicationsPage({
   let canExport = false;
   let currentUserId = '';
   let nextCursor: string | null = null;
+  let forbidden = false;
+  let locked = false;
 
   try {
     const loaded = await withRequestTenant(async (ctx) => {
@@ -110,15 +117,31 @@ export default async function ApplicationsPage({
           applicationStatus: filters.status ?? null,
         };
       });
-  } catch {
-    unavailable = true;
+  } catch (error) {
+    if (isTenantKeyUnavailable(error)) {
+      locked = true;
+    } else {
+      await handlePageError(error);
+      forbidden = true;
+    }
   }
 
-  if (unavailable) {
+  if (locked) {
     return (
       <p className="text-muted-foreground mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-        Sign in and select an organisation to view applications.
+        {TENANT_KEY_UNAVAILABLE_MESSAGE}
       </p>
+    );
+  }
+
+  if (forbidden) {
+    return (
+      <ForbiddenNotice title="You do not have access to applications">
+        <p>
+          Your role in this organisation does not include the application register. If you
+          need access, ask an organisation administrator.
+        </p>
+      </ForbiddenNotice>
     );
   }
 
