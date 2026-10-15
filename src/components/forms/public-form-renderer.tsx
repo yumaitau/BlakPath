@@ -1,15 +1,18 @@
 'use client';
 
-import { useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
+import { ALLOWED_CONTENT_TYPES } from '@/domains/evidence/status';
 import type { PublicForm } from '@/domains/forms';
 import type { FormField } from '@/lib/forms/fields';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Field } from '@/components/ui/field';
+import { Field, type FieldRenderProps } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
+import { readConflictMessage } from '@/lib/http/conflict-message';
 import { cn } from '@/lib/utils';
 
 /**
@@ -35,17 +38,94 @@ function initialValue(field: FormField): AnswerValue {
       return false;
     case 'multiselect':
       return [];
+    case 'file':
+      return '';
     default:
       return '';
   }
 }
 
-function buildInitialState(fields: FormField[]): Record<string, AnswerValue> {
+function valueFromDraft(field: FormField, raw: unknown): AnswerValue {
+  if (raw === undefined || raw === null) return initialValue(field);
+  switch (field.type) {
+    case 'boolean':
+      return raw === true;
+    case 'multiselect':
+      return Array.isArray(raw)
+        ? raw.filter((item): item is string => typeof item === 'string')
+        : [];
+    case 'number':
+    case 'integer':
+      return typeof raw === 'number' || typeof raw === 'string' ? String(raw) : '';
+    case 'date':
+      return typeof raw === 'string' ? raw.slice(0, 10) : '';
+    case 'file':
+      return typeof raw === 'string' ? raw : '';
+    default:
+      return typeof raw === 'string' ? raw : '';
+  }
+}
+
+function buildInitialState(
+  fields: FormField[],
+  draft: PublicForm['draft'],
+): Record<string, AnswerValue> {
   const state: Record<string, AnswerValue> = {};
   for (const field of fields) {
-    state[field.key] = initialValue(field);
+    const raw = draft?.answers[field.key];
+    state[field.key] =
+      raw === undefined ? initialValue(field) : valueFromDraft(field, raw);
   }
   return state;
+}
+
+const FILE_ACCEPT = [...ALLOWED_CONTENT_TYPES].join(',');
+
+async function uploadFormFile(
+  token: string,
+  fieldKey: string,
+  file: File,
+): Promise<string> {
+  const prepared = await fetch(`/api/public/forms/${encodeURIComponent(token)}/files`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fieldKey,
+      fileName: file.name,
+      contentType: file.type,
+      sizeBytes: file.size,
+    }),
+  });
+  if (!prepared.ok) {
+    throw new Error(
+      prepared.status === 404
+        ? 'This link is no longer valid.'
+        : 'This file could not be accepted.',
+    );
+  }
+  const payload = (await prepared.json()) as {
+    evidenceId: string;
+    upload: { url: string; headers: Record<string, string> };
+  };
+  const uploaded = await fetch(payload.upload.url, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': file.type,
+      ...payload.upload.headers,
+    },
+    body: file,
+  });
+  if (!uploaded.ok) {
+    throw new Error('The file upload did not complete. Please try again.');
+  }
+  const completed = await fetch(
+    `/api/public/forms/${encodeURIComponent(token)}/files/${encodeURIComponent(payload.evidenceId)}/complete`,
+    { method: 'POST' },
+  );
+  if (!completed.ok) {
+    throw new Error('The file could not be stored. Please try again.');
+  }
+  return payload.evidenceId;
 }
 
 function missingRequiredAnswer(field: FormField, value: AnswerValue): boolean {
@@ -116,15 +196,72 @@ type SubmitState =
 
 export function PublicFormRenderer({ token, form }: { token: string; form: PublicForm }) {
   const baseId = useId();
+  const hydrated = useHydrated();
   const [values, setValues] = useState<Record<string, AnswerValue>>(() =>
-    buildInitialState(form.fields),
+    buildInitialState(form.fields, form.draft),
   );
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
   const [invalidKeys, setInvalidKeys] = useState<ReadonlySet<string>>(new Set());
+  const [draftNote, setDraftNote] = useState<string | null>(() =>
+    form.draft
+      ? `Your answers are saved on this link until ${new Date(form.draft.expiresAt).toLocaleString()}.`
+      : null,
+  );
+  const [uploadingKeys, setUploadingKeys] = useState<ReadonlySet<string>>(new Set());
   const successRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
+  const dirty = useRef(false);
+
+  const persistDraft = useCallback(
+    async (keepalive = false) => {
+      const answers = buildAnswers(form.fields, values);
+      try {
+        const res = await fetch(`/api/public/forms/${encodeURIComponent(token)}/draft`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answers }),
+          ...(keepalive ? { keepalive: true } : {}),
+        });
+        if (!res.ok) {
+          if (!keepalive) {
+            setDraftNote('Your answers could not be saved. Please try again.');
+          }
+          return;
+        }
+        const body = (await res.json()) as { expiresAt?: string };
+        const when = body.expiresAt
+          ? new Date(body.expiresAt).toLocaleString()
+          : 'this link expires';
+        setDraftNote(`Your answers are saved on this link until ${when}.`);
+        dirty.current = false;
+      } catch {
+        if (!keepalive) {
+          setDraftNote('Your answers could not be saved. Please try again.');
+        }
+      }
+    },
+    [form.fields, token, values],
+  );
+
+  useEffect(() => {
+    if (!dirty.current) return;
+    const handle = setTimeout(() => {
+      void persistDraft();
+    }, 1500);
+    return () => clearTimeout(handle);
+  }, [persistDraft, values]);
+
+  useEffect(() => {
+    function onHide() {
+      if (!dirty.current) return;
+      void persistDraft(true);
+    }
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, [persistDraft]);
 
   function setValue(key: string, value: AnswerValue) {
+    dirty.current = true;
     setValues((prev) => ({ ...prev, [key]: value }));
     setInvalidKeys((current) => {
       if (!current.has(key)) return current;
@@ -135,6 +272,7 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
   }
 
   function toggleMultiselect(key: string, option: string, checked: boolean) {
+    dirty.current = true;
     setValues((prev) => {
       const current = prev[key];
       const list = Array.isArray(current) ? current : [];
@@ -193,6 +331,13 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
         return;
       }
 
+      const conflict = await readConflictMessage(res);
+      if (conflict) {
+        setSubmit({ status: 'error', message: conflict });
+        requestAnimationFrame(() => errorRef.current?.focus());
+        return;
+      }
+
       if (res.status === 404) {
         setSubmit({
           status: 'error',
@@ -239,6 +384,7 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
   }
 
   const isSubmitting = submit.status === 'submitting';
+  const uploadBusy = uploadingKeys.size > 0;
 
   return (
     <Card>
@@ -261,6 +407,15 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
               onToggleOption={(option, checked) =>
                 toggleMultiselect(field.key, option, checked)
               }
+              token={token}
+              onUploadingChange={(active) => {
+                setUploadingKeys((current) => {
+                  const next = new Set(current);
+                  if (active) next.add(field.key);
+                  else next.delete(field.key);
+                  return next;
+                });
+              }}
             />
           ))}
 
@@ -275,9 +430,26 @@ export function PublicFormRenderer({ token, form }: { token: string; form: Publi
             </p>
           ) : null}
 
-          <div>
-            <Button type="submit" disabled={isSubmitting}>
+          {draftNote ? (
+            <p role="status" className="text-muted-foreground text-sm">
+              {draftNote}
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={!hydrated || isSubmitting || uploadBusy}>
               {isSubmitting ? 'Submitting…' : 'Submit'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!hydrated || isSubmitting || uploadBusy}
+              onClick={() => {
+                dirty.current = true;
+                void persistDraft();
+              }}
+            >
+              Save draft
             </Button>
           </div>
         </form>
@@ -294,6 +466,8 @@ function FieldControl({
   invalid,
   onValueChange,
   onToggleOption,
+  token,
+  onUploadingChange,
 }: {
   field: FormField;
   baseId: string;
@@ -301,9 +475,13 @@ function FieldControl({
   invalid: boolean;
   onValueChange: (value: AnswerValue) => void;
   onToggleOption: (option: string, checked: boolean) => void;
+  token: string;
+  onUploadingChange: (active: boolean) => void;
 }) {
   const id = `${baseId}-${field.key}`;
   const helpText = field.helpText ?? undefined;
+  // React does not replay a select change made before hydration.
+  const hydrated = useHydrated();
 
   // Boolean and multiselect are group-shaped, so they manage their own labelling
   // rather than going through the single-control Field wrapper.
@@ -464,6 +642,7 @@ function FieldControl({
                 {...props}
                 aria-required={field.required}
                 value={stringValue}
+                disabled={!hydrated}
                 onChange={(e) => onValueChange(e.target.value)}
                 className={cn(
                   'border-input bg-surface text-foreground flex h-11 w-full rounded-md border px-3 py-2 text-base',
@@ -478,6 +657,18 @@ function FieldControl({
                   </option>
                 ))}
               </select>
+            );
+          case 'file':
+            return (
+              <FileInput
+                {...props}
+                token={token}
+                fieldKey={field.key}
+                evidenceId={stringValue}
+                required={field.required}
+                onUploaded={(evidenceId) => onValueChange(evidenceId)}
+                onUploadingChange={onUploadingChange}
+              />
             );
           case 'text':
           default:
@@ -496,5 +687,67 @@ function FieldControl({
         }
       }}
     </Field>
+  );
+}
+
+function FileInput({
+  token,
+  fieldKey,
+  evidenceId,
+  onUploaded,
+  onUploadingChange,
+  required,
+  ...wiring
+}: FieldRenderProps & {
+  token: string;
+  fieldKey: string;
+  evidenceId: string;
+  onUploaded: (evidenceId: string) => void;
+  onUploadingChange: (active: boolean) => void;
+}) {
+  const hydrated = useHydrated();
+  const [name, setName] = useState<string | null>(evidenceId ? 'Saved file' : null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function onChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    onUploadingChange(true);
+    try {
+      const id = await uploadFormFile(token, fieldKey, file);
+      setName(file.name);
+      onUploaded(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The file could not be stored.');
+    } finally {
+      setBusy(false);
+      onUploadingChange(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <input
+        {...wiring}
+        type="file"
+        accept={FILE_ACCEPT}
+        aria-required={required || undefined}
+        disabled={!hydrated || busy}
+        onChange={(event) => {
+          void onChange(event);
+        }}
+        className="text-foreground text-sm"
+      />
+      {busy ? <p className="text-muted-foreground text-sm">Uploading…</p> : null}
+      {name && !busy ? <p className="text-muted-foreground text-sm">{name}</p> : null}
+      {error ? (
+        <p role="alert" className="text-destructive text-sm">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }

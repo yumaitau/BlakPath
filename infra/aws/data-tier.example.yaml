@@ -1,7 +1,8 @@
 # BlakPath data tier for ap-southeast-2. Deployment input, not a CI apply.
-# Sizing and the RDS Proxy decision: docs/data-tier-capacity.md.
+# Settings and apply steps: docs/data-tier-capacity.md. Connection budget:
+# src/db/connection-budget.ts and docs/eks-runbook.md.
 #
-# No AWS::RDS::DBProxy. postgres.js prepare:true pins proxy sessions.
+# The RDS Proxy in front of this instance is not created here.
 # Redis holds queues and rate limits only. Snapshot retention is 0.
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
@@ -41,8 +42,9 @@ Parameters:
     Type: String
     Default: db.m7g.large
     Description: >-
-      Default is the capacity-note class. Changing it requires another pass
-      over docs/data-tier-capacity.md.
+      Non-burstable default. Any class must leave the RDS default
+      max_connections at or above RDS_MAX_CONNECTIONS in
+      src/db/connection-budget.ts (2 GiB or more).
   PostgresEngineVersion:
     Type: String
     Default: '16.15'
@@ -259,11 +261,11 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Description: BlakPath Postgres force SSL and connection cap
+      # max_connections stays at the instance-class default (connection budget).
+      Description: BlakPath Postgres force SSL
       Family: postgres16
       Parameters:
         rds.force_ssl: '1'
-        max_connections: '200'
       Tags:
         - Key: app
           Value: blakpath
@@ -370,7 +372,9 @@ Outputs:
   DbEndpointPort:
     Value: !GetAtt DbInstance.Endpoint.Port
   RdsMasterSecretArn:
-    Description: RDS-managed master password. Copy into the runtime DATABASE_URL.
+    Description: >-
+      RDS-managed master password. Only for running
+      infra/postgres/audit-roles.sql. Runtime DATABASE_URL uses blakpath_app.
     Value: !GetAtt DbInstance.MasterUserSecret.SecretArn
   RdsKmsKeyArn:
     Value: !GetAtt RdsKey.Arn

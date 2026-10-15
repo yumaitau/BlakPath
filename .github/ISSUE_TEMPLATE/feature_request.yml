@@ -1,0 +1,38 @@
+name: Feature request
+description: A product, documentation or governance change that is not a vulnerability
+title: 'feat: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        BlakPath never determines Aboriginality. A feature that scores, ranks,
+        predicts, infers, auto-approves or auto-rejects identity will be closed.
+        Vulnerability reports belong in SECURITY.md, not here.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who is blocked, and what they are trying to record or do.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What a person would do. Outcomes must stay recorded human acts.
+    validations:
+      required: true
+  - type: textarea
+    id: tenancy
+    attributes:
+      label: Tenancy and authority
+      description: Which organisation's staff act, and what must stay isolated.
+    validations:
+      required: true
+  - type: checkboxes
+    id: identity
+    attributes:
+      label: Identity rule
+      options:
+        - label: 'does this change let software determine identity? → no'
+          required: true

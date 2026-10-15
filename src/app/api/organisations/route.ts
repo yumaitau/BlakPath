@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { requireSession, UnauthenticatedError } from '@/lib/auth/session';
+import { requireSession } from '@/lib/auth/session';
 import { listMembershipsForUser } from '@/lib/tenancy/memberships';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * GET /api/organisations — the current user's active organisation memberships.
@@ -9,15 +10,8 @@ import { listMembershipsForUser } from '@/lib/tenancy/memberships';
  * choose to act within, keyed by their verified session user id. It exposes no
  * other tenant's data and requires no active organisation to be selected yet.
  */
-export async function GET(): Promise<Response> {
-  try {
-    const session = await requireSession();
-    const organisations = await listMembershipsForUser(session.user.id);
-    return NextResponse.json({ organisations });
-  } catch (error) {
-    if (error instanceof UnauthenticatedError) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
-  }
-}
+export const GET = tenantHandler(async function GET(): Promise<Response> {
+  const session = await requireSession();
+  const organisations = await listMembershipsForUser(session.user.id);
+  return NextResponse.json({ organisations });
+});
