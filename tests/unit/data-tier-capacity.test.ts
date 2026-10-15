@@ -82,7 +82,7 @@ describe('data tier CloudFormation example', () => {
   });
 
   it('points the runtime secret example at verified TLS endpoints', () => {
-    const example = source('infra/k8s/secret.example.yaml');
+    const example = source('infra/k8s/base/secret.example.yaml');
     expect(example).toContain('sslmode=verify-full');
     expect(example).not.toContain('sslmode=require');
     expect(example).toContain('rediss://:CHANGEME@');
