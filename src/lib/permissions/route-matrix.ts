@@ -558,6 +558,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('DELETE', '/api/membership-invitations/[id]', anyOf(['membership:manage'])),
   route('POST', '/api/membership-invitations/[id]/resend', anyOf(['membership:manage'])),
   route(
+    'DELETE',
+    '/api/membership-invitations/[id]/email-suppression',
+    anyOf(['membership:manage']),
+  ),
+  route(
     'POST',
     '/api/membership-invitations/accept',
     { kind: 'bearer-token' },
@@ -587,6 +592,11 @@ export const ROUTE_MATRIX: readonly RouteMatrixEntry[] = [
   route('PATCH', '/api/memberships/[id]', anyOf(['membership:manage']), {
     body: { status: 'suspended' },
   }),
+  route(
+    'DELETE',
+    '/api/memberships/[id]/email-suppression',
+    anyOf(['membership:manage']),
+  ),
   route(
     'GET',
     '/api/notifications',

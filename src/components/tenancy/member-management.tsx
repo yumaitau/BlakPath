@@ -1,6 +1,13 @@
 'use client';
 
-import { CheckCircle2, Clock3, RefreshCw, ShieldCheck, XCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  Clock3,
+  MailWarning,
+  RefreshCw,
+  ShieldCheck,
+  XCircle,
+} from 'lucide-react';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -19,6 +26,7 @@ export interface MemberView {
   status: string;
   roleIds: string[];
   roles: string[];
+  emailSuppression: EmailSuppression;
 }
 
 export interface RoleView {
@@ -35,12 +43,24 @@ export interface MembershipInvitationView {
   roleName: string;
   expiresAt: Date;
   lastSentAt: Date;
+  emailSuppression: EmailSuppression;
 }
+
+/** Mail to the address stopped after a permanent bounce or a spam complaint. */
+export type EmailSuppression = 'bounce' | 'complaint' | null;
 
 interface Feedback {
   tone: 'success' | 'destructive' | 'info';
   text: string;
 }
+
+const suppressionLabel = {
+  bounce: 'Email bounced',
+  complaint: 'Marked as spam',
+};
+
+const suppressionHelp =
+  '“Email bounced” or “Marked as spam” means BlakPath has stopped emailing that address. Clear the block once the address is corrected or the person asks to receive email again.';
 
 const invitationBadge = {
   pending: { tone: 'warning' as const, icon: Clock3, label: 'Pending' },
@@ -241,6 +261,38 @@ export function MemberManagement({
     }
   }
 
+  async function clearSuppression(kind: 'membership' | 'invitation', id: string) {
+    setBusyKey(`suppression-${id}`);
+    setFeedback(null);
+    try {
+      const response = await fetch(
+        kind === 'membership'
+          ? `/api/memberships/${id}/email-suppression`
+          : `/api/membership-invitations/${id}/email-suppression`,
+        { method: 'DELETE', headers: { 'Content-Type': 'application/json' } },
+      );
+      if (!response.ok) {
+        setFeedback({
+          tone: 'destructive',
+          text: 'The email block could not be cleared.',
+        });
+        return;
+      }
+      setFeedback({
+        tone: 'success',
+        text: 'Email block cleared. BlakPath will send to this address again.',
+      });
+      router.refresh();
+    } catch {
+      setFeedback({
+        tone: 'destructive',
+        text: 'We could not reach the service. Please try again.',
+      });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-8">
       <header>
@@ -331,6 +383,9 @@ export function MemberManagement({
         <h2 id="invitations-heading" className="text-lg font-semibold">
           Invitations
         </h2>
+        {invitations.some((invitation) => invitation.emailSuppression) ? (
+          <p className="text-muted-foreground mt-2 text-sm">{suppressionHelp}</p>
+        ) : null}
         {invitations.length === 0 ? (
           <p className="text-muted-foreground mt-3 text-sm">No invitations yet.</p>
         ) : (
@@ -353,6 +408,23 @@ export function MemberManagement({
                     <Badge tone={badge.tone} icon={badge.icon}>
                       {badge.label}
                     </Badge>
+                    {invitation.emailSuppression ? (
+                      <>
+                        <Badge tone="destructive" icon={MailWarning}>
+                          {suppressionLabel[invitation.emailSuppression]}
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            void clearSuppression('invitation', invitation.id)
+                          }
+                        >
+                          Clear email block
+                        </Button>
+                      </>
+                    ) : null}
                     {invitation.status === 'pending' ? (
                       <>
                         <Button
@@ -393,6 +465,9 @@ export function MemberManagement({
           Suspending or removing access takes effect on the next request. The last active
           organisation administrator cannot be removed or downgraded.
         </p>
+        {members.some((member) => member.emailSuppression) ? (
+          <p className="text-muted-foreground mt-2 text-sm">{suppressionHelp}</p>
+        ) : null}
         <ul className="border-border divide-border mt-4 divide-y overflow-hidden rounded-lg border">
           {members.map((member) => (
             <li
@@ -405,6 +480,21 @@ export function MemberManagement({
                   {member.email} · {member.roles.join(', ') || 'No role assigned'} ·{' '}
                   <span className="capitalize">{member.status}</span>
                 </p>
+                {member.emailSuppression ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge tone="destructive" icon={MailWarning}>
+                      {suppressionLabel[member.emailSuppression]}
+                    </Badge>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => void clearSuppression('membership', member.id)}
+                    >
+                      Clear email block
+                    </Button>
+                  </div>
+                ) : null}
               </div>
               <div className="flex items-end gap-2">
                 <div className="grid min-w-0 flex-1 gap-1">

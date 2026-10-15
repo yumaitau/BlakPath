@@ -27,6 +27,7 @@ import {
   type UpdateCalendarEventInput,
 } from './schemas';
 import { expandOccurrences, overlaps } from './recurrence';
+import { formatEventTime } from './format';
 import { CalendarConflictError } from './errors';
 
 /**
@@ -467,6 +468,12 @@ export async function countUpcoming(): Promise<number> {
  * Each pending reminder notifies every attendee holding a user account via
  * the notification system (which also queues the email copy), then marks the
  * reminder sent so it fires once.
+ *
+ * Idempotent per (reminder, user): each notification carries the dedupe key
+ * `calendar-reminder:<reminderId>:<userId>`, so a sweep that crashes after
+ * notifying some attendees but before marking the reminder sent re-runs
+ * without creating — or emailing — a second notification. Times are shown in
+ * the event's own zone, never as raw UTC.
  */
 export async function processReminderSweep(input: {
   organisationId: string;
@@ -485,6 +492,7 @@ export async function processReminderSweep(input: {
       eventId: calendarEvents.id,
       title: calendarEvents.title,
       startAt: calendarEvents.startAt,
+      timezone: calendarEvents.timezone,
       location: calendarEvents.location,
     })
     .from(calendarEventReminders)
@@ -527,9 +535,10 @@ export async function processReminderSweep(input: {
           userId,
           type: 'calendar-reminder',
           title: `Reminder: ${item.title}`,
-          body: `Starts ${item.startAt.toISOString()}${item.location ? ` at ${item.location}` : ''}.`,
+          body: `Starts ${formatEventTime(item.startAt, item.timezone)}${item.location ? ` at ${item.location}` : ''}.`,
           resourceType: 'calendar_event',
           resourceId: item.eventId,
+          dedupeKey: `calendar-reminder:${item.reminderId}:${userId}`,
         },
         correlationId,
       );

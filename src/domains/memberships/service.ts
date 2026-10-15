@@ -20,6 +20,11 @@ import {
 } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { recordAudit } from '@/domains/audit/service';
+import {
+  clearSuppressionForTarget,
+  suppressionsFor,
+  type SuppressionKind,
+} from '@/domains/email';
 import { queueInvitationEmail } from '@/lib/email/queue';
 import { sealInvitationToken } from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
@@ -114,6 +119,8 @@ export interface ManagedMember {
   status: string;
   roleIds: string[];
   roles: string[];
+  /** Mail to this address is suppressed after a permanent bounce/complaint. */
+  emailSuppression: SuppressionKind | null;
 }
 
 export interface AssignableRole {
@@ -130,6 +137,8 @@ export interface ManagedMembershipInvitation {
   roleName: string;
   expiresAt: Date;
   lastSentAt: Date;
+  /** Mail to this address is suppressed after a permanent bounce/complaint. */
+  emailSuppression: SuppressionKind | null;
 }
 
 export interface MembershipInvitationPreview {
@@ -272,6 +281,7 @@ export async function listManagedMembers(): Promise<ManagedMember[]> {
       status: row.status,
       roleIds: [],
       roles: [],
+      emailSuppression: null,
     };
     if (row.roleId && row.roleName) {
       member.roleIds.push(row.roleId);
@@ -279,7 +289,12 @@ export async function listManagedMembers(): Promise<ManagedMember[]> {
     }
     result.set(row.id, member);
   }
-  return [...result.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const members = [...result.values()];
+  const suppressed = await suppressionsFor(members.map((member) => member.email));
+  for (const member of members) {
+    member.emailSuppression = suppressed.get(member.email.trim().toLowerCase()) ?? null;
+  }
+  return members.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function listAssignableRoles(): Promise<AssignableRole[]> {
@@ -334,10 +349,73 @@ export async function listMembershipInvitations(): Promise<
     .innerJoin(roles, eq(membershipInvitations.roleId, roles.id))
     .where(eq(membershipInvitations.organisationId, scope.organisationId))
     .orderBy(desc(membershipInvitations.createdAt));
+  const suppressed = await suppressionsFor(rows.map((row) => row.email));
   return rows.map((row) => ({
     ...row,
     status: invitationStatus(row.status, row.expiresAt),
+    emailSuppression: suppressed.get(row.email.trim().toLowerCase()) ?? null,
   }));
+}
+
+/**
+ * Clear the email suppression on a member's or invitee's address so BlakPath
+ * resumes sending to it (e.g. after the mailbox is fixed or the person asks
+ * to receive email again). Organisation administrators only, and only for an
+ * address that belongs to their own tenant's membership or invitation — the
+ * target is resolved by id inside the tenant scope, never from a
+ * request-supplied address. Suppressions are platform-wide (a dead address is
+ * dead for every tenant), so clearing one resumes mail from all of them.
+ * Audited as `email.suppression_cleared`.
+ */
+export async function clearEmailSuppression(target: {
+  kind: 'membership' | 'invitation';
+  id: string;
+}): Promise<boolean> {
+  try {
+    assertManage();
+    const scope = currentScope();
+    const rows =
+      target.kind === 'membership'
+        ? await db
+            .select({ email: users.email })
+            .from(memberships)
+            .innerJoin(users, eq(memberships.userId, users.id))
+            .where(
+              and(
+                eq(memberships.id, target.id),
+                eq(memberships.organisationId, scope.organisationId),
+              ),
+            )
+            .limit(1)
+        : await db
+            .select({ email: membershipInvitations.email })
+            .from(membershipInvitations)
+            .where(
+              and(
+                eq(membershipInvitations.id, target.id),
+                eq(membershipInvitations.organisationId, scope.organisationId),
+              ),
+            )
+            .limit(1);
+    const row = rows[0];
+    if (!row) throw new AuthorizationError('POLICY_DENIED');
+    return await clearSuppressionForTarget(row.email, target);
+  } catch (error) {
+    if (isAuthorizationError(error)) {
+      await recordAudit({
+        action: 'email.suppression_cleared',
+        resourceType: 'email_suppression',
+        resourceId: null,
+        result: 'denied',
+        reason: error.code,
+        after: {
+          data: { target: target.kind, targetId: target.id },
+          allow: ['target', 'targetId'],
+        },
+      });
+    }
+    throw error;
+  }
 }
 
 /** Add an existing signed-up person directly to this organisation. */
@@ -423,6 +501,7 @@ export async function addMember(input: {
       status: 'active',
       roleIds: [role.id],
       roles: [role.name],
+      emailSuppression: null,
     };
   } catch (error) {
     await recordDenied('membership.role_assigned', null, error);
@@ -542,6 +621,7 @@ export async function createMembershipInvitation(input: {
         roleName: role.name,
         expiresAt,
         lastSentAt: now,
+        emailSuppression: null,
       },
       token,
       path: `/join/${token}`,
@@ -637,6 +717,7 @@ export async function resendMembershipInvitation(id: string): Promise<{
         roleName: current.roleName,
         expiresAt,
         lastSentAt,
+        emailSuppression: null,
       },
       token,
       path: `/join/${token}`,

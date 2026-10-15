@@ -336,9 +336,13 @@ describe('worker processors', () => {
     expect(deps.renderNotificationEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'Person',
-        title: 'Update',
         appUrl: 'http://localhost:3000',
+        startsAt: null,
       }),
+    );
+    // The email copy is generic: free-text title/body never reach it.
+    expect(deps.renderNotificationEmail).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Update' }),
     );
     expect(deps.sendEmail).toHaveBeenCalledWith({
       to: 'person@council.example',

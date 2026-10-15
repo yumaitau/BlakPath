@@ -9,7 +9,7 @@ import { processExport, processExportMaintenance } from '@/domains/reporting';
 import { processRetentionSweep } from '@/domains/retention';
 import { env } from '@/lib/env';
 import { scopeFor } from '@/db/tenant-db';
-import { memberships, notifications, users } from '@/db/schema';
+import { calendarEvents, memberships, notifications, users } from '@/db/schema';
 import {
   deliverInvitationEmail,
   invitationKindFromJobName,
@@ -22,6 +22,7 @@ import {
 } from '@/lib/encryption/backfill';
 import { markEmailed, renderNotificationEmail } from '@/domains/notifications';
 import { wantsNotificationEmail } from '@/domains/notifications/workflow';
+import { formatEventTime } from '@/domains/calendar/format';
 import { processOrganisationKeyRewrap } from '@/domains/organisation-keys/rewrap-job';
 import { isPlatformAuditJob, processAuditVerifyJob } from './audit-verify';
 import { acceptTenantJob } from './tenant-job';
@@ -123,8 +124,11 @@ const emailProcessor: ProcessorFn = async (job, logger) => {
 
 /**
  * Notification processor. Loads the tenant-scoped notification, looks up the
- * recipient's email, and sends a short "you have a new notification" message
- * that links back into the app (never a bearer URL). Marks the row emailed.
+ * recipient's email, and sends a short, GENERIC "you have a new notification"
+ * message that links back into the app (never a bearer URL). The notification's
+ * free-text title/body may hold case details, so they never go into the email.
+ * The recipient must still be an ACTIVE member who asked for email copies at
+ * send time — a suspended or removed member gets nothing. Marks the row emailed.
  */
 const notificationProcessor: ProcessorFn = async (job, logger) => {
   const { organisationId, correlationId } = job.data;
@@ -191,11 +195,33 @@ const notificationProcessor: ProcessorFn = async (job, logger) => {
     return;
   }
 
+  // Calendar reminders state the start time in the event's own zone. The time
+  // is not a case detail; the event title and location stay in-app.
+  let startsAt: string | null = null;
+  if (
+    notification.type === 'calendar-reminder' &&
+    notification.resourceType === 'calendar_event' &&
+    notification.resourceId
+  ) {
+    const eventRows = await scope.db
+      .select({ startAt: calendarEvents.startAt, timezone: calendarEvents.timezone })
+      .from(calendarEvents)
+      .where(
+        and(
+          eq(calendarEvents.organisationId, organisationId),
+          eq(calendarEvents.id, notification.resourceId),
+        ),
+      )
+      .limit(1);
+    const event = eventRows[0];
+    if (event) startsAt = formatEventTime(event.startAt, event.timezone);
+  }
+
   const { subject, text } = renderNotificationEmail({
     name: recipient.name,
-    title: notification.title,
-    body: notification.body,
+    type: notification.type,
     appUrl: env.APP_URL,
+    startsAt,
   });
   await sendEmail({ to: recipient.email, subject, text });
   await markEmailed(organisationId, notificationId);

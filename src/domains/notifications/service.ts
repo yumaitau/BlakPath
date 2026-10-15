@@ -45,6 +45,13 @@ export interface CreateNotificationInput {
   body?: string;
   resourceType?: string;
   resourceId?: string;
+  /**
+   * Producer idempotency key, unique per tenant. When a row with this key
+   * already exists, no second row is created and the existing one is returned
+   * (its delivery job is re-offered under the same job id, so it is not
+   * duplicated either).
+   */
+  dedupeKey?: string;
 }
 
 /** Active membership's email preference. Missing or inactive memberships opt out. */
@@ -70,7 +77,8 @@ async function memberWantsEmail(
 /**
  * Insert a notification row and, when the member wants email, enqueue delivery.
  * The job is keyed by the notification id so a retry cannot double-schedule it.
- * The in-app row is written either way.
+ * The in-app row is written either way. With a `dedupeKey`, a retried producer
+ * gets the existing row back instead of a second notice or email.
  */
 export async function createNotification(
   input: CreateNotificationInput,
@@ -89,21 +97,42 @@ export async function createNotification(
         body: input.body ?? null,
         resourceType: input.resourceType ?? null,
         resourceId: input.resourceId ?? null,
+        dedupeKey: input.dedupeKey ?? null,
       }),
     )
+    .onConflictDoNothing({
+      target: [notifications.organisationId, notifications.dedupeKey],
+    })
     .returning();
-  const row = expectRow(inserted[0], 'notification row');
+  let existing: NotificationRow | undefined = inserted[0];
+  if (!existing && input.dedupeKey) {
+    // A previous (possibly crashed) run already created this notification.
+    const rows = await scope.db
+      .select()
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.organisationId, input.organisationId),
+          eq(notifications.dedupeKey, input.dedupeKey),
+        ),
+      )
+      .limit(1);
+    existing = rows[0];
+  }
+  const row = expectRow(existing, 'notification row');
 
-  if (await memberWantsEmail(input.organisationId, input.userId)) {
+  // Already emailed: nothing left to deliver. Otherwise (re-)offer the job; the
+  // stable job id de-duplicates it and the processor skips emailed rows.
+  if (!row.emailedAt && (await memberWantsEmail(input.organisationId, input.userId))) {
     await addJob(
       QueueName.Notification,
       'deliver',
       {
         organisationId: input.organisationId,
         correlationId,
-        notificationId: id,
+        notificationId: row.id,
       },
-      { jobId: id },
+      { jobId: row.id },
     );
   }
 

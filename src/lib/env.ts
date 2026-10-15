@@ -121,6 +121,9 @@ const serverSchema = z
     SMTP_HOST: z.string().default('localhost'),
     SMTP_PORT: z.coerce.number().int().positive().default(1025),
     SMTP_FROM: z.string().default('BlakPath <no-reply@blakpath.local>'),
+    // Sender quota in messages per second (SES production default is 14).
+    // The worker paces the Email and Notification queues beneath it.
+    EMAIL_SEND_RATE_PER_SECOND: z.coerce.number().int().positive().default(10),
     // Shared secret for POST /api/email/events. Header
     // `x-email-webhook-secret` only. Unset locally; required in production.
     EMAIL_WEBHOOK_SECRET: z.string().min(16).optional(),

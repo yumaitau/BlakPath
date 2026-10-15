@@ -174,6 +174,7 @@ async function deliver(
   organisationId: string,
   correlationId: string,
   planned: readonly PlannedNotification[],
+  dedupeKey?: (item: PlannedNotification) => string,
 ): Promise<number> {
   let sent = 0;
   for (const item of planned) {
@@ -187,6 +188,7 @@ async function deliver(
           body: item.body,
           resourceType: item.resourceType,
           resourceId: item.resourceId,
+          ...(dedupeKey ? { dedupeKey: dedupeKey(item) } : {}),
         },
         correlationId,
       );
@@ -231,8 +233,13 @@ export async function notifyWorkflowEvent(input: NotifyWorkflowInput): Promise<n
 
 /**
  * Tell the requester and the current assignee, when they can still read the
- * case, that an evidence request is past its due date. Each request is claimed
- * before delivery so a later sweep does not send the notice again.
+ * case, that an evidence request is past its due date.
+ *
+ * Deliver first, then mark the request notified. Each notice carries the dedupe
+ * key `evidence-overdue:<requestId>:<userId>`, so a sweep that crashes or fails
+ * part-way re-runs without a second notice or email, and a request is only
+ * marked once every planned recipient has their notice. (Marking first would
+ * lose the notice for good if delivery then failed.)
  */
 export async function processOverdueEvidenceSweep(input: {
   organisationId: string;
@@ -276,38 +283,46 @@ export async function processOverdueEvidenceSweep(input: {
   let notified = 0;
 
   for (const request of pending) {
-    const claimed = await scope.db
-      .update(evidenceRequests)
-      .set({ overdueNotifiedAt: now })
-      .where(
-        and(
-          eq(evidenceRequests.organisationId, organisationId),
-          eq(evidenceRequests.id, request.id),
-          isNull(evidenceRequests.overdueNotifiedAt),
-        ),
-      )
-      .returning({ id: evidenceRequests.id });
-    if (claimed.length === 0) continue;
-
     try {
       let audience = audiences.get(request.applicationId);
       if (audience === undefined) {
         audience = await loadCaseAudience(organisationId, request.applicationId);
         audiences.set(request.applicationId, audience);
       }
-      if (!audience) continue;
 
-      const planned = planWorkflowNotifications(
-        {
-          kind: 'evidence_overdue',
-          applicationId: request.applicationId,
-          requestId: request.id,
-          requestedByUserId: request.requestedByUserId,
-        },
-        staff,
-        audience,
+      const planned = audience
+        ? planWorkflowNotifications(
+            {
+              kind: 'evidence_overdue',
+              applicationId: request.applicationId,
+              requestId: request.id,
+              requestedByUserId: request.requestedByUserId,
+            },
+            staff,
+            audience,
+          )
+        : [];
+      const sent = await deliver(
+        organisationId,
+        correlationId,
+        planned,
+        (item) => `evidence-overdue:${request.id}:${item.userId}`,
       );
-      notified += await deliver(organisationId, correlationId, planned);
+      // A failed recipient leaves the request unmarked for the next sweep.
+      if (sent < planned.length) continue;
+
+      const claimed = await scope.db
+        .update(evidenceRequests)
+        .set({ overdueNotifiedAt: now })
+        .where(
+          and(
+            eq(evidenceRequests.organisationId, organisationId),
+            eq(evidenceRequests.id, request.id),
+            isNull(evidenceRequests.overdueNotifiedAt),
+          ),
+        )
+        .returning({ id: evidenceRequests.id });
+      if (claimed.length > 0) notified += sent;
     } catch (err) {
       logger.error(
         { err, organisationId, requestId: request.id },

@@ -269,8 +269,7 @@ describe('workflow notification copy', () => {
     for (const item of notices) {
       const email = renderNotificationEmail({
         name: 'Sam',
-        title: item.title,
-        body: item.body,
+        type: item.type,
         appUrl: 'https://app.blakpath.test',
       });
       const rendered = `${item.title}\n${item.body}\n${email.subject}\n${email.text}`;

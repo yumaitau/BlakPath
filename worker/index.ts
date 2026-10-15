@@ -1,4 +1,4 @@
-import { Worker, type ConnectionOptions } from 'bullmq';
+import type { ConnectionOptions, Worker } from 'bullmq';
 import {
   WORKER_QUEUE_CONCURRENCY,
   WORKER_SHUTDOWN_GRACE_SECONDS,
@@ -6,6 +6,8 @@ import {
 import { getOrganisationKey } from '@/domains/organisation-keys/service';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
+import { env } from '@/lib/env';
+import { emailQueueRateLimits, type QueueRateLimit } from '@/lib/email/rate-limit';
 import { closeAuthEmailQueue } from '@/lib/auth/reset-queue';
 import { closeQueues, QueueName, type TenantJob } from '@/lib/queues';
 import { webhookBackoffStrategy } from '@/domains/webhooks/retry';
@@ -16,6 +18,7 @@ import { startKeyHealthLoop } from './key-health-loop';
 import { PROCESSORS, REGISTERED_QUEUES } from './processors';
 import { isPlatformAuditJob } from './audit-verify';
 import { queueFailureSignal } from './operational-signals';
+import { createQueueWorker } from './queue-worker';
 import { startSignatureAgeMonitor } from './signature-age-monitor';
 import { startAuthEmailWorker } from './auth-email';
 import { startTenantScheduleSync } from './scheduler';
@@ -64,13 +67,25 @@ const connection = redis as unknown as ConnectionOptions;
  */
 const SHUTDOWN_GRACE_MS = WORKER_SHUTDOWN_GRACE_SECONDS * 1000;
 
+/**
+ * Mail-sending queues are paced beneath the sender quota (Redis-backed, so the
+ * limit holds across replicas). Other queues are unlimited.
+ */
+const emailLimits = emailQueueRateLimits(env.EMAIL_SEND_RATE_PER_SECOND);
+const RATE_LIMITS: Partial<Record<QueueName, QueueRateLimit>> = {
+  [QueueName.Email]: emailLimits.email,
+  [QueueName.Notification]: emailLimits.notification,
+};
+
 const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
   const processor = PROCESSORS[queueName];
   const childLogger = workerLogger.child({ queue: queueName });
+  const limiter = RATE_LIMITS[queueName];
 
-  const worker = new Worker<TenantJob>(
+  const worker = createQueueWorker({
     queueName,
-    async (job, token) => {
+    logger: childLogger,
+    processor: async (job, token) => {
       // The platform audit chain has no tenant: no status or key gate applies.
       if (isPlatformAuditJob(queueName, job.data)) {
         return processor(job, childLogger);
@@ -109,22 +124,21 @@ const workers: Worker<TenantJob>[] = REGISTERED_QUEUES.map((queueName) => {
         throw err;
       }
     },
-    {
-      connection,
-      prefix: 'bp:queue',
-      // Matches DATABASE_WORKER_POOL_MAX: one pooled connection per in-flight job.
-      concurrency: WORKER_QUEUE_CONCURRENCY,
-      // Do not autorun until all workers are constructed and listeners wired.
-      autorun: false,
-      // BullMQ reads the custom backoff from the worker that owns the job.
-      // Webhook deliveries retry over hours (see domains/webhooks/retry.ts).
-      ...(queueName === QueueName.MalwareScan
-        ? { settings: { backoffStrategy: malwareScanBackoffStrategy } }
-        : queueName === QueueName.Webhook
-          ? { settings: { backoffStrategy: webhookBackoffStrategy } }
-          : {}),
-    },
-  );
+    connection,
+    prefix: 'bp:queue',
+    // Matches DATABASE_WORKER_POOL_MAX: one pooled connection per in-flight job.
+    concurrency: WORKER_QUEUE_CONCURRENCY,
+    ...(limiter ? { limiter } : {}),
+    // Do not autorun until all workers are constructed and listeners wired.
+    autorun: false,
+    // BullMQ reads the custom backoff from the worker that owns the job.
+    // Webhook deliveries retry over hours (see domains/webhooks/retry.ts).
+    ...(queueName === QueueName.MalwareScan
+      ? { settings: { backoffStrategy: malwareScanBackoffStrategy } }
+      : queueName === QueueName.Webhook
+        ? { settings: { backoffStrategy: webhookBackoffStrategy } }
+        : {}),
+  });
 
   worker.on('failed', (job, err) => {
     const failure = queueFailureSignal(job);

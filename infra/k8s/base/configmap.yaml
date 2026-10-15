@@ -26,6 +26,9 @@ data:
   # set publishes bounce/complaint events via SNS to /api/email/events.
   # See docs/adr/0090-production-email-sender.md and infra/aws/ses-sending.example.yaml.
   EMAIL_TRANSPORT: ses
+  # Sender quota (messages/second); worker paces Email + Notification queues
+  # beneath it with headroom for synchronous auth mail. Match the live quota.
+  EMAIL_SEND_RATE_PER_SECOND: '10'
   CLAMAV_HOST: blakpath-clamav
   CLAMAV_PORT: '3310'
   AI_FEATURES_ENABLED: 'false'

@@ -46,6 +46,8 @@ const LISTED_ROUTES = [
   'POST /api/break-glass/[id]/activate',
   'POST /api/break-glass/[id]/approve',
   'POST /api/break-glass/[id]/review',
+  'DELETE /api/memberships/[id]/email-suppression',
+  'DELETE /api/membership-invitations/[id]/email-suppression',
 ] as const;
 
 describe('step-up route map', () => {

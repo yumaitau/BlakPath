@@ -21,6 +21,7 @@ export {
   parseRrule,
 } from './recurrence';
 export { CalendarConflictError } from './errors';
+export { DEFAULT_EVENT_TIMEZONE, formatEventTime } from './format';
 export {
   addAttendee,
   addReminder,

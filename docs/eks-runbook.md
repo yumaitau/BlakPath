@@ -503,7 +503,13 @@ Record who rotated, when, and which keys. Do not record the values.
   `x-email-webhook-secret` header. SNS cannot set that header; a forwarder
   (API Gateway or Lambda) must add it from Secrets Manager. Transient bounces
   are not suppressed. A platform operator clears a suppression with
-  `POST /api/admin/email-suppressions` (step-up, audited).
+  `POST /api/admin/email-suppressions` (step-up, audited). Organisation
+  administrators see suppressed members and invitees on Settings → People and
+  can clear one for their own tenant (step-up, audited as
+  `email.suppression_cleared`).
+- Set `EMAIL_SEND_RATE_PER_SECOND` (ConfigMap) to the live SES sending quota.
+  The worker paces the Email and Notification queues beneath it across all
+  replicas and re-queues sender-throttled sends without spending a retry.
 - Email: see [Email](#email).
 
 ## Email

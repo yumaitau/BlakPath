@@ -60,6 +60,9 @@ export const STEP_UP_ROUTES = {
   'POST /api/break-glass/[id]/deny': STEP_UP_WINDOWS.privileged,
   'POST /api/break-glass/[id]/revoke': STEP_UP_WINDOWS.privileged,
   'POST /api/break-glass/[id]/review': STEP_UP_WINDOWS.privileged,
+  // Organisation administrator resumes mail to a bounced or complained address.
+  'DELETE /api/memberships/[id]/email-suppression': STEP_UP_WINDOWS.privileged,
+  'DELETE /api/membership-invitations/[id]/email-suppression': STEP_UP_WINDOWS.privileged,
 } as const;
 
 export type StepUpRoute = keyof typeof STEP_UP_ROUTES;

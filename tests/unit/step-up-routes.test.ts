@@ -29,6 +29,8 @@ import { POST as createWebhook } from '@/app/api/webhooks/route';
 import { POST as sendLetter } from '@/app/api/applications/[id]/correspondence/[correspondenceId]/send/route';
 import { POST as notifyEvidenceRequest } from '@/app/api/applications/[id]/evidence-requests/[requestId]/notify/route';
 import { POST as redeliverWebhook } from '@/app/api/webhooks/[id]/deliveries/[deliveryId]/redeliver/route';
+import { DELETE as clearMemberSuppression } from '@/app/api/memberships/[id]/email-suppression/route';
+import { DELETE as clearInvitationSuppression } from '@/app/api/membership-invitations/[id]/email-suppression/route';
 
 const params = {
   params: Promise.resolve({ id: '00000000-0000-7000-8000-000000000001' }),
@@ -164,6 +166,17 @@ describe('listed routes require a fresh session', () => {
     await expectStale(
       reviewBreakGlass(post() as never, params),
       STEP_UP_ROUTES['POST /api/break-glass/[id]/review'],
+    );
+    requireRecentAuth.mockClear();
+    const del = () => new Request('http://localhost/step-up', { method: 'DELETE' });
+    await expectStale(
+      clearMemberSuppression(del() as never, params),
+      STEP_UP_ROUTES['DELETE /api/memberships/[id]/email-suppression'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      clearInvitationSuppression(del() as never, params),
+      STEP_UP_ROUTES['DELETE /api/membership-invitations/[id]/email-suppression'],
     );
   });
 });
