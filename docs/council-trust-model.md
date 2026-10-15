@@ -35,8 +35,12 @@ determination of Aboriginality.
 
 ## Council onboarding
 
-1. Create organisation `organisationType='council'`, status onboarding.
-2. Seed system roles, create council teams (Intake, Casework, Committee).
-3. Invite staff via `membership_invitations` (hash only, email-verified).
+1. `pnpm org:provision -- provision` creates the organisation in `onboarding`,
+   clones role templates (not `platform-operator`), and emails the first
+   administrator. The operator gets no membership. See
+   `docs/council-onboarding.md`.
+2. Create council teams (Intake, Casework, Committee).
+3. Further staff use `membership_invitations` (hash only, email-verified).
 4. Assign teams/groups, verify isolation with `tests/e2e/team-isolation.spec.ts`.
-5. Open public applications when ready.
+5. Activate only after the tenant key is validated and the readiness checklist
+   and signed agreement are recorded. Open public applications when ready.

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../e2e/helpers/page';
 import { expectNoWcagViolations } from '../e2e/helpers/accessibility';
 import { expectNoPageErrors, watchForPageErrors } from '../e2e/helpers/page-errors';
 
@@ -31,7 +31,7 @@ test('production runner image serves health and sign-in', async ({ page, request
     await expectNoWcagViolations(page);
 
     await page.goto('/dashboard');
-    await expect(page).toHaveURL(/\/sign-in$/);
+    await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
   });
 
   expectNoPageErrors(pageErrors);

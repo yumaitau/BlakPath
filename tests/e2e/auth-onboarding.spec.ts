@@ -1,13 +1,24 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
 import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
-test('auth: anonymous users hit sign-in gate', async ({ page }) => {
+test('auth: anonymous users hit sign-in gate, keeping their destination', async ({
+  page,
+}) => {
   const pageErrors = watchForPageErrors(page);
   await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
   expectNoPageErrors(pageErrors);
+});
+
+test('auth: unknown pages show the branded 404', async ({ page }) => {
+  const response = await page.goto('/this-page-does-not-exist');
+  expect(response?.status()).toBe(404);
+  await expect(
+    page.getByRole('heading', { name: 'We can’t find that page' }),
+  ).toBeVisible();
+  await expect(page.getByText('Error 404')).toBeVisible();
 });
 
 test('auth: sign-in, org picker, security, sign-out journey', async ({ page }) => {
@@ -27,7 +38,7 @@ test('auth: sign-in, org picker, security, sign-out journey', async ({ page }) =
     const protectedResponse = await page.request.get('/api/notifications');
     expect(protectedResponse.status()).toBe(401);
     await page.goto('/dashboard');
-    await expect(page).toHaveURL(/\/sign-in$/);
+    await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
   });
 
   expectNoPageErrors(pageErrors);

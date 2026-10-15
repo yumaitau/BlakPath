@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
 import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
@@ -82,11 +82,23 @@ test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => 
     await expect(page.getByText(/identity score/i)).toHaveCount(0);
   });
 
-  await test.step('certificate generate sign and download', async () => {
+  await test.step('certificate template, generate, sign and download', async () => {
+    const template = await api.post('/api/settings/certificate-template', {
+      data: {
+        wording:
+          'This organisation has recorded a confirmation decision made by its authorised people for the person named on this certificate.',
+        signatoryName: 'E2E Signatory',
+        signatoryRole: 'Chair',
+      },
+    });
+    expect(template.status()).toBe(200);
+
     const generated = await api.post('/api/certificates', { data: { decisionId } });
     expect(generated.status()).toBe(200);
     certificateId = ((await generated.json()) as { id: string }).id;
-    const sign = await api.post(`/api/certificates/${certificateId}/sign`);
+    const sign = await api.post(`/api/certificates/${certificateId}/sign`, {
+      headers: { 'Content-Type': 'application/json' },
+    });
     expect(sign.status()).toBe(200);
 
     const listed = await api.get(`/api/certificates?applicationId=${applicationId}`);

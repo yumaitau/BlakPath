@@ -60,6 +60,7 @@ const DEFAULT_LABELS: Record<FormFieldType, string> = {
   phone: 'Phone number',
   select: 'Choose one',
   multiselect: 'Choose many',
+  file: 'File',
 };
 
 /**

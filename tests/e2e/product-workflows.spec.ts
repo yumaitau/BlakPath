@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { ADMIN_PASSWORD, signInAndSelectOrganisation } from './helpers/auth';
 import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
@@ -172,8 +172,9 @@ test('account security fails safely and sign-out ends the session', async ({ pag
   await page.goto('/settings/security');
   await expect(page.getByRole('heading', { name: 'Account security' })).toBeVisible();
 
-  await test.step('passkey empty state', async () => {
-    await expect(page.getByText('You don’t have any passkeys yet.')).toBeVisible();
+  await test.step('bootstrap passkey listed', async () => {
+    // The seed enrols a bootstrap passkey so the administrator meets staff MFA.
+    await expect(page.getByText('Development bootstrap passkey')).toBeVisible();
   });
 
   await test.step('MFA fail-safe', async () => {
@@ -191,6 +192,6 @@ test('account security fails safely and sign-out ends the session', async ({ pag
   const protectedResponse = await page.request.get('/api/notifications');
   expect(protectedResponse.status()).toBe(401);
   await page.goto('/dashboard');
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
   expectNoPageErrors(pageErrors);
 });

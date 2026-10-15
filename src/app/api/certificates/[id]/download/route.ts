@@ -1,20 +1,17 @@
 import { NextResponse } from 'next/server';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import { getDownloadUrl } from '@/domains/certificates';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * GET /api/certificates/[id]/download — mint a short-lived presigned URL for a
  * signed, non-revoked certificate PDF and redirect to it.
  */
-export async function GET(
+export const GET = tenantHandler(async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const { url } = await withRequestTenant(() => getDownloadUrl(id));
-    return NextResponse.redirect(url);
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const { url } = await withRequestTenant(() => getDownloadUrl(id));
+  return NextResponse.redirect(url);
+});

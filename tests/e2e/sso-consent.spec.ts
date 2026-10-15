@@ -1,13 +1,14 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { DEV_TENANT_B } from '../../src/db/seeds/dev-tenants';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
 import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 /**
- * SSO bindings + consent gate. Federated session issuance stays open work.
- * This locks the shippable surface: bindings list, representative access
- * without live consent, and SCIM with no bearer.
+ * SSO bindings + consent gate (#26). Federated sign-in itself is covered by
+ * `sso-sign-in.spec.ts`; this locks the shippable surface: bindings list
+ * gated, consent CRUD works, representative access without live consent is
+ * denied and audited.
  */
 test('sso bindings, consent gate, and SCIM-off denial', async ({ page, request }) => {
   const pageErrors = watchForPageErrors(page);

@@ -3,14 +3,20 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { hash as argon2Hash } from '@node-rs/argon2';
 import { uuidv7 } from 'uuidv7';
 import { db, sqlClient } from '@/db/client';
+import { decideDevSeed } from '@/db/seeds/dev-seed-policy';
 import { env } from '@/lib/env';
 import {
   accounts,
+  applicationNotes,
+  applicationStatusHistory,
   applications,
+  certificateTemplates,
   clients,
+  evidenceRequests,
   memberships,
   membershipRoles,
   organisations,
+  passkeys,
   permissions,
   rolePermissions,
   roles,
@@ -18,6 +24,10 @@ import {
   teams,
   users,
 } from '@/db/schema';
+import {
+  DEFAULT_CERTIFICATE_WORDING,
+  templateContentHash,
+} from '@/domains/certificates/template';
 import { PERMISSION_SEED } from '@/lib/permissions/catalog';
 import { SYSTEM_ROLES, SYSTEM_ROLE_SEED } from '@/lib/permissions/roles';
 import { DEV_TEAM_FIXTURE, DEV_TENANT_B } from '@/db/seeds/dev-tenants';
@@ -26,12 +36,15 @@ import { DEV_TEAM_FIXTURE, DEV_TENANT_B } from '@/db/seeds/dev-tenants';
  * Idempotent database seed.
  *
  * Seeds the two things the application cannot run without: the permission
- * catalogue and the system role templates (with their permission grants). In
- * non-production it also creates a bootstrap organisation and administrator so a
+ * catalogue and the system role templates (with their permission grants). Local
+ * development can also create a bootstrap organisation and administrator so a
  * developer can sign in and exercise the app end to end.
  *
- * SAFETY: the developer bootstrap is refused when NODE_ENV=production. Seeding
- * is idempotent — re-running never duplicates rows.
+ * SAFETY: developer accounts require ALLOW_DEV_SEED=1 and a loopback database
+ * host. NODE_ENV=production never creates them. Any other non-local host fails
+ * the process. Seeding is idempotent — re-running never duplicates rows.
+ * Further organisations are created with `pnpm org:provision`, which does not
+ * grant the operator a tenant membership.
  */
 
 const ARGON2_OPTIONS = {
@@ -129,6 +142,53 @@ async function ensureCredentialUser(input: {
   return userId;
 }
 
+/**
+ * Staff fixture user: credential login plus the development passkey, so the
+ * second-factor gate lets the browser suite into the workspace.
+ */
+async function ensureStaffUser(input: {
+  email: string;
+  name: string;
+  password: string;
+}): Promise<string> {
+  const userId = await ensureCredentialUser(input);
+  await ensureDevPasskey(userId);
+  return userId;
+}
+
+/** Insert one fixture application with its applicant name sealed like the services do. */
+async function ensureSealedApplication(input: {
+  id: string;
+  organisationId: string;
+  reference: string;
+  applicantName: string;
+  clientId: string;
+}): Promise<void> {
+  const [existing] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(eq(applications.id, input.id))
+    .limit(1);
+  if (existing) return;
+  const { sealApplicationFields } = await import('@/lib/encryption/tenant-fields');
+  const sealed = await sealApplicationFields(input.organisationId, input.id, {
+    applicantName: input.applicantName,
+    reference: input.reference,
+  });
+  if (!sealed.applicantName) throw new Error('Seed applicant name was not sealed');
+  await db.insert(applications).values({
+    id: input.id,
+    organisationId: input.organisationId,
+    reference: input.reference,
+    applicantName: sealed.applicantName,
+    referenceBidx: sealed.referenceBidx,
+    applicantNameBidx: sealed.applicantNameBidx,
+    applicantNameTokenBidx: sealed.applicantNameTokenBidx,
+    clientId: input.clientId,
+    status: 'draft',
+  });
+}
+
 async function ensureActiveMembership(
   organisationId: string,
   userId: string,
@@ -182,17 +242,36 @@ const DEVELOPMENT_ROLES = [
   'records-officer',
 ] as const;
 
-/** Non-production only: a ready-to-use organisation + admin login. */
-async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void> {
-  if (env.NODE_ENV === 'production') {
-    console.info('[seed] production — skipping developer bootstrap');
-    return;
-  }
+/**
+ * Local bootstrap accounts that hold staff roles need a registered passkey so
+ * password sign-in can open the workspace. The credential is not a real
+ * WebAuthn key and is never created in production.
+ */
+async function ensureDevPasskey(userId: string): Promise<void> {
+  const [existing] = await db
+    .select({ id: passkeys.id })
+    .from(passkeys)
+    .where(eq(passkeys.userId, userId))
+    .limit(1);
+  if (existing) return;
+  await db.insert(passkeys).values({
+    id: uuidv7(),
+    userId,
+    name: 'Development bootstrap passkey',
+    credentialID: `dev-bootstrap-${userId}`,
+    publicKey: 'development-bootstrap-passkey',
+    counter: 0,
+  });
+}
 
+/** Local opt-in only: a ready-to-use organisation + admin login. */
+async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void> {
   const adminEmail = 'admin@blakpath.local';
   const devPassword = 'blakpath-dev-admin-2026';
   const staffEmail = 'staff@blakpath.local';
   const staffPassword = 'blakpath-dev-staff-2026';
+  const pendingMfaEmail = 'mfa-pending@blakpath.local';
+  const pendingMfaPassword = 'blakpath-dev-mfa-2026';
 
   const orgId = uuidv7();
   await db
@@ -201,6 +280,8 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
       id: orgId,
       legalName: 'BlakPath Development Organisation',
       slug: 'dev-org',
+      // Non-production only. Production uses activateOrganisation, which
+      // refuses until the key handshake has passed.
       status: 'active',
       publicApplicationsOpen: true,
     })
@@ -213,6 +294,8 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
     .where(eq(organisations.slug, 'dev-org'))
     .limit(1);
   const organisationId = orgRow[0]?.id ?? orgId;
+  const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+  await ensureOrganisationKey(organisationId);
 
   const [existingUser] = await db
     .select({ id: users.id })
@@ -236,6 +319,7 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
       password: await argon2Hash(devPassword, ARGON2_OPTIONS),
     });
   }
+  await ensureDevPasskey(userId);
 
   const [existingMembership] = await db
     .select({ id: memberships.id })
@@ -276,6 +360,36 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
     }
   }
 
+  await db
+    .update(organisations)
+    .set({ abn: '51824753556' })
+    .where(and(eq(organisations.id, organisationId), isNull(organisations.abn)));
+
+  const [existingTemplate] = await db
+    .select({ id: certificateTemplates.id })
+    .from(certificateTemplates)
+    .where(eq(certificateTemplates.organisationId, organisationId))
+    .limit(1);
+  if (!existingTemplate) {
+    const signatoryName = 'Dev Admin';
+    const signatoryRole = 'Development signatory';
+    await db.insert(certificateTemplates).values({
+      id: uuidv7(),
+      organisationId,
+      templateVersion: 1,
+      wording: DEFAULT_CERTIFICATE_WORDING,
+      signatoryName,
+      signatoryRole,
+      contentHash: templateContentHash({
+        wording: DEFAULT_CERTIFICATE_WORDING,
+        signatoryName,
+        signatoryRole,
+        logoSha256: null,
+      }),
+      createdByUserId: userId,
+    });
+  }
+
   console.info('[seed] developer bootstrap ensured:');
   console.info(`         org:      dev-org (${organisationId})`);
   console.info(`         login:    ${adminEmail}`);
@@ -306,10 +420,292 @@ async function seedDevBootstrap(roleIdBySlug: Map<string, string>): Promise<void
       password: await argon2Hash(staffPassword, ARGON2_OPTIONS),
     });
   }
+  const [staffUser] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, staffEmail))
+    .limit(1);
+  if (staffUser) await ensureDevPasskey(staffUser.id);
   console.info(`         spare:    ${staffEmail} / ${staffPassword} (no membership)`);
+
+  // Staff membership with no second factor, so the enrolment gate can be
+  // exercised locally. Do not attach a passkey or a verified TOTP row.
+  const intakeRoleId = roleIdBySlug.get('intake-officer');
+  if (!intakeRoleId) {
+    throw new Error('intake-officer system role is missing');
+  }
+  const [existingPending] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, pendingMfaEmail))
+    .limit(1);
+  const pendingUserId = existingPending?.id ?? uuidv7();
+  if (!existingPending) {
+    await db.insert(users).values({
+      id: pendingUserId,
+      name: 'Dev Staff Pending MFA',
+      email: pendingMfaEmail,
+      emailVerified: true,
+    });
+    await db.insert(accounts).values({
+      id: uuidv7(),
+      userId: pendingUserId,
+      providerId: 'credential',
+      accountId: pendingUserId,
+      password: await argon2Hash(pendingMfaPassword, ARGON2_OPTIONS),
+    });
+  }
+  const [existingPendingMembership] = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, organisationId),
+        eq(memberships.userId, pendingUserId),
+      ),
+    )
+    .limit(1);
+  const pendingMembershipId = existingPendingMembership?.id ?? uuidv7();
+  if (!existingPendingMembership) {
+    await db.insert(memberships).values({
+      id: pendingMembershipId,
+      organisationId,
+      userId: pendingUserId,
+      status: 'active',
+    });
+  }
+  await db
+    .insert(membershipRoles)
+    .values({ id: uuidv7(), membershipId: pendingMembershipId, roleId: intakeRoleId })
+    .onConflictDoNothing({
+      target: [membershipRoles.membershipId, membershipRoles.roleId],
+    });
+  console.info(
+    `         pending:  ${pendingMfaEmail} / ${pendingMfaPassword} (no second factor)`,
+  );
+
+  await seedApplicantPortalFixture({
+    organisationId,
+    adminUserId: userId,
+    applicantRoleId: roleIdBySlug.get('applicant'),
+  });
 
   await seedSecondCouncil(roleIdBySlug);
   await seedTeamReadFixture(roleIdBySlug, organisationId);
+}
+
+/**
+ * Non-production applicant account plus one own case and one other case.
+ * The portal end-to-end test uses these references. Re-running the seed does
+ * not duplicate them.
+ */
+async function seedApplicantPortalFixture(input: {
+  organisationId: string;
+  adminUserId: string;
+  applicantRoleId: string | undefined;
+}): Promise<void> {
+  // Seal applicant data under the dev organisation key, like the services do.
+  const { sealApplicationFields, sealNoteBody } =
+    await import('@/lib/encryption/tenant-fields');
+  const must = (value: string | undefined): string => {
+    if (!value) throw new Error('Seed applicant name was not sealed');
+    return value;
+  };
+  const applicantEmail = 'applicant@blakpath.local';
+  const applicantPassword = 'blakpath-dev-applicant-2026';
+  const [existingApplicant] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, applicantEmail))
+    .limit(1);
+  const applicantUserId = existingApplicant?.id ?? uuidv7();
+  if (!existingApplicant) {
+    await db.insert(users).values({
+      id: applicantUserId,
+      name: 'Dev Applicant',
+      email: applicantEmail,
+      emailVerified: true,
+    });
+    await db.insert(accounts).values({
+      id: uuidv7(),
+      userId: applicantUserId,
+      providerId: 'credential',
+      accountId: applicantUserId,
+      password: await argon2Hash(applicantPassword, ARGON2_OPTIONS),
+    });
+  }
+
+  const [existingMembership] = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organisationId, input.organisationId),
+        eq(memberships.userId, applicantUserId),
+      ),
+    )
+    .limit(1);
+  const membershipId = existingMembership?.id ?? uuidv7();
+  if (!existingMembership) {
+    await db.insert(memberships).values({
+      id: membershipId,
+      organisationId: input.organisationId,
+      userId: applicantUserId,
+      status: 'active',
+    });
+  }
+  if (!input.applicantRoleId) {
+    throw new Error('Seed requires the applicant system role.');
+  }
+  await db
+    .insert(membershipRoles)
+    .values({ id: uuidv7(), membershipId, roleId: input.applicantRoleId })
+    .onConflictDoNothing({
+      target: [membershipRoles.membershipId, membershipRoles.roleId],
+    });
+
+  const [ownCase] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.organisationId, input.organisationId),
+        eq(applications.reference, 'APP-OWN-CASE'),
+      ),
+    )
+    .limit(1);
+  if (!ownCase) {
+    const applicationId = uuidv7();
+    const sealed = await sealApplicationFields(input.organisationId, applicationId, {
+      applicantName: 'Dev Applicant',
+      reference: 'APP-OWN-CASE',
+    });
+    await db.insert(applications).values({
+      id: applicationId,
+      organisationId: input.organisationId,
+      reference: 'APP-OWN-CASE',
+      applicantUserId,
+      applicantName: must(sealed.applicantName),
+      referenceBidx: sealed.referenceBidx,
+      applicantNameBidx: sealed.applicantNameBidx,
+      applicantNameTokenBidx: sealed.applicantNameTokenBidx,
+      status: 'awaiting_evidence',
+      createdByUserId: input.adminUserId,
+      submittedAt: new Date('2026-09-02T01:00:00.000Z'),
+    });
+    await db.insert(applicationStatusHistory).values([
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: null,
+        toStatus: 'draft',
+        action: 'create',
+        actorUserId: applicantUserId,
+        createdAt: new Date('2026-09-01T01:00:00.000Z'),
+      },
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: 'draft',
+        toStatus: 'submitted',
+        action: 'submit',
+        actorUserId: applicantUserId,
+        createdAt: new Date('2026-09-02T01:00:00.000Z'),
+      },
+      {
+        id: uuidv7(),
+        organisationId: input.organisationId,
+        applicationId,
+        fromStatus: 'submitted',
+        toStatus: 'awaiting_evidence',
+        action: 'request_evidence',
+        actorUserId: input.adminUserId,
+        createdAt: new Date('2026-09-03T01:00:00.000Z'),
+      },
+    ]);
+    const sharedNoteId = uuidv7();
+    const staffNoteId = uuidv7();
+    await db.insert(applicationNotes).values([
+      {
+        id: sharedNoteId,
+        organisationId: input.organisationId,
+        applicationId,
+        authorUserId: input.adminUserId,
+        body: await sealNoteBody(
+          input.organisationId,
+          sharedNoteId,
+          'Please bring a birth certificate if you have one.',
+        ),
+        visibility: 'shared',
+      },
+      {
+        id: staffNoteId,
+        organisationId: input.organisationId,
+        applicationId,
+        authorUserId: input.adminUserId,
+        body: await sealNoteBody(
+          input.organisationId,
+          staffNoteId,
+          'Internal staffing note not for the applicant.',
+        ),
+        visibility: 'staff',
+      },
+    ]);
+    await db.insert(evidenceRequests).values({
+      id: uuidv7(),
+      organisationId: input.organisationId,
+      applicationId,
+      requestedByUserId: input.adminUserId,
+      description: 'A photo of a birth certificate, if you have one.',
+      status: 'open',
+    });
+  }
+
+  const [otherCase] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.organisationId, input.organisationId),
+        eq(applications.reference, 'APP-OTHER-CASE'),
+      ),
+    )
+    .limit(1);
+  if (!otherCase) {
+    const otherId = uuidv7();
+    const sealed = await sealApplicationFields(input.organisationId, otherId, {
+      applicantName: 'Someone Else',
+      reference: 'APP-OTHER-CASE',
+    });
+    await db.insert(applications).values({
+      id: otherId,
+      organisationId: input.organisationId,
+      reference: 'APP-OTHER-CASE',
+      applicantUserId: input.adminUserId,
+      applicantName: must(sealed.applicantName),
+      referenceBidx: sealed.referenceBidx,
+      applicantNameBidx: sealed.applicantNameBidx,
+      applicantNameTokenBidx: sealed.applicantNameTokenBidx,
+      status: 'submitted',
+      createdByUserId: input.adminUserId,
+    });
+  }
+
+  await db
+    .insert(organisations)
+    .values({
+      id: uuidv7(),
+      legalName: 'Closed Directory Organisation',
+      slug: 'closed-org',
+      status: 'active',
+      publicApplicationsOpen: false,
+    })
+    .onConflictDoNothing({ target: organisations.slug });
+
+  console.info(`         applicant: ${applicantEmail} / ${applicantPassword}`);
+  console.info('         portal:    APP-OWN-CASE (own) and APP-OTHER-CASE (not theirs)');
 }
 
 /**
@@ -334,8 +730,10 @@ async function seedSecondCouncil(roleIdBySlug: Map<string, string>): Promise<voi
     .where(eq(organisations.slug, DEV_TENANT_B.slug))
     .limit(1);
   const organisationId = orgRow?.id ?? DEV_TENANT_B.organisationId;
+  const { ensureOrganisationKey } = await import('@/domains/organisation-keys');
+  await ensureOrganisationKey(organisationId);
 
-  const userId = await ensureCredentialUser({
+  const userId = await ensureStaffUser({
     email: DEV_TENANT_B.adminEmail,
     name: 'Second Council Admin',
     password: DEV_TENANT_B.adminPassword,
@@ -352,17 +750,13 @@ async function seedSecondCouncil(roleIdBySlug: Map<string, string>): Promise<voi
     })
     .onConflictDoNothing({ target: clients.id });
 
-  await db
-    .insert(applications)
-    .values({
-      id: DEV_TENANT_B.applicationId,
-      organisationId,
-      reference: DEV_TENANT_B.applicationReference,
-      applicantName: DEV_TENANT_B.applicantName,
-      clientId: DEV_TENANT_B.clientId,
-      status: 'draft',
-    })
-    .onConflictDoNothing({ target: applications.id });
+  await ensureSealedApplication({
+    id: DEV_TENANT_B.applicationId,
+    organisationId,
+    reference: DEV_TENANT_B.applicationReference,
+    applicantName: DEV_TENANT_B.applicantName,
+    clientId: DEV_TENANT_B.clientId,
+  });
 
   console.info(`[seed] second council ensured: ${DEV_TENANT_B.slug} (${organisationId})`);
   console.info(`         login:    ${DEV_TENANT_B.adminEmail}`);
@@ -399,12 +793,12 @@ async function seedTeamReadFixture(
   const teamId = teamRow?.id;
   if (!teamId) return;
 
-  const assignedUserId = await ensureCredentialUser({
+  const assignedUserId = await ensureStaffUser({
     email: DEV_TEAM_FIXTURE.assignedEmail,
     name: 'E2E Case Officer',
     password: DEV_TEAM_FIXTURE.assignedPassword,
   });
-  const unassignedUserId = await ensureCredentialUser({
+  const unassignedUserId = await ensureStaffUser({
     email: DEV_TEAM_FIXTURE.unassignedEmail,
     name: 'E2E Unassigned Officer',
     password: DEV_TEAM_FIXTURE.unassignedPassword,
@@ -444,27 +838,36 @@ async function seedTeamReadFixture(
     })
     .onConflictDoNothing({ target: clients.id });
 
-  await db
-    .insert(applications)
-    .values({
-      id: DEV_TEAM_FIXTURE.applicationId,
-      organisationId,
-      reference: DEV_TEAM_FIXTURE.applicationReference,
-      applicantName: DEV_TEAM_FIXTURE.applicantName,
-      clientId: DEV_TEAM_FIXTURE.clientId,
-      status: 'draft',
-    })
-    .onConflictDoNothing({ target: applications.id });
+  await ensureSealedApplication({
+    id: DEV_TEAM_FIXTURE.applicationId,
+    organisationId,
+    reference: DEV_TEAM_FIXTURE.applicationReference,
+    applicantName: DEV_TEAM_FIXTURE.applicantName,
+    clientId: DEV_TEAM_FIXTURE.clientId,
+  });
 
   console.info(`[seed] team read fixture ensured: ${DEV_TEAM_FIXTURE.teamSlug}`);
 }
 
 async function main(): Promise<void> {
   console.info('[seed] starting…');
+  const decision = decideDevSeed({
+    nodeEnv: env.NODE_ENV,
+    databaseUrl: env.DATABASE_URL,
+    allowDevSeed: env.ALLOW_DEV_SEED,
+  });
+  if (decision.action === 'refuse') {
+    throw new Error(`[seed] ${decision.reason}`);
+  }
+
   await seedPermissions();
   const roleIdBySlug = await seedRoles();
   await seedRolePermissions(roleIdBySlug);
-  await seedDevBootstrap(roleIdBySlug);
+  if (decision.action === 'create') {
+    await seedDevBootstrap(roleIdBySlug);
+  } else {
+    console.info(`[seed] skipping developer accounts: ${decision.reason}`);
+  }
   console.info('[seed] done');
 }
 

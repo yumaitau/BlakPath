@@ -1,17 +1,20 @@
 import Link from 'next/link';
+import { ForbiddenNotice } from '@/components/errors/forbidden-notice';
 import { FormBuilder } from '@/components/forms/form-builder';
 import {
   FormInvitations,
   type InvitationListItem,
 } from '@/components/forms/form-invitations';
+import { FormResponseActions } from '@/components/forms/form-response-actions';
 import { FormStatusControls } from '@/components/forms/form-status-controls';
+import { handlePageError, isRecordId } from '@/lib/http/page-errors';
 import { withRequestTenant } from '@/lib/http/tenant-route';
-import { parseFieldsJson } from '@/lib/forms/fields';
+import { formatAnswerValue, parseFieldsJson, type FormField } from '@/lib/forms/fields';
 import {
   getForm,
   listInvitations,
   listResponses,
-  type FormInvitationRow,
+  type PublicFormInvitation,
   type FormResponseRow,
   type FormRow,
 } from '@/domains/forms';
@@ -21,8 +24,9 @@ import {
  *
  * Loads a form together with its invitations and responses inside a DB-verified
  * tenant context, then renders the builder, the publish/close controls, the
- * invitation manager, and a plain table of submitted responses. A sign-in
- * prompt is shown if the caller is not authenticated.
+ * invitation manager, and a plain table of submitted responses. An expired
+ * session redirects to sign-in; a missing or forbidden form shows the same
+ * non-committal 403 state; anything else surfaces as the 500 error page.
  *
  * PRODUCT INVARIANT: a form collects information a human provides. It never
  * scores, ranks or determines a person's Aboriginality — responses shown here
@@ -31,23 +35,28 @@ import {
 
 interface LoadedForm {
   form: FormRow;
-  invitations: FormInvitationRow[];
+  invitations: PublicFormInvitation[];
   responses: FormResponseRow[];
 }
 
-/** Render one response's answers as readable key: value lines. */
-function answerEntries(answers: unknown): Array<[string, string]> {
+/** Render one response's answers as readable label: value lines. */
+function answerEntries(
+  fields: FormField[],
+  answers: unknown,
+): Array<{ key: string; label: string; value: string }> {
   if (answers === null || typeof answers !== 'object') return [];
+  const byKey = new Map(fields.map((field) => [field.key, field]));
   return Object.entries(answers as Record<string, unknown>).map(([key, value]) => {
-    let display: string;
-    if (value === null || value === undefined) display = '—';
-    else if (Array.isArray(value)) display = value.map((v) => String(v)).join(', ');
-    else display = String(value);
-    return [key, display];
+    const field = byKey.get(key);
+    return {
+      key,
+      label: field?.label ?? key,
+      value: formatAnswerValue(value, field?.type),
+    };
   });
 }
 
-function toInvitationListItem(row: FormInvitationRow): InvitationListItem {
+function toInvitationListItem(row: PublicFormInvitation): InvitationListItem {
   return {
     id: row.id,
     recipientName: row.recipientName,
@@ -65,28 +74,30 @@ export default async function FormEditorPage({
   const { id } = await params;
 
   let data: LoadedForm | null = null;
-  let error: string | null = null;
-
-  try {
-    data = await withRequestTenant(async () => ({
-      form: await getForm(id),
-      invitations: await listInvitations(id),
-      responses: await listResponses(id),
-    }));
-  } catch {
-    error = 'Sign in and select your organisation to edit this form.';
+  if (isRecordId(id)) {
+    try {
+      data = await withRequestTenant(async () => ({
+        form: await getForm(id),
+        invitations: await listInvitations(id),
+        responses: await listResponses(id),
+      }));
+    } catch (error) {
+      await handlePageError(error);
+    }
   }
 
-  if (error || !data) {
+  if (!data) {
     return (
-      <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
-        <p className="text-muted-foreground">
-          {error ?? 'This form could not be loaded.'}
+      <ForbiddenNotice
+        title="Form unavailable"
+        backHref="/forms"
+        backLabel="Back to forms"
+      >
+        <p>
+          This form does not exist, is outside your organisation, or your role does not
+          allow you to manage it.
         </p>
-        <Link href="/forms" className="text-primary mt-4 inline-block text-sm underline">
-          Back to forms
-        </Link>
-      </div>
+      </ForbiddenNotice>
     );
   }
 
@@ -144,13 +155,20 @@ export default async function FormEditorPage({
                     <span>{response.submittedAt.toLocaleString()}</span>
                   </div>
                   <dl className="grid gap-1 text-sm sm:grid-cols-[max-content_1fr] sm:gap-x-4">
-                    {answerEntries(response.answers).map(([key, value]) => (
-                      <div key={key} className="contents">
-                        <dt className="text-muted-foreground font-medium">{key}</dt>
-                        <dd className="text-foreground">{value}</dd>
+                    {answerEntries(fields, response.answers).map((entry) => (
+                      <div key={entry.key} className="contents">
+                        <dt className="text-muted-foreground font-medium">
+                          {entry.label}
+                        </dt>
+                        <dd className="text-foreground">{entry.value}</dd>
                       </div>
                     ))}
                   </dl>
+                  <FormResponseActions
+                    formId={form.id}
+                    responseId={response.id}
+                    applicationId={response.applicationId}
+                  />
                 </li>
               ))}
             </ul>

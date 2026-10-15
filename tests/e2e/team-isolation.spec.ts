@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import {
   DEV_ORGANISATION_NAME,
   DEV_TEAM_FIXTURE,

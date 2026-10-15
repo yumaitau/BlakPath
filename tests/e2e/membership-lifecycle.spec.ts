@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import {
   ADMIN_EMAIL,
@@ -24,6 +25,7 @@ async function signInAs(page: Page, email: string, password: string): Promise<vo
 test('invite acceptance, role changes and revocation remain tenant-bound', async ({
   browser,
   page,
+  baseURL,
 }) => {
   test.setTimeout(120_000);
   const pageErrors = watchForPageErrors(page);
@@ -57,7 +59,9 @@ test('invite acceptance, role changes and revocation remain tenant-bound', async
   const invitationUrl = await page.getByLabel('Latest invitation link').inputValue();
   expect(invitationUrl).not.toBe(firstInvitationUrl);
 
-  const staffContext = await browser.newContext();
+  const staffContext = await browser.newContext({
+    extraHTTPHeaders: { Origin: baseURL ?? 'http://localhost:3000' },
+  });
   const staffPage = await staffContext.newPage();
   const staffErrors = watchForPageErrors(staffPage);
   try {
