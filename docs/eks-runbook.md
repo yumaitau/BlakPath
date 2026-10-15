@@ -455,7 +455,10 @@ Record who rotated, when, and which keys. Do not record the values.
   Settings and apply steps: `docs/data-tier-capacity.md`. Apply it in
   `ap-southeast-2`, then deploy the namespace through the CD pipeline (#57).
   `/api/ready` is the post-deploy check.
-- RDS Postgres with point-in-time recovery. RDS Proxy in front for failover.
+- RDS Postgres with point-in-time recovery. `infra/aws/backup-plan.example.yaml`
+  keeps 35-day continuous point-in-time recovery and a 90-day daily snapshot in
+  a compliance-locked vault. Do not also enrol the instance in another
+  continuous backup plan. RDS Proxy in front for failover.
   Two roles: `blakpath_migrator` (owner, migrate Job only) and
   `blakpath_app` (runtime DML). See `infra/postgres/audit-roles.sql`.
   Clients connect to the proxy hostname, not an IP and not a CNAME that is
@@ -476,9 +479,9 @@ Record who rotated, when, and which keys. Do not record the values.
   older proxies pinned named protocol statements. The client never issues those.
 - ElastiCache Redis TLS and AUTH token, two nodes, Multi-AZ failover,
   `maxmemory-policy noeviction`, snapshot retention 0. Ephemeral only:
-  queues, rate limits, schedulers.
+  queues, rate limits, schedulers. Not in the backup plan.
 - S3 evidence + quarantine buckets: block public access, enforce TLS,
-  versioning on, AWS Backup coverage. The bucket default CMK is
+  versioning on. Both buckets are in that backup plan. The bucket default CMK is
   `alias/blakpath-prod-evidence`. Per-object SSE-KMS uses the tenant CMK.
   Certificates and exports are objects in the evidence bucket. MinIO exists
   for local dev only and does not send SSE headers.
@@ -665,8 +668,12 @@ refuses in production.
 
 ## Restore drill (EKS variant)
 
-1. Snapshot RDS + S3 point-in-time into an isolated namespace with a
-   separate secret copy. Never restore into `blakpath` or `blakpath-staging`.
+1. Restore RDS and both buckets from a recovery point in the locked BlakPath
+   vault into an isolated namespace with a separate secret copy. Never restore
+   into `blakpath` or `blakpath-staging`. Quarantine objects stay unscanned.
+   Re-apply audited deletions newer than the recovery point
+   (`docs/offboarding.md`). `docs/operations-runbook.md` has the
+   `list-protected-resources` check.
 2. Run migrations, sign in as seeded admin, confirm records present.
    Re-establish the client CMK grant before expecting tenant plaintext. A
    restored backup does not recreate a deleted key.
@@ -712,7 +719,9 @@ same availability zone as their volumes, on two different nodes.
 Audit divergence, oldest quarantined-evidence age
 (`blakpath-oldest-quarantined-age`, 30 minutes), malware-scan dead-letter depth
 (`blakpath-malware-scan-dlq`), dead-letter email/export/retention/webhook jobs,
-backup failures, sustained 5xx / readiness failures, ClamAV signature age above
-48 hours. See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+backup failures (`blakpath-backup-job-failed`), sustained 5xx / readiness
+failures, ClamAV signature age above 48 hours. See
+`infra/aws/operational-alerts.example.yaml` for application log signals and
+`infra/aws/backup-plan.example.yaml` for the backup-job alarm.
 The evidence sweep redrives stuck scans; the age alarm means that redrive is
 not draining.

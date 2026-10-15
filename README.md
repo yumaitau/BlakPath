@@ -230,6 +230,7 @@ lives at the repository root.
 | [`docs/audit-monthly-review.md`](docs/audit-monthly-review.md)               | Monthly tenant audit-log review checklist                                                      |
 | [`docs/threat-model.md`](docs/threat-model.md)                               | Assets, trust boundaries, STRIDE analysis, mitigations, fail-secure                            |
 | [`docs/privacy-architecture.md`](docs/privacy-architecture.md)               | Data minimisation, sovereignty, envelope encryption, AI boundaries                             |
+| [`docs/offboarding.md`](docs/offboarding.md)                                 | Erasure, offboarding, and how long deleted data remains in locked backups                      |
 | [`docs/customer-held-keys.md`](docs/customer-held-keys.md)                   | Client trust pack (draft): key custody modes, revocation, crypto-shredding, auditor checks     |
 | [`docs/adr/0001-customer-held-keys.md`](docs/adr/0001-customer-held-keys.md) | ADR: key custody modes, trust boundaries, escrow; what is implemented and what is deferred     |
 | [`docs/production-readiness.md`](docs/production-readiness.md)               | Production release gate, monitoring, backups and restore drills                                |

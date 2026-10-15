@@ -33,6 +33,9 @@ with resources owned by the production environment.
   `key_health_state_change` is one of those signals.
   `clamav_signature_age` carries `ageHours` and pages when the maximum in an
   hour is greater than 48.
+- `backup-plan.example.yaml` creates one CMK-encrypted backup vault, locks it
+  in compliance mode, and backs up RDS plus the evidence and quarantine buckets.
+  Failed, aborted and expired backup jobs page the same on-call topic.
 - `data-tier.example.yaml` is the RDS Postgres and ElastiCache Redis stack:
   private subnets, customer managed keys, `rds.force_ssl=1`, Redis AUTH and
   `noeviction`. It does not create the RDS Proxy. Settings and the apply steps
@@ -130,6 +133,58 @@ uses the Pod Identity role through its default credential provider chain.
 
 Nothing in this directory is applied by the application or by CI. An account
 owner deploys it.
+
+## Backup vault
+
+`backup-plan.example.yaml` is the production backup control. Apply it only in
+`ap-southeast-2`, after the retention numbers in `docs/offboarding.md` have been
+accepted. The lock's cooling-off is 7 days. After that the lock is compliance
+mode and cannot be removed or relaxed. Changing the vault name or CMK replaces
+the vault. The previous vault is retained and keeps its name, so a replacement
+needs a new vault name.
+
+Retention encoded in the template:
+
+- vault minimum 35 days, vault maximum 90 days;
+- continuous point-in-time recovery, deleted after 35 days;
+- daily snapshot at 03:00 `Australia/Sydney`, deleted after 90 days;
+- no cold storage and no copy out of the vault.
+
+The selection lists the RDS instance (or Aurora cluster), the evidence bucket
+and the quarantine bucket. Quarantine stays in the plan: an upload can contain
+personal information before scanning, and a restore of that bucket must not
+promote or serve those objects. Redis is not a selection. It is ephemeral.
+
+Before the stack is created:
+
+- the vault CMK is a BlakPath customer-managed key in `ap-southeast-2`, passed
+  as a key ARN rather than an alias;
+- that key's policy allows `blakpath-backup-service` and `backup.amazonaws.com`
+  `kms:DescribeKey`, `kms:Decrypt`, `kms:GenerateDataKey` and `kms:CreateGrant`
+  (the service principal restricted with `kms:ViaService` of
+  `backup.ap-southeast-2.amazonaws.com`);
+- the RDS CMK and the bucket default CMK allow the same role to decrypt;
+- evidence, certificate, export and quarantine objects are SSE-KMS under each
+  tenant's own CMK (`organisation_keys`, often in the client's account), not a
+  platform key. Each tenant key policy must also allow `blakpath-backup-service`
+  `kms:Decrypt`. Without it AWS Backup reports the job as successful and skips
+  that tenant's objects. Check object counts per tenant prefix after the first
+  job, not only the job status;
+- both buckets have versioning on, public access blocked, and TLS required;
+- the RDS instance is not already in another continuous backup plan;
+- the on-call SNS topic already allows `cloudwatch.amazonaws.com` to publish.
+
+Open decision before apply: AWS Backup re-encrypts S3 recovery points under
+the vault CMK (independent encryption), not the tenant CMK. Deleting a tenant
+key then does not shred that tenant's objects in S3 recovery points until they
+expire (up to 90 days). That conflicts with the crypto-shredding statement in
+`docs/customer-held-keys.md` section 5. RDS recovery points keep tenant fields
+sealed in-app, so they are not affected.
+
+Recovery points show up in `list-protected-resources` only after the first
+successful job. Alarm response, the test fire, and that check are in
+`docs/operations-runbook.md`. Deleting the CloudFormation stack retains the
+vault; compliance mode would reject deleting it while recovery points exist.
 
 ## Account guardrails
 

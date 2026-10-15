@@ -50,8 +50,10 @@ never mount the migrator secret.
       `ORIGIN_VERIFY_SECRET` in both the runtime secret and the Cloudflare
       request-header transform. Keep the security headers in `next.config.ts`
       enabled. Client addresses come from `clientIp` (`src/lib/http/client-ip.ts`).
-- [ ] Configure database point-in-time recovery and versioned, encrypted object
-      storage backups. Redis is not a durable source of record.
+- [ ] Deploy `infra/aws/backup-plan.example.yaml` in `ap-southeast-2`. The vault
+      is CMK-encrypted and compliance-locked (minimum 35 days, maximum 90 days)
+      with continuous recovery and daily snapshots of RDS, evidence and
+      quarantine. Redis is not a durable source of record.
 - [ ] Use RDS Postgres of at least 2 GiB (`max_connections` ≥ 225) with RDS Proxy
       in front. `DATABASE_URL` must set `sslmode=verify-full` against the proxy
       or instance hostname. The connection budget in `docs/eks-runbook.md` must
@@ -72,7 +74,9 @@ never mount the migrator secret.
       encryption-keys page, its health-check endpoint and the escrow vault in the
       penetration-test scope.
 - [ ] Deploy the workload-role and operational-alarm controls under `infra/aws/`
-      (or reviewed equivalents) and complete an on-call test notification.
+      (or reviewed equivalents). Complete an on-call test notification, including
+      a test fire of `blakpath-backup-job-failed`, and record
+      `list-protected-resources` showing the RDS instance and both buckets.
 - [ ] After ClamAV is applied, record 72 hours that include at least three
       signature updates and zero `blakpath-clamav` container restarts.
 - [ ] Deploy the SES sender (`infra/aws/ses-sending.example.yaml`, ADR 0090).
