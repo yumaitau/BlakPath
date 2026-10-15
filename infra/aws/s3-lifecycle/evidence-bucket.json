@@ -1,0 +1,19 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-exports",
+      "Status": "Enabled",
+      "Filter": { "Tag": { "Key": "blakpath-lifecycle", "Value": "export" } },
+      "Expiration": { "Days": 7 },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 1 }
+    },
+    {
+      "ID": "expire-noncurrent-versions",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 30 },
+      "Expiration": { "ExpiredObjectDeleteMarker": true },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}

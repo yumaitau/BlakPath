@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: blakpath
-  labels:
-    # AWS Load Balancer Controller injects target-health readiness gates.
-    # Pods stay out of the ALB until the target is healthy, including during
-    # a rolling start. Requires the controller; the label alone does nothing.
-    elbv2.k8s.aws/pod-readiness-gate-inject: enabled

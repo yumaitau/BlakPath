@@ -27,6 +27,7 @@ export const FORM_FIELD_TYPES = [
   'phone',
   'select',
   'multiselect',
+  'file',
 ] as const;
 
 export type FormFieldType = (typeof FORM_FIELD_TYPES)[number];
@@ -43,6 +44,7 @@ export const FIELD_TYPE_LABELS: Record<FormFieldType, string> = {
   phone: 'Phone number',
   select: 'Choose one',
   multiselect: 'Choose many',
+  file: 'File',
 };
 
 /** Shared properties every field carries. `key` is the stable answer key. */
@@ -91,6 +93,7 @@ export const FormFieldSchema = z.discriminatedUnion('type', [
     type: z.literal('multiselect'),
     options: z.array(z.string().trim().min(1).max(120)).min(1).max(50),
   }),
+  FieldBase.extend({ type: z.literal('file') }),
 ]);
 
 export type FormField = z.infer<typeof FormFieldSchema>;
@@ -143,6 +146,10 @@ function valueSchemaForField(field: FormField): z.ZodTypeAny {
       return z.enum(field.options as [string, ...string[]]);
     case 'multiselect':
       return z.array(z.enum(field.options as [string, ...string[]])).min(1);
+    case 'file':
+      // The answer is the evidence id. Bytes never travel in the JSON body;
+      // they go through the quarantine upload and are scanned like other evidence.
+      return z.uuid();
   }
 }
 
@@ -171,6 +178,72 @@ export function validateResponse(
   return buildResponseSchema(fields).safeParse(answers) as z.ZodSafeParseResult<
     Record<string, unknown>
   >;
+}
+
+/**
+ * A form file may be submitted once the upload has entered the scan pipeline
+ * (`quarantined`) or finished clean. `pending` means the bytes were never
+ * confirmed. Infected and rejected files are not answers.
+ */
+export function isSubmittableFormFileStatus(status: string): boolean {
+  return status === 'quarantined' || status === 'clean';
+}
+
+/** True when a saved draft is still inside its expiry. A missing expiry is dead. */
+export function draftIsCurrent(
+  expiresAt: Date | string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (expiresAt == null) return false;
+  const time = expiresAt instanceof Date ? expiresAt.getTime() : Date.parse(expiresAt);
+  return Number.isFinite(time) && time > now.getTime();
+}
+
+export type DraftParseResult =
+  { success: true; data: Record<string, unknown> } | { success: false };
+
+function isBlankDraftValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return true;
+  return Array.isArray(value) && value.length === 0;
+}
+
+/**
+ * Validate a partial answer set for a draft. Required fields may be omitted.
+ * Present values must still match the field type. Unknown keys are dropped.
+ */
+export function validateDraft(
+  fields: readonly FormField[],
+  answers: unknown,
+): DraftParseResult {
+  if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
+    return { success: false };
+  }
+
+  const byKey = new Map(fields.map((field) => [field.key, field]));
+  const data: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(answers as Record<string, unknown>)) {
+    const field = byKey.get(key);
+    if (!field) continue;
+    if (field.type !== 'boolean' && isBlankDraftValue(value)) continue;
+    const parsed = valueSchemaForField(field).safeParse(value);
+    if (!parsed.success) return { success: false };
+    data[key] = parsed.data;
+  }
+
+  return { success: true, data };
+}
+
+/** Staff-facing display for one answer. File bytes are never inlined. */
+export function formatAnswerValue(value: unknown, type?: FormFieldType): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (type === 'file') return 'File uploaded';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.map((item) => String(item)).join(', ') : '—';
+  }
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
 }
 
 /** Loose-but-safe guard for a `fields` value coming out of a JSONB column. */

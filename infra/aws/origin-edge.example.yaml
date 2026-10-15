@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath origin certificate, regional WAF web ACL, and Authenticated Origin
+  Pull trust store for ap-southeast-2. Deploy only after the CA bundle object
+  exists. Do not put the shared Cloudflare origin-pull CA in that bundle.
+  Publish the ACM validation name in the zone as DNS-only, then copy the
+  stack outputs into infra/k8s/base/service-ingress.yaml. Set the zone SSL/TLS
+  mode to Full (strict) before sending production traffic.
+
+Parameters:
+  Hostname:
+    Type: String
+    Default: blakpath.yumait.au
+  AopCaBundleBucket:
+    Type: String
+    Description: Private bucket holding the zone-level or per-hostname origin-pull CA PEM.
+  AopCaBundleKey:
+    Type: String
+    Description: Object key of that CA bundle. Do not upload a private key.
+
+Resources:
+  OriginCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref Hostname
+      ValidationMethod: DNS
+      KeyAlgorithm: EC_prime256v1
+
+  OriginWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: blakpath-origin
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: blakpath-origin
+      Rules:
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 10
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: blakpath-ip-reputation
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 20
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              RuleActionOverrides:
+                - Name: SizeRestrictions_BODY
+                  ActionToUse:
+                    Count: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: blakpath-common
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 30
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: blakpath-bad-inputs
+        - Name: AWSManagedRulesSQLiRuleSet
+          Priority: 40
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: blakpath-sqli
+
+  OriginPullTrustStore:
+    Type: AWS::ElasticLoadBalancingV2::TrustStore
+    Properties:
+      Name: blakpath-cloudflare-aop
+      CaCertificatesBundleS3Bucket: !Ref AopCaBundleBucket
+      CaCertificatesBundleS3Key: !Ref AopCaBundleKey
+
+Outputs:
+  CertificateArn:
+    Value: !Ref OriginCertificate
+  WebAclArn:
+    Value: !GetAtt OriginWebAcl.Arn
+  TrustStoreArn:
+    Value: !GetAtt OriginPullTrustStore.TrustStoreArn

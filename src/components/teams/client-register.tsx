@@ -1,15 +1,28 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 import type { ClientRow } from '@/domains/teams';
 
-/** Client register. Lists tenant clients, registers new ones. */
-export function ClientRegister({ initial }: { initial: ClientRow[] }) {
+/** Client register. Lists tenant clients, registers new ones, assigns teams. */
+export function ClientRegister({
+  initial,
+  teams,
+  canAssign,
+}: {
+  initial: ClientRow[];
+  teams: Array<{ id: string; name: string }>;
+  canAssign: boolean;
+}) {
+  const router = useRouter();
+  const hydrated = useHydrated();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [teamByClient, setTeamByClient] = useState<Record<string, string>>({});
 
   function onCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -34,10 +47,42 @@ export function ClientRegister({ initial }: { initial: ClientRow[] }) {
         setMessage('Could not register client.');
         return;
       }
-      setMessage('Client registered. Refresh to see them.');
+      setMessage('Client registered.');
       setName('');
       setEmail('');
+      router.refresh();
     });
+  }
+
+  function onAssign(e: React.FormEvent, clientId: string) {
+    e.preventDefault();
+    const assignedTeamId = teamByClient[clientId];
+    if (!assignedTeamId) {
+      setMessage('Choose a team.');
+      return;
+    }
+    startTransition(async () => {
+      const res = await fetch(`/api/clients/${clientId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignedTeamId }),
+      });
+      if (res.status === 403) {
+        setMessage('No permission to assign this client.');
+        return;
+      }
+      if (!res.ok) {
+        setMessage('Could not assign client.');
+        return;
+      }
+      setMessage('Client assigned to team.');
+      router.refresh();
+    });
+  }
+
+  function teamName(teamId: string | null): string | null {
+    if (!teamId) return null;
+    return teams.find((team) => team.id === teamId)?.name ?? null;
   }
 
   return (
@@ -52,14 +97,56 @@ export function ClientRegister({ initial }: { initial: ClientRow[] }) {
         {initial.length === 0 ? (
           <li className="text-muted-foreground p-3 text-sm">No clients yet.</li>
         ) : null}
-        {initial.map((c) => (
-          <li key={c.id} className="p-3 text-sm">
-            <span className="font-medium">{c.displayName}</span>
-            {c.contactEmail ? (
-              <span className="text-muted-foreground"> · {c.contactEmail}</span>
-            ) : null}
-          </li>
-        ))}
+        {initial.map((c) => {
+          const assigned = teamName(c.assignedTeamId);
+          return (
+            <li key={c.id} className="flex flex-col gap-2 p-3 text-sm">
+              <div>
+                <span className="font-medium">{c.displayName}</span>
+                {c.contactEmail ? (
+                  <span className="text-muted-foreground"> · {c.contactEmail}</span>
+                ) : null}
+                <span className="text-muted-foreground">
+                  {' '}
+                  · {assigned ? `Team: ${assigned}` : 'No team'}
+                </span>
+              </div>
+              {canAssign ? (
+                <form
+                  onSubmit={(event) => onAssign(event, c.id)}
+                  className="flex flex-wrap items-end gap-2"
+                  aria-label={`Assign ${c.displayName} to a team`}
+                >
+                  <label htmlFor={`client-team-${c.id}`} className="text-xs font-medium">
+                    Team
+                  </label>
+                  <select
+                    disabled={!hydrated}
+                    id={`client-team-${c.id}`}
+                    className="rounded border px-2 py-1 text-sm"
+                    value={teamByClient[c.id] ?? c.assignedTeamId ?? ''}
+                    onChange={(event) =>
+                      setTeamByClient((current) => ({
+                        ...current,
+                        [c.id]: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">Choose team</option>
+                    {teams.map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Button type="submit" size="sm" disabled={!hydrated || pending}>
+                    Assign team
+                  </Button>
+                </form>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
       <form
         onSubmit={onCreate}
@@ -89,7 +176,7 @@ export function ClientRegister({ initial }: { initial: ClientRow[] }) {
             onChange={(e) => setEmail(e.target.value)}
           />
         </div>
-        <Button type="submit" size="sm" disabled={pending}>
+        <Button type="submit" size="sm" disabled={!hydrated || pending}>
           Register client
         </Button>
       </form>

@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
 
 # Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
@@ -15,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '24.21.0'
   PNPM_VERSION: '9.12.0'
 
 jobs:
@@ -27,16 +28,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -52,6 +53,14 @@ jobs:
 
       - name: Format check
         run: pnpm format:check
+
+      - name: Unused dependencies
+        run: pnpm deps:check
+
+      - name: Migration journal matches schema
+        env:
+          DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
+        run: pnpm db:drift
 
   # ---------------------------------------------------------------------------
   # Unit + integration tests. Integration tests get real Postgres + Redis.
@@ -85,12 +94,13 @@ jobs:
           --health-retries 5
     env:
       NODE_ENV: test
+      ALLOW_DEV_SEED: '1'
       DATABASE_URL: postgres://blakpath:blakpath@localhost:5432/blakpath_test
       REDIS_URL: redis://localhost:6379
       # Test-only secrets — never real. Satisfy env validation at import time.
       BETTER_AUTH_SECRET: ci-test-secret-value-at-least-32-characters-long
       BETTER_AUTH_URL: http://localhost:3000
-      ENCRYPTION_MASTER_KEY: dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtMTIzNDU=
+      ENCRYPTION_MASTER_KEY: Ymxha3BhdGgtY2ktdGVzdC1tYXN0ZXIta2V5LTMyYiE=
       ENCRYPTION_KEY_VERSION: '1'
       S3_ENDPOINT: http://localhost:9000
       S3_ACCESS_KEY_ID: test
@@ -99,16 +109,16 @@ jobs:
       SMTP_HOST: localhost
       RUN_INTEGRATION: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -122,8 +132,10 @@ jobs:
       - name: Seed development bootstrap
         run: pnpm db:seed
 
-      - name: Run tests
-        run: pnpm test
+      - name: Run tests with coverage
+        # pnpm 9 treats a bare `--coverage` as its own option and rejects it.
+        # The separator forwards the flag to `vitest run`.
+        run: pnpm test -- --coverage
 
   # ---------------------------------------------------------------------------
   # Production build. Ensures the Next.js standalone output compiles.
@@ -139,26 +151,29 @@ jobs:
       DATABASE_URL: postgres://blakpath:blakpath@localhost:5432/blakpath
       REDIS_URL: redis://localhost:6379
       BETTER_AUTH_SECRET: ci-build-secret-value-at-least-32-characters-long
-      ENCRYPTION_MASTER_KEY: dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtMTIzNDU=
+      ENCRYPTION_MASTER_KEY: Ymxha3BhdGgtY2ktdGVzdC1tYXN0ZXIta2V5LTMyYiE=
       S3_ACCESS_KEY_ID: test
       S3_SECRET_ACCESS_KEY: test-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Bundle release gate
+        run: pnpm release:check:bundle
 
       - name: Build
         run: pnpm build
@@ -186,43 +201,63 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
+      # Runtime profile stays development: the production release gate needs
+      # real KMS, SES and managed S3. The server is still a production build
+      # (see the build step), served by `next start`, not `next dev`.
       NODE_ENV: development
+      PLAYWRIGHT_SERVER: production
+      NEXT_TELEMETRY_DISABLED: '1'
+      ALLOW_DEV_SEED: '1'
       DATABASE_URL: postgres://blakpath:blakpath@localhost:5432/blakpath_e2e
       REDIS_URL: redis://localhost:6379
       BETTER_AUTH_SECRET: ci-e2e-secret-value-at-least-32-characters-long
       BETTER_AUTH_URL: http://localhost:3000
       APP_URL: http://localhost:3000
-      ENCRYPTION_MASTER_KEY: dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtMTIzNDU=
+      ENCRYPTION_MASTER_KEY: Ymxha3BhdGgtY2ktdGVzdC1tYXN0ZXIta2V5LTMyYiE=
       S3_ENDPOINT: http://localhost:9000
       S3_ACCESS_KEY_ID: test
       S3_SECRET_ACCESS_KEY: test-secret
       CLAMAV_HOST: localhost
       SMTP_HOST: localhost
       RUN_EVIDENCE_E2E: 'true'
+      # Federated sign-in journey against the in-test mock IdP (no real tenant).
+      SSO_ENTRA_CLIENT_ID: e2e-mock-client
+      SSO_ENTRA_CLIENT_SECRET: e2e-mock-client-secret
+      SSO_STATE_SECRET: ci-e2e-sso-state-secret-at-least-32-characters
+      SSO_E2E_IDP_PORT: '4455'
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - name: Build production server
+        # `next build` must run as production. Playwright then serves this
+        # output with `next start`, which uses far less memory than `next dev`
+        # and has no on-demand compilation.
+        env:
+          NODE_ENV: production
+        run: pnpm build
       - name: Start evidence object storage
         run: |
+          # Same digest as docker-compose.yml. Docker Hub no longer serves MinIO.
           docker run -d --name blakpath-e2e-minio \
             -p 9000:9000 \
             -e MINIO_ROOT_USER=test \
             -e MINIO_ROOT_PASSWORD=test-secret \
-            minio/minio:latest server /data
+            chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56 server /data
           for attempt in {1..30}; do
             curl -fsS http://localhost:9000/minio/health/ready && break
             sleep 1
           done
-          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest -c '
+          docker run --rm --network host --entrypoint /bin/sh \
+            chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56 -c '
             mc alias set local http://localhost:9000 test test-secret &&
             mc mb --ignore-existing local/blakpath-quarantine local/blakpath-evidence
           '
@@ -236,12 +271,6 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_ENV"
       - run: pnpm test:e2e
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: playwright-report/
 
   # ---------------------------------------------------------------------------
   # EKS manifests. Kustomize must build cleanly; no cluster required.
@@ -251,7 +280,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
-      - name: Build kustomization
-        run: kubectl kustomize infra/k8s > /dev/null && echo "kustomize build OK"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5.2.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Render staging and production overlays
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/kustomize"
+          mkdir -p "$out"
+          for env in staging production; do
+            kubectl kustomize "infra/k8s/overlays/$env" > "$out/$env.yaml"
+            kubectl kustomize "infra/k8s/overlays/$env/jobs" > "$out/$env-jobs.yaml"
+            kubectl kustomize "infra/k8s/overlays/$env/release-check" > "$out/$env-release-check.yaml"
+          done
+          kubectl kustomize infra/k8s/cluster > /dev/null
+          node scripts/check-k8s-overlays.mjs "$out"

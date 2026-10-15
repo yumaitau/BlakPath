@@ -23,6 +23,12 @@ export const addTeamMemberSchema = z.object({
 });
 export type AddTeamMemberInput = z.input<typeof addTeamMemberSchema>;
 
+export const removeTeamMemberSchema = z.object({
+  teamId: z.uuid(),
+  userId: z.uuid(),
+});
+export type RemoveTeamMemberInput = z.input<typeof removeTeamMemberSchema>;
+
 export const createGroupSchema = z.object({
   slug,
   name: z.string().trim().min(1).max(200),
@@ -36,6 +42,12 @@ export const addGroupMemberSchema = z.object({
   userId: z.uuid(),
 });
 export type AddGroupMemberInput = z.input<typeof addGroupMemberSchema>;
+
+export const removeGroupMemberSchema = z.object({
+  groupId: z.uuid(),
+  userId: z.uuid(),
+});
+export type RemoveGroupMemberInput = z.input<typeof removeGroupMemberSchema>;
 
 export const createClientSchema = z.object({
   displayName: z.string().trim().min(1).max(200),

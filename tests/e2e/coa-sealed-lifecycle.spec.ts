@@ -1,89 +1,129 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 /**
- * Full Confirmation of Aboriginality lifecycle through to a KMS-sealed
- * certificate: intake → review → committee transitions → human decision
- * (propose/vote/finalise) → generate → sign → public verify shows valid
- * with a verified digital seal. Asserts the software never determines —
- * every outcome comes from explicit human-recorded API calls.
+ * Full Confirmation of Aboriginality lifecycle through to a sealed certificate:
+ * intake → review → human decision (propose/vote/finalise) → generate → sign →
+ * download → public verify. Every outcome is an explicit human-recorded call.
+ * Committee agenda editing has no HTTP route; meetings stay in calendar-journeys.
  */
 test('coa sealed lifecycle: decide, sign, publicly verify', async ({ page }) => {
   test.setTimeout(120_000);
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
+  const pageErrors = watchForPageErrors(page);
   await signInAndSelectOrganisation(page);
   const api = page.request;
   const stamp = Date.now();
+  let applicationId = '';
+  let decisionId = '';
+  let certificateId = '';
+  let verificationCode = '';
 
-  const app = (await (
-    await api.post('/api/applications', {
+  await test.step('application intake', async () => {
+    const created = await api.post('/api/applications', {
       data: { applicantName: `Sealed lifecycle applicant ${stamp}` },
-    })
-  ).json()) as { application: { id: string } };
-  const applicationId = app.application.id;
-
-  async function transition(action: string, expected: number): Promise<void> {
-    const res = await api.patch(`/api/applications/${applicationId}`, {
-      data: { operation: 'transition', action },
     });
-    expect(res.status()).toBe(expected);
-  }
+    expect(created.status()).toBe(201);
+    applicationId = ((await created.json()) as { application: { id: string } })
+      .application.id;
 
-  await transition('submit', 200);
-  await transition('begin_intake', 200);
-  await transition('start_review', 200);
+    for (const action of ['submit', 'begin_intake', 'start_review'] as const) {
+      const res = await api.patch(`/api/applications/${applicationId}`, {
+        data: { operation: 'transition', action },
+      });
+      expect(res.status()).toBe(200);
+    }
+  });
 
-  const review = (await (
-    await api.post(`/api/applications/${applicationId}/reviews`, {
+  await test.step('review create and finalise', async () => {
+    const created = await api.post(`/api/applications/${applicationId}/reviews`, {
       data: { content: 'Human reviewer observations for the committee.' },
-    })
-  ).json()) as { review: { id: string } };
-  const finaliseReview = await api.patch(`/api/reviews/${review.review.id}`, {
-    data: { operation: 'finalise' },
+    });
+    expect(created.status()).toBe(201);
+    const reviewId = ((await created.json()) as { review: { id: string } }).review.id;
+    const finaliseReview = await api.patch(`/api/reviews/${reviewId}`, {
+      data: { operation: 'finalise' },
+    });
+    expect(finaliseReview.status()).toBe(200);
+    for (const action of ['ready_for_committee', 'schedule_committee'] as const) {
+      const res = await api.patch(`/api/applications/${applicationId}`, {
+        data: { operation: 'transition', action },
+      });
+      expect(res.status()).toBe(200);
+    }
   });
-  expect(finaliseReview.status()).toBe(200);
-  await transition('ready_for_committee', 200);
-  await transition('schedule_committee', 200);
 
-  const decision = (await (
-    await api.post(`/api/applications/${applicationId}/decisions`, {
+  await test.step('decision propose vote and finalise', async () => {
+    const proposed = await api.post(`/api/applications/${applicationId}/decisions`, {
       data: { outcome: 'confirmed', rationale: 'Committee satisfied on the evidence.' },
-    })
-  ).json()) as { decision: { id: string } };
-  const decisionId = decision.decision.id;
-  const vote = await api.patch(`/api/decisions/${decisionId}`, {
-    data: { operation: 'vote', choice: 'for' },
+    });
+    expect(proposed.status()).toBe(201);
+    decisionId = ((await proposed.json()) as { decision: { id: string } }).decision.id;
+    const vote = await api.patch(`/api/decisions/${decisionId}`, {
+      data: { operation: 'vote', choice: 'for' },
+    });
+    expect(vote.status()).toBe(200);
+    const finalise = await api.patch(`/api/decisions/${decisionId}`, {
+      data: { operation: 'finalise', outcome: 'confirmed' },
+    });
+    expect(finalise.status()).toBe(200);
   });
-  expect(vote.status()).toBe(200);
-  const finalise = await api.patch(`/api/decisions/${decisionId}`, {
-    data: { operation: 'finalise', outcome: 'confirmed' },
+
+  await test.step('human outcome is an explicit recorded act', async () => {
+    const beforeGenerate = await api.get(
+      `/api/certificates?applicationId=${applicationId}`,
+    );
+    expect(beforeGenerate.status()).toBe(200);
+    const beforeBody = (await beforeGenerate.json()) as { items: unknown[] };
+    expect(beforeBody.items).toEqual([]);
+    await page.goto('/applications');
+    await expect(page.getByText(/auto-approve/i)).toHaveCount(0);
+    await expect(page.getByText(/identity score/i)).toHaveCount(0);
   });
-  expect(finalise.status()).toBe(200);
-  // Finalising drives record_decision internally; the matter is now decided.
 
-  const cert = (await (
-    await api.post('/api/certificates', {
-      data: { decisionId },
-    })
-  ).json()) as { id: string };
-  const sign = await api.post(`/api/certificates/${cert.id}/sign`);
-  expect(sign.status()).toBe(200);
+  await test.step('certificate template, generate, sign and download', async () => {
+    const template = await api.post('/api/settings/certificate-template', {
+      data: {
+        wording:
+          'This organisation has recorded a confirmation decision made by its authorised people for the person named on this certificate.',
+        signatoryName: 'E2E Signatory',
+        signatoryRole: 'Chair',
+      },
+    });
+    expect(template.status()).toBe(200);
 
-  const { items } = (await api
-    .get(`/api/certificates?applicationId=${applicationId}`)
-    .then((r) => r.json())) as {
-    items: { verificationCode: string; signature: string; signingKeyId: string }[];
-  };
-  const sealed = items.find((c) => c.signature);
-  expect(sealed, 'signed certificate carries a KMS seal').toBeDefined();
+    const generated = await api.post('/api/certificates', { data: { decisionId } });
+    expect(generated.status()).toBe(200);
+    certificateId = ((await generated.json()) as { id: string }).id;
+    const sign = await api.post(`/api/certificates/${certificateId}/sign`, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(sign.status()).toBe(200);
 
-  await page.goto(`/verify/${sealed!.verificationCode}`);
-  await expect(page.getByRole('heading', { name: 'Valid certificate' })).toBeVisible();
-  await expect(
-    page.getByText('Verified — sealed by the issuing organisation'),
-  ).toBeVisible();
-  await expectNoWcagViolations(page);
-  expect(pageErrors.map((error) => error.message)).toEqual([]);
+    const listed = await api.get(`/api/certificates?applicationId=${applicationId}`);
+    expect(listed.status()).toBe(200);
+    const { items } = (await listed.json()) as {
+      items: { verificationCode: string; signature: string | null }[];
+    };
+    const sealed = items.find((certificate) => certificate.signature);
+    expect(sealed, 'signed certificate carries a seal').toBeDefined();
+    verificationCode = sealed?.verificationCode ?? '';
+
+    const download = await api.get(`/api/certificates/${certificateId}/download`, {
+      maxRedirects: 0,
+    });
+    expect(download.status()).toBe(307);
+  });
+
+  await test.step('public verify', async () => {
+    await page.goto(`/verify/${verificationCode}`);
+    await expect(page.getByRole('heading', { name: 'Valid certificate' })).toBeVisible();
+    await expect(
+      page.getByText('Verified — sealed by the issuing organisation'),
+    ).toBeVisible();
+    await expectNoWcagViolations(page);
+  });
+
+  expectNoPageErrors(pageErrors);
 });

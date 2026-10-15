@@ -35,13 +35,18 @@ async function timed(fn: () => Promise<boolean>): Promise<DependencyResult> {
 /** Verify the database answers a trivial query within a timeout. */
 export function checkDatabase(timeoutMs = 2_000): Promise<DependencyResult> {
   return timed(async () => {
-    await Promise.race([
-      db.execute(sql`select 1`),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('db timeout')), timeoutMs),
-      ),
-    ]);
-    return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        db.execute(sql`select 1`),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('db timeout')), timeoutMs);
+        }),
+      ]);
+      return true;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   });
 }
 
@@ -56,12 +61,20 @@ export function checkStorage(): Promise<DependencyResult> {
 }
 
 /**
- * Probe ClamAV using its clamd `PING`/`PONG` command over a raw TCP socket.
- * ClamAV is REPORTED in readiness but is NOT treated as fatal for serving the
- * app — uploads are held in quarantine until a scanner is available, so a
- * degraded scanner does not warrant taking the whole service out of rotation.
+ * Cap the scanner probe well under the 1s readiness budget and the 3s kubelet
+ * timeout. A ClamAV Service scaled to zero still has a ClusterIP; the connect
+ * can black-hole instead of refusing, and socket inactivity timeouts do not
+ * cover DNS or that connect. ClamAV is REPORTED but is NOT fatal — uploads stay
+ * quarantined until a scanner is available.
  */
-export function checkClamAV(timeoutMs = 2_000): Promise<DependencyResult> {
+const CLAMAV_PROBE_TIMEOUT_MS = 500;
+
+/**
+ * Probe ClamAV using its clamd `PING`/`PONG` command over a raw TCP socket.
+ */
+export function checkClamAV(
+  timeoutMs = CLAMAV_PROBE_TIMEOUT_MS,
+): Promise<DependencyResult> {
   return timed(
     () =>
       new Promise<boolean>((resolve) => {
@@ -70,9 +83,11 @@ export function checkClamAV(timeoutMs = 2_000): Promise<DependencyResult> {
         const done = (ok: boolean) => {
           if (settled) return;
           settled = true;
+          clearTimeout(timer);
           socket.destroy();
           resolve(ok);
         };
+        const timer = setTimeout(() => done(false), timeoutMs);
         socket.setTimeout(timeoutMs);
         socket.once('timeout', () => done(false));
         socket.once('error', () => done(false));
@@ -97,11 +112,35 @@ export interface ReadinessReport {
 }
 
 /**
- * Aggregate readiness. The service is READY when the core datastores it needs
- * to serve requests are up (database, Redis, storage). ClamAV is reported for
- * visibility but does not, on its own, mark the service not-ready.
+ * One dependency fan-out per pod per window. `/api/ready` and `/api/health`
+ * share it. Five seconds is long enough that a probe scrape cannot stampede
+ * RDS, Redis, S3 or ClamAV, and short enough that a failover still drains
+ * from the load balancer quickly.
  */
-export async function readinessReport(): Promise<ReadinessReport> {
+const READINESS_CACHE_MS = 5_000;
+
+interface ReadinessCacheState {
+  entry: { expiresAt: number; report: ReadinessReport } | null;
+  inflight: Promise<ReadinessReport> | null;
+}
+
+const globalForReadiness = globalThis as unknown as {
+  __blakpathReadiness?: ReadinessCacheState;
+};
+
+const readinessCache: ReadinessCacheState = globalForReadiness.__blakpathReadiness ?? {
+  entry: null,
+  inflight: null,
+};
+globalForReadiness.__blakpathReadiness = readinessCache;
+
+/** Drop the per-process cache. Tests only — production reads it until expiry. */
+export function __resetReadinessCache(): void {
+  readinessCache.entry = null;
+  readinessCache.inflight = null;
+}
+
+async function probeReadiness(): Promise<ReadinessReport> {
   const [database, redis, storage, clamav] = await Promise.all([
     checkDatabase(),
     checkRedis(),
@@ -133,4 +172,29 @@ export async function readinessReport(): Promise<ReadinessReport> {
   }
 
   return { ready, checks: { database, redis, storage, clamav } };
+}
+
+/**
+ * Aggregate readiness. The service is READY when the core datastores it needs
+ * to serve requests are up (database, Redis, storage). ClamAV is reported for
+ * visibility but does not, on its own, mark the service not-ready.
+ *
+ * Results are cached per process for five seconds. Concurrent callers share one
+ * in-flight probe so a burst cannot fan out once per request.
+ */
+export async function readinessReport(): Promise<ReadinessReport> {
+  const cached = readinessCache.entry;
+  if (cached && Date.now() < cached.expiresAt) return cached.report;
+  if (readinessCache.inflight) return readinessCache.inflight;
+
+  const pending = probeReadiness()
+    .then((report) => {
+      readinessCache.entry = { report, expiresAt: Date.now() + READINESS_CACHE_MS };
+      return report;
+    })
+    .finally(() => {
+      if (readinessCache.inflight === pending) readinessCache.inflight = null;
+    });
+  readinessCache.inflight = pending;
+  return pending;
 }

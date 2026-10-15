@@ -1,11 +1,12 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { toErrorResponse, withRequestTenant } from '@/lib/http/tenant-route';
+import { withRequestTenant } from '@/lib/http/tenant-route';
 import {
   createInvitation,
   listInvitations,
   type CreateInvitationInput,
 } from '@/domains/forms';
+import { tenantHandler } from '@/lib/http/error-response';
 
 /**
  * GET  /api/forms/[id]/invitations — list a form's invitations.
@@ -15,41 +16,33 @@ import {
  * shareable link from the request origin and hand it back so staff can copy it;
  * the token itself is never stored in the clear.
  */
-export async function GET(
+export const GET = tenantHandler(async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const invitations = await withRequestTenant(() => listInvitations(id));
-    return NextResponse.json({ invitations });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  const { id } = await params;
+  const invitations = await withRequestTenant(() => listInvitations(id));
+  return NextResponse.json({ invitations });
+});
 
-export async function POST(
+export const POST = tenantHandler(async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  try {
-    const { id } = await params;
-    const body = (await request.json()) as CreateInvitationInput;
-    const result = await withRequestTenant(() => createInvitation(id, body));
+  const { id } = await params;
+  const body = (await request.json()) as CreateInvitationInput;
+  const result = await withRequestTenant(() => createInvitation(id, body));
 
-    // Build an absolute link from the request origin so staff can copy it.
-    const origin = request.nextUrl.origin;
-    const url = new URL(result.path, origin).toString();
+  // Build an absolute link from the request origin so staff can copy it.
+  const origin = request.nextUrl.origin;
+  const url = new URL(result.path, origin).toString();
 
-    return NextResponse.json(
-      {
-        invitation: result.invitation,
-        path: result.path,
-        url,
-      },
-      { status: 201 },
-    );
-  } catch (error) {
-    return toErrorResponse(error);
-  }
-}
+  return NextResponse.json(
+    {
+      invitation: result.invitation,
+      path: result.path,
+      url,
+    },
+    { status: 201 },
+  );
+});

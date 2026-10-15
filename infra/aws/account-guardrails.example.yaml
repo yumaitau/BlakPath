@@ -1,0 +1,555 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath account detective controls for ap-southeast-2. Example only.
+  Does not score, rank, predict or decide Aboriginality. GuardDuty Malware
+  Protection for S3 is a second signal. ClamAV remains the only evidence
+  promotion gate. A GuardDuty object tag must not promote or reject evidence.
+
+# One Config recorder, one delivery channel, one GuardDuty detector and one
+# Security Hub subscription can exist per account per Region. If one already
+# exists, import it into this stack or edit it to match. Do not create a
+# second management-event trail beside an existing one.
+
+Parameters:
+  AuditLogBucketName:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    Description: New bucket for CloudTrail and Config. Not an evidence bucket.
+  EvidenceBucketName:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    Description: Existing BlakPath evidence bucket in ap-southeast-2.
+  QuarantineBucketName:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    Description: Existing BlakPath quarantine bucket in ap-southeast-2.
+  EvidenceKmsKeyArn:
+    Type: String
+    AllowedPattern: '^arn:(aws|aws-cn|aws-us-gov):kms:[a-z0-9-]+:[0-9]{12}:(key|alias)/.+$'
+    Description: >-
+      Bucket default CMK for both BlakPath buckets (alias/blakpath-prod-evidence).
+      Tenant objects use per-object SSE-KMS with each tenant's own CMK; this
+      template grants nothing on those keys.
+  ConfigRoleArn:
+    Type: String
+    AllowedPattern: '^arn:(aws|aws-cn|aws-us-gov):iam::[0-9]{12}:role/.+'
+    Description: >-
+      AWSServiceRoleForConfig, or another role with the same Config delivery
+      permissions. This template does not create that service-linked role.
+  TrailName:
+    Type: String
+    Default: blakpath-account
+    AllowedPattern: '^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$'
+    Description: CloudTrail trail that records management events and BlakPath S3 data events.
+  OnCallTopicArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:(aws|aws-cn|aws-us-gov):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$'
+    Description: >-
+      Optional SNS topic for high GuardDuty findings and new critical Security
+      Hub findings. Empty skips the alarms. The topic must trust events.amazonaws.com.
+  EnableS3MalwareProtection:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Create GuardDuty Malware Protection plans for the two BlakPath buckets.
+      Off by default. Turning it on tags objects; it does not change promotion.
+
+Rules:
+  SydneyOnly:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'ap-southeast-2']
+        AssertDescription: Deploy this stack only in ap-southeast-2.
+  DistinctBuckets:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref EvidenceBucketName, !Ref QuarantineBucketName]]
+        AssertDescription: Evidence and quarantine buckets must differ.
+      - Assert: !Not [!Equals [!Ref EvidenceBucketName, !Ref AuditLogBucketName]]
+        AssertDescription: The audit log bucket must not be the evidence bucket.
+      - Assert: !Not [!Equals [!Ref QuarantineBucketName, !Ref AuditLogBucketName]]
+        AssertDescription: The audit log bucket must not be the quarantine bucket.
+
+Conditions:
+  NotifyOnCall: !Not [!Equals [!Ref OnCallTopicArn, '']]
+  S3MalwareProtectionEnabled: !Equals [!Ref EnableS3MalwareProtection, 'true']
+
+Resources:
+  SecurityLogsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: BlakPath CloudTrail, Config and CloudWatch audit logs.
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowCloudTrailEncrypt
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action:
+              - 'kms:GenerateDataKey*'
+              - kms:DescribeKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${TrailName}'
+              StringLike:
+                kms:EncryptionContext:aws:cloudtrail:arn: !Sub 'arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:trail/*'
+          - Sid: AllowCloudWatchLogs
+            Effect: Allow
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Action:
+              - 'kms:Encrypt*'
+              - 'kms:Decrypt*'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:Describe*'
+            Resource: '*'
+            Condition:
+              ArnEquals:
+                kms:EncryptionContext:aws:logs:arn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/blakpath/cloudtrail'
+          - Sid: AllowConfigService
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+              - kms:DescribeKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowConfigRole
+            Effect: Allow
+            Principal:
+              AWS: !Ref ConfigRoleArn
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+              - kms:DescribeKey
+            Resource: '*'
+
+  SecurityLogsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/blakpath-security-logs
+      TargetKeyId: !Ref SecurityLogsKey
+
+  AuditBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref AuditLogBucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt SecurityLogsKey.Arn
+            BucketKeyEnabled: true
+
+  AuditBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AuditBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt AuditBucket.Arn
+              - !Sub '${AuditBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt AuditBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${TrailName}'
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${AuditBucket.Arn}/cloudtrail/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${TrailName}'
+          - Sid: AWSConfigBucketPermissionsCheck
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action:
+              - s3:GetBucketAcl
+              - s3:ListBucket
+            Resource: !GetAtt AuditBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:config:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: AWSConfigBucketDelivery
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${AuditBucket.Arn}/config/AWSLogs/${AWS::AccountId}/Config/*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:config:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: AllowConfigRecorderRoleRead
+            Effect: Allow
+            Principal:
+              AWS: !Ref ConfigRoleArn
+            Action:
+              - s3:GetBucketAcl
+              - s3:ListBucket
+            Resource: !GetAtt AuditBucket.Arn
+          - Sid: AllowConfigRecorderRoleWrite
+            Effect: Allow
+            Principal:
+              AWS: !Ref ConfigRoleArn
+            Action: s3:PutObject
+            Resource: !Sub '${AuditBucket.Arn}/config/AWSLogs/${AWS::AccountId}/Config/*'
+
+  TrailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /blakpath/cloudtrail
+      RetentionInDays: 365
+      KmsKeyId: !GetAtt SecurityLogsKey.Arn
+
+  CloudTrailLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteCloudTrailLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt TrailLogGroup.Arn
+
+  # trivy:ignore:AWS-0015 KMSKeyId is SecurityLogsKey (a CMK) via !GetAtt, which Trivy cannot resolve.
+  AccountTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn:
+      - AuditBucketPolicy
+      - CloudTrailLogsRole
+    Properties:
+      TrailName: !Ref TrailName
+      S3BucketName: !Ref AuditBucket
+      S3KeyPrefix: cloudtrail
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      KMSKeyId: !GetAtt SecurityLogsKey.Arn
+      CloudWatchLogsLogGroupArn: !GetAtt TrailLogGroup.Arn
+      CloudWatchLogsRoleArn: !GetAtt CloudTrailLogsRole.Arn
+      AdvancedEventSelectors:
+        - Name: AllManagementEvents
+          FieldSelectors:
+            - Field: eventCategory
+              Equals:
+                - Management
+        - Name: BlakPathBucketDataEvents
+          FieldSelectors:
+            - Field: eventCategory
+              Equals:
+                - Data
+            - Field: resources.type
+              Equals:
+                - AWS::S3::Object
+            - Field: resources.ARN
+              StartsWith:
+                - !Sub 'arn:${AWS::Partition}:s3:::${EvidenceBucketName}/'
+                - !Sub 'arn:${AWS::Partition}:s3:::${QuarantineBucketName}/'
+
+  ConfigurationRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Properties:
+      Name: blakpath
+      RoleARN: !Ref ConfigRoleArn
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: true
+      RecordingMode:
+        RecordingFrequency: CONTINUOUS
+
+  DeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    DependsOn:
+      - AuditBucketPolicy
+      - ConfigurationRecorder
+    Properties:
+      Name: blakpath
+      S3BucketName: !Ref AuditBucket
+      S3KeyPrefix: config
+      S3KmsKeyArn: !GetAtt SecurityLogsKey.Arn
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency: TwentyFour_Hours
+
+  SecurityHub:
+    Type: AWS::SecurityHub::Hub
+    Properties:
+      AutoEnableControls: true
+      ControlFindingGenerator: SECURITY_CONTROL
+      EnableDefaultStandards: false
+
+  FoundationalStandard:
+    Type: AWS::SecurityHub::Standard
+    DependsOn:
+      - SecurityHub
+      - DeliveryChannel
+    Properties:
+      StandardsArn: !Sub 'arn:${AWS::Partition}:securityhub:${AWS::Region}::standards/aws-foundational-security-best-practices/v/1.0.0'
+
+  CisStandard:
+    Type: AWS::SecurityHub::Standard
+    DependsOn:
+      - SecurityHub
+      - DeliveryChannel
+    Properties:
+      StandardsArn: !Sub 'arn:${AWS::Partition}:securityhub:${AWS::Region}::standards/cis-aws-foundations-benchmark/v/5.0.0'
+
+  ExternalAccessAnalyzer:
+    Type: AWS::AccessAnalyzer::Analyzer
+    Properties:
+      AnalyzerName: blakpath-external-access
+      Type: ACCOUNT
+
+  UnusedAccessAnalyzer:
+    Type: AWS::AccessAnalyzer::Analyzer
+    Properties:
+      AnalyzerName: blakpath-unused-access
+      Type: ACCOUNT_UNUSED_ACCESS
+      AnalyzerConfiguration:
+        UnusedAccessConfiguration:
+          UnusedAccessAge: 90
+
+  GuardDutyDetector:
+    Type: AWS::GuardDuty::Detector
+    Properties:
+      Enable: true
+      FindingPublishingFrequency: FIFTEEN_MINUTES
+      Features:
+        - Name: S3_DATA_EVENTS
+          Status: ENABLED
+        - Name: RDS_LOGIN_EVENTS
+          Status: ENABLED
+
+  MalwareProtectionRole:
+    Type: AWS::IAM::Role
+    Condition: S3MalwareProtectionEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: malware-protection-plan.guardduty.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BlakPathMalwareProtection
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowManagedRuleToSendS3EventsToGuardDuty
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*'
+                Condition:
+                  StringLike:
+                    events:ManagedBy: malware-protection-plan.guardduty.amazonaws.com
+              - Sid: AllowGuardDutyToMonitorEventBridgeManagedRule
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*'
+              - Sid: AllowPostScanTag
+                Effect: Allow
+                Action:
+                  - s3:PutObjectTagging
+                  - s3:GetObjectTagging
+                  - s3:PutObjectVersionTagging
+                  - s3:GetObjectVersionTagging
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EvidenceBucketName}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${QuarantineBucketName}/*'
+              - Sid: AllowEnableS3EventBridgeEvents
+                Effect: Allow
+                Action:
+                  - s3:PutBucketNotification
+                  - s3:GetBucketNotification
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EvidenceBucketName}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${QuarantineBucketName}'
+              - Sid: AllowPutValidationObject
+                Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EvidenceBucketName}/malware-protection-resource-validation-object'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${QuarantineBucketName}/malware-protection-resource-validation-object'
+              - Sid: AllowCheckBucketOwnership
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EvidenceBucketName}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${QuarantineBucketName}'
+              - Sid: AllowMalwareScan
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EvidenceBucketName}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${QuarantineBucketName}/*'
+              - Sid: AllowDecryptForMalwareScan
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource: !Ref EvidenceKmsKeyArn
+                Condition:
+                  StringLike:
+                    kms:ViaService: !Sub 's3.${AWS::Region}.amazonaws.com'
+
+  EvidenceMalwarePlan:
+    Type: AWS::GuardDuty::MalwareProtectionPlan
+    Condition: S3MalwareProtectionEnabled
+    DependsOn: GuardDutyDetector
+    Properties:
+      Role: !GetAtt MalwareProtectionRole.Arn
+      ProtectedResource:
+        S3Bucket:
+          BucketName: !Ref EvidenceBucketName
+      Actions:
+        Tagging:
+          Status: ENABLED
+
+  QuarantineMalwarePlan:
+    Type: AWS::GuardDuty::MalwareProtectionPlan
+    Condition: S3MalwareProtectionEnabled
+    DependsOn: GuardDutyDetector
+    Properties:
+      Role: !GetAtt MalwareProtectionRole.Arn
+      ProtectedResource:
+        S3Bucket:
+          BucketName: !Ref QuarantineBucketName
+      Actions:
+        Tagging:
+          Status: ENABLED
+
+  GuardDutyHighFindingRule:
+    Type: AWS::Events::Rule
+    Condition: NotifyOnCall
+    Properties:
+      Name: blakpath-guardduty-high
+      Description: Notify on-call for high and critical GuardDuty findings.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.guardduty
+        detail-type:
+          - GuardDuty Finding
+        detail:
+          severity:
+            - numeric:
+                - '>='
+                - 7
+      Targets:
+        - Arn: !Ref OnCallTopicArn
+          Id: OnCallTopic
+
+  SecurityHubCriticalFindingRule:
+    Type: AWS::Events::Rule
+    Condition: NotifyOnCall
+    Properties:
+      Name: blakpath-security-hub-critical
+      Description: Notify on-call for new critical Security Hub findings.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.securityhub
+        detail-type:
+          - Security Hub Findings - Imported
+        detail:
+          findings:
+            Severity:
+              Label:
+                - CRITICAL
+            Workflow:
+              Status:
+                - NEW
+            RecordState:
+              - ACTIVE
+      Targets:
+        - Arn: !Ref OnCallTopicArn
+          Id: OnCallTopic
+
+Outputs:
+  SecurityLogsKeyArn:
+    Value: !GetAtt SecurityLogsKey.Arn
+  AuditBucketName:
+    Value: !Ref AuditBucket
+  TrailArn:
+    Value: !GetAtt AccountTrail.Arn
+  ConfigRecorderName:
+    Value: !Ref ConfigurationRecorder
+  SecurityHubArn:
+    Value: !Ref SecurityHub
+  FoundationalStandardArn:
+    Value: !Ref FoundationalStandard
+  CisStandardArn:
+    Value: !Ref CisStandard
+  ExternalAccessAnalyzerArn:
+    Value: !GetAtt ExternalAccessAnalyzer.Arn
+  UnusedAccessAnalyzerArn:
+    Value: !GetAtt UnusedAccessAnalyzer.Arn
+  GuardDutyDetectorId:
+    Value: !Ref GuardDutyDetector

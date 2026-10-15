@@ -1,0 +1,6 @@
+# Cluster-scoped enablement. Not part of any environment overlay:
+# an overlay sets its namespace and would rewrite this ConfigMap.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - enable-network-policy.yaml

@@ -5,11 +5,18 @@
  *   - `reports`  — the closed report registry (types + columns).
  *   - `schemas`  — zod v4 export-request validation.
  *   - `service`  — tenant-scoped request/list/download (report:export).
- *   - `generate` — the worker-side CSV assembly + storage.
+ *   - `generate` — the worker-side streamed CSV assembly + storage.
+ *   - `maintenance` — the worker-side expiry + stranded-export recovery sweep.
  */
-export { toCsv, type CsvCell } from './csv';
+export { toCsv, toCsvLine, type CsvCell } from './csv';
 export { REPORT_COLUMNS, REPORT_TYPES, isReportType, type ReportType } from './reports';
-export { requestExportSchema, type RequestExportInput } from './schemas';
+export {
+  exportRange,
+  readStoredExportFilters,
+  requestExportSchema,
+  type RequestExportInput,
+  type StoredExportFilters,
+} from './schemas';
 export {
   getExportDownloadUrl,
   listExports,
@@ -17,3 +24,8 @@ export {
   type ExportRequestRow,
 } from './service';
 export { processExport, type ProcessExportInput } from './generate';
+export {
+  processExportMaintenance,
+  type ExportMaintenanceInput,
+  type ExportMaintenanceResult,
+} from './maintenance';

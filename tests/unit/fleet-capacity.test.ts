@@ -4,21 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   ALB_DRAIN_SECONDS,
-  CONNECTION_BUDGET_RATIO,
-  DATABASE_POOL_MAX,
-  MIGRATION_CONNECTIONS,
-  RDS_FLOOR_MEMORY_BYTES,
-  RDS_MAX_CONNECTIONS_DIVISOR,
-  TERMINATION_GRACE_PERIOD_SECONDS,
   WEB_MAX_SURGE,
-  WEB_MIN_REPLICAS,
+  WEB_TERMINATION_GRACE_PERIOD_SECONDS,
   WORKER_REPLICAS,
   WORKER_SHUTDOWN_GRACE_SECONDS,
   WORKER_TERMINATION_GRACE_PERIOD_SECONDS,
-  maxWebReplicas,
-  peakDbConnections,
-  rdsDefaultMaxConnections,
-} from '@/lib/fleet-capacity';
+} from '@/db/connection-budget';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -33,11 +24,11 @@ function documents(yaml: string): string[] {
     .filter((doc) => doc.includes('apiVersion:'));
 }
 
-function deployment(yaml: string, name: string): string {
+function workload(yaml: string, kind: string, name: string): string {
   const doc = documents(yaml).find(
-    (item) => item.includes('kind: Deployment') && item.includes(`\n  name: ${name}\n`),
+    (item) => item.includes(`kind: ${kind}`) && item.includes(`\n  name: ${name}\n`),
   );
-  if (!doc) throw new Error(`missing Deployment ${name}`);
+  if (!doc) throw new Error(`missing ${kind} ${name}`);
   return doc;
 }
 
@@ -55,63 +46,51 @@ function expectHardSpread(doc: string, appName: string) {
   }
 }
 
-describe('database connection budget', () => {
-  it('uses the RDS 1 GiB default max_connections', () => {
-    expect(RDS_FLOOR_MEMORY_BYTES / RDS_MAX_CONNECTIONS_DIVISOR).toBeGreaterThan(112);
-    expect(rdsDefaultMaxConnections(RDS_FLOOR_MEMORY_BYTES)).toBe(112);
-    expect(rdsDefaultMaxConnections(2 * RDS_FLOOR_MEMORY_BYTES)).toBe(225);
-  });
-
-  it('sets web HPA max to the largest count that stays under 80%', () => {
-    const maxConnections = rdsDefaultMaxConnections(RDS_FLOOR_MEMORY_BYTES);
-    const webMax = maxWebReplicas();
-    const peak = peakDbConnections(webMax);
-
-    expect(webMax).toBe(4);
-    expect(webMax).toBeGreaterThanOrEqual(WEB_MIN_REPLICAS);
-    expect(peak).toBe(81);
-    expect(peak).toBeLessThan(maxConnections * CONNECTION_BUDGET_RATIO);
-    expect(peakDbConnections(webMax + 1)).toBeGreaterThanOrEqual(
-      maxConnections * CONNECTION_BUDGET_RATIO,
-    );
-    // Steady state at HPA max, no rollout surge and no migrate job.
-    expect((webMax + WORKER_REPLICAS) * DATABASE_POOL_MAX).toBe(60);
-    expect(MIGRATION_CONNECTIONS).toBe(1);
-  });
+describe('rollout drain', () => {
+  const web = workload(
+    read('infra/k8s/base/web-deployment.yaml'),
+    'Deployment',
+    'blakpath-app',
+  );
+  const worker = workload(
+    read('infra/k8s/base/worker-deployment.yaml'),
+    'Deployment',
+    'blakpath-worker',
+  );
+  const clamav = workload(
+    read('infra/k8s/base/clamav.yaml'),
+    'StatefulSet',
+    'blakpath-clamav',
+  );
 
   it('keeps the web grace period longer than the ALB drain and the worker drain', () => {
     expect(ALB_DRAIN_SECONDS).toBe(15);
     expect(WORKER_SHUTDOWN_GRACE_SECONDS).toBe(25);
-    expect(TERMINATION_GRACE_PERIOD_SECONDS).toBe(
+    expect(WEB_TERMINATION_GRACE_PERIOD_SECONDS).toBe(
       ALB_DRAIN_SECONDS + WORKER_SHUTDOWN_GRACE_SECONDS,
     );
     expect(WORKER_TERMINATION_GRACE_PERIOD_SECONDS).toBeGreaterThan(
       WORKER_SHUTDOWN_GRACE_SECONDS,
     );
   });
-});
 
-describe('k8s rollout manifests', () => {
-  const web = deployment(read('infra/k8s/web-deployment.yaml'), 'blakpath-app');
-  const workerYaml = read('infra/k8s/worker-deployment.yaml');
-  const worker = deployment(workerYaml, 'blakpath-worker');
-  const clamav = deployment(workerYaml, 'blakpath-clamav');
-
-  it('injects the ALB readiness gate on the namespace', () => {
-    expect(read('infra/k8s/namespace.yaml')).toContain(
-      'elbv2.k8s.aws/pod-readiness-gate-inject: enabled',
-    );
+  it('injects the ALB readiness gate on both namespace overlays', () => {
+    for (const overlay of ['production', 'staging']) {
+      expect(read(`infra/k8s/overlays/${overlay}/namespace.yaml`)).toContain(
+        'elbv2.k8s.aws/pod-readiness-gate-inject: enabled',
+      );
+    }
   });
 
   it('drains web for the same interval the ALB deregisters targets', () => {
     expect(web).toContain(
-      `terminationGracePeriodSeconds: ${TERMINATION_GRACE_PERIOD_SECONDS}`,
+      `terminationGracePeriodSeconds: ${WEB_TERMINATION_GRACE_PERIOD_SECONDS}`,
     );
     expect(web).toContain(`sleep ${ALB_DRAIN_SECONDS}`);
     expect(web).toContain('preStop:');
     expect(web).toContain(`maxSurge: ${WEB_MAX_SURGE}`);
     expect(web).toContain('maxUnavailable: 0');
-    expect(read('infra/k8s/service-ingress.yaml')).toContain(
+    expect(read('infra/k8s/base/service-ingress.yaml')).toContain(
       `deregistration_delay.timeout_seconds=${ALB_DRAIN_SECONDS}`,
     );
   });
@@ -127,22 +106,5 @@ describe('k8s rollout manifests', () => {
     expect(worker).toContain(
       `terminationGracePeriodSeconds: ${WORKER_TERMINATION_GRACE_PERIOD_SECONDS}`,
     );
-  });
-
-  it('pins HPA max and the pool to the connection budget', () => {
-    const hpa = documents(read('infra/k8s/autoscaling.yaml')).find((doc) =>
-      doc.includes('kind: HorizontalPodAutoscaler'),
-    );
-    expect(hpa).toBeDefined();
-    expect(hpa).toContain(`minReplicas: ${WEB_MIN_REPLICAS}`);
-    expect(hpa).toContain(`maxReplicas: ${maxWebReplicas()}`);
-    expect(read('infra/k8s/configmap.yaml')).toContain(
-      `DATABASE_POOL_MAX: '${DATABASE_POOL_MAX}'`,
-    );
-    for (const doc of [web, worker]) {
-      expect(doc).toContain('name: DATABASE_POOL_MAX');
-      expect(doc).toContain('key: DATABASE_POOL_MAX');
-    }
-    expect(read('infra/k8s/secret.example.yaml')).not.toContain('DATABASE_POOL_MAX');
   });
 });

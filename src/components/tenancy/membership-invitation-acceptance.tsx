@@ -7,6 +7,7 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { MembershipInvitationPreview } from '@/domains/memberships';
+import { useHydrated } from '@/lib/hooks/use-hydrated';
 
 export function MembershipInvitationAcceptance({
   token,
@@ -22,6 +23,7 @@ export function MembershipInvitationAcceptance({
   emailVerified: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const hydrated = useHydrated();
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
@@ -45,6 +47,7 @@ export function MembershipInvitationAcceptance({
         );
         return;
       }
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load after the account cookie is set
       window.location.assign(`/sign-in?returnTo=${encodeURIComponent(`/join/${token}`)}`);
     } catch {
       setError('We could not reach the service. Please try again.');
@@ -68,6 +71,7 @@ export function MembershipInvitationAcceptance({
         );
         return;
       }
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load so Server Components see the accepted membership
       window.location.assign('/dashboard');
     } catch {
       setError('We could not reach the service. Please try again.');
@@ -160,7 +164,7 @@ export function MembershipInvitationAcceptance({
                   autoComplete="new-password"
                 />
               </div>
-              <Button type="submit" size="sm" disabled={busy}>
+              <Button type="submit" size="sm" disabled={!hydrated || busy}>
                 {busy ? 'Creating…' : 'Create account and continue'}
               </Button>
             </form>
@@ -175,7 +179,7 @@ export function MembershipInvitationAcceptance({
               Signed in as {signedInEmail}. Accepting activates the role shown above; an
               organisation administrator can change or remove it later.
             </p>
-            <Button onClick={() => void accept()} disabled={busy}>
+            <Button onClick={() => void accept()} disabled={!hydrated || busy}>
               {busy ? 'Joining…' : `Join ${preview.organisationName}`}
             </Button>
           </div>

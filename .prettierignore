@@ -13,3 +13,12 @@ src/db/migrations/
 # Coverage / build outputs.
 coverage/
 dist/
+
+# Vendored public CA bundle. Not source.
+certs/*.pem
+
+# Verbatim GNU licence text. Reformatting breaks GitHub licence detection.
+LICENSE
+
+# Vendored SIL OFL font binaries.
+src/domains/certificates/fonts/

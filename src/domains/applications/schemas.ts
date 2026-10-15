@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { decodeApplicationCursor } from './cursor';
 import { APPLICATION_STATUSES } from './workflow';
 
 /**
@@ -36,6 +37,8 @@ export const updateIntakeSchema = z
     applicantName: applicantNameSchema.optional(),
     priority: z.enum(APPLICATION_PRIORITIES).optional(),
     intake: intakeSchema.optional(),
+    /** Link (or replace) the owning client record. Must belong to the tenant. */
+    clientId: z.uuid().optional(),
     /** Optimistic-concurrency guard: the version the caller last read. */
     expectedUpdatedAt: z.coerce.date().optional(),
   })
@@ -43,7 +46,8 @@ export const updateIntakeSchema = z
     (value) =>
       value.applicantName !== undefined ||
       value.priority !== undefined ||
-      value.intake !== undefined,
+      value.intake !== undefined ||
+      value.clientId !== undefined,
     { message: 'Provide at least one field to update.' },
   );
 export type UpdateIntakeInput = z.input<typeof updateIntakeSchema>;
@@ -62,11 +66,34 @@ export const transitionApplicationSchema = z.object({
 });
 export type TransitionApplicationInput = z.input<typeof transitionApplicationSchema>;
 
-/** List/filter applications within the tenant. */
+const emptyToUndefined = (value: unknown): unknown =>
+  value === '' || value === null ? undefined : value;
+
+/**
+ * List/filter applications within the tenant.
+ *
+ * `q` matches a reference, full applicant name, or one whole name word through
+ * the tenant blind index (exact match, never ILIKE). `cursor` is the opaque keyset position
+ * returned by the previous page. `offset` remains for existing API clients; when
+ * a cursor is present it is the page position and offset is ignored.
+ */
 export const listApplicationsSchema = z.object({
-  status: z.enum(APPLICATION_STATUSES).optional(),
-  assigneeUserId: z.uuid().optional(),
-  applicantUserId: z.uuid().optional(),
+  status: z.preprocess(emptyToUndefined, z.enum(APPLICATION_STATUSES).optional()),
+  assigneeUserId: z.preprocess(emptyToUndefined, z.uuid().optional()),
+  applicantUserId: z.preprocess(emptyToUndefined, z.uuid().optional()),
+  q: z.preprocess(emptyToUndefined, z.string().trim().max(200).optional()),
+  cursor: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .trim()
+      .min(1)
+      .max(400)
+      .optional()
+      .refine((value) => value === undefined || decodeApplicationCursor(value) !== null, {
+        message: 'Invalid page cursor.',
+      }),
+  ),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   offset: z.coerce.number().int().min(0).default(0),
 });
