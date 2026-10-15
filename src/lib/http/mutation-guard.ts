@@ -22,8 +22,7 @@ export const MUTATION_ORIGIN_EXEMPT_PREFIXES = [
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
 export type MutationGuardDecision =
-  | { allow: true }
-  | { allow: false; reason: 'origin' | 'content-type' };
+  { allow: true } | { allow: false; reason: 'origin' | 'content-type' };
 
 export function isMutationOriginExempt(pathname: string): boolean {
   return MUTATION_ORIGIN_EXEMPT_PREFIXES.some(

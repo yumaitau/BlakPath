@@ -1,7 +1,7 @@
 import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
-import { watchForPageErrors } from './helpers/page-errors';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 test('coa: staff can walk dashboard, board, applications, meetings, forms', async ({
   page,
@@ -32,7 +32,7 @@ test('coa: staff can walk dashboard, board, applications, meetings, forms', asyn
       page.getByRole('heading', { name: 'Applications', exact: true }),
     ).toBeVisible();
     const response = await page.request.get('/api/applications');
-    expect([200, 403]).toContain(response.status());
+    expect(response.status()).toBe(200);
   });
 
   await test.step('meetings calendar renders', async () => {
@@ -44,11 +44,11 @@ test('coa: staff can walk dashboard, board, applications, meetings, forms', asyn
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  await test.step('no auto-determination UI exists', async () => {
+  await test.step('no auto-determination UI', async () => {
     await page.goto('/applications');
     await expect(page.getByText(/auto-approve/i)).toHaveCount(0);
     await expect(page.getByText(/identity score/i)).toHaveCount(0);
   });
 
-  expect(pageErrors.map((error) => error.message)).toEqual([]);
+  expectNoPageErrors(pageErrors);
 });

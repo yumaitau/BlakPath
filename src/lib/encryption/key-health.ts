@@ -13,11 +13,7 @@ if (KEY_HEALTH_INTERVAL_MS > DEK_CACHE_MAX_TTL_MS) {
 }
 
 export type OrganisationKeyProbeStatus =
-  | 'active'
-  | 'disabled'
-  | 'pending_deletion'
-  | 'pending_validation'
-  | 'unavailable';
+  'active' | 'disabled' | 'pending_deletion' | 'pending_validation' | 'unavailable';
 
 export interface KeyHealthSubject {
   readonly organisationId: string;

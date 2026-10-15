@@ -4,9 +4,7 @@ import { withRequestTenant } from '@/lib/http/tenant-route';
 import type { TenantContext } from '@/lib/tenancy/context';
 
 export type ToolPageResult<T> =
-  | { kind: 'ready'; data: T }
-  | { kind: 'denied' }
-  | { kind: 'unavailable' };
+  { kind: 'ready'; data: T } | { kind: 'denied' } | { kind: 'unavailable' };
 
 /**
  * Load a permission-gated staff screen.
