@@ -51,8 +51,7 @@ type SettingsRow = typeof organisationSettings.$inferSelect;
 type DomainRow = typeof organisationDomains.$inferSelect;
 
 export type TxtLookup =
-  | { ok: true; records: string[][] }
-  | { ok: false; reason: 'absent' | 'unavailable' };
+  { ok: true; records: string[][] } | { ok: false; reason: 'absent' | 'unavailable' };
 
 function assertConfigure(): void {
   const ctx = requireTenantContext();

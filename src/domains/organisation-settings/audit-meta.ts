@@ -22,12 +22,7 @@ import {
 const AUDIT_ALLOW = ['field', 'present', 'digest', 'summary'] as const;
 
 type SummaryValue =
-  | string
-  | number
-  | boolean
-  | null
-  | SummaryValue[]
-  | { [key: string]: SummaryValue };
+  string | number | boolean | null | SummaryValue[] | { [key: string]: SummaryValue };
 
 export interface SettingsAuditMeta {
   readonly data: {
