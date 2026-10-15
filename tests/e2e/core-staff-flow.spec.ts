@@ -1,6 +1,7 @@
 import axe from 'axe-core';
 import type { Page } from '@playwright/test';
 import { expect, test } from './helpers/page';
+import { expectNoWcagViolations } from './helpers/accessibility';
 import {
   ADMIN_EMAIL,
   APPLICANT_EMAIL,
@@ -8,6 +9,7 @@ import {
   isolateSignInClient,
   signInAndSelectOrganisation,
 } from './helpers/auth';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 async function expectNoSeriousAccessibilityViolations(page: Page): Promise<void> {
   // App Router metadata can stream after the page's visible content on a slow
@@ -64,6 +66,7 @@ async function expectNoSeriousAccessibilityViolations(page: Page): Promise<void>
 test('protected routes reject anonymous access and sign-in errors stay generic', async ({
   page,
 }) => {
+  const pageErrors = watchForPageErrors(page);
   await isolateSignInClient(page);
   const apiResponse = await page.request.get('/api/applications');
   expect(apiResponse.status()).toBe(401);
@@ -72,19 +75,23 @@ test('protected routes reject anonymous access and sign-in errors stay generic',
   await page.goto('/dashboard');
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
 
-  await page.getByLabel('Email').fill('unknown@example.test');
-  await page.getByLabel('Password').fill('incorrect-password');
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(
-    page.getByRole('alert').filter({ hasText: 'Those sign-in details didn’t match' }),
-  ).toBeVisible();
-  await expect(page.getByLabel('Email')).toBeFocused();
-  await expectNoSeriousAccessibilityViolations(page);
+  await test.step('wrong-password generic error', async () => {
+    await page.getByLabel('Email').fill('unknown@example.test');
+    await page.getByLabel('Password').fill('incorrect-password');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'Those sign-in details didn’t match' }),
+    ).toBeVisible();
+    await expect(page.getByLabel('Email')).toBeFocused();
+  });
+  await expectNoWcagViolations(page);
+  expectNoPageErrors(pageErrors);
 });
 
 test('public support and certificate-verification journeys are usable', async ({
   page,
 }) => {
+  const pageErrors = watchForPageErrors(page);
   const destinations = [
     ['Accessibility', '/accessibility', 'Accessibility'],
     ['Privacy', '/privacy', 'Privacy'],
@@ -108,11 +115,13 @@ test('public support and certificate-verification journeys are usable', async ({
     page.getByRole('heading', { name: 'Certificate not found' }),
   ).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
+  expectNoPageErrors(pageErrors);
 });
 
 test('staff can select a tenant, validate input, and start and find an application', async ({
   page,
 }) => {
+  const pageErrors = watchForPageErrors(page);
   await signInAndSelectOrganisation(page);
 
   const invalidResponse = await page.request.post('/api/applications', {
@@ -150,12 +159,14 @@ test('staff can select a tenant, validate input, and start and find an applicati
   const applicationLink = page.getByRole('link', { name: new RegExp(applicantName) });
   await expect(applicationLink).toContainText('High priority');
   await expectNoSeriousAccessibilityViolations(page);
+  expectNoPageErrors(pageErrors);
 });
 
 test('organisation administrators can view access controls but cannot suspend themselves', async ({
   page,
 }) => {
   test.setTimeout(60_000);
+  const pageErrors = watchForPageErrors(page);
   await signInAndSelectOrganisation(page);
   await page.goto('/settings/people');
   await expect(page.getByRole('heading', { name: 'People and access' })).toBeVisible();
@@ -176,6 +187,7 @@ test('organisation administrators can view access controls but cannot suspend th
   await expect(page.getByText('That access change could not be made.')).toBeVisible();
   await expect(ownMembership).toContainText('active');
   await expectNoSeriousAccessibilityViolations(page);
+  expectNoPageErrors(pageErrors);
 });
 
 test('a linked applicant uploads evidence into quarantine without download access', async ({
@@ -188,85 +200,92 @@ test('a linked applicant uploads evidence into quarantine without download acces
     'Needs real object storage: local MinIO or S3 staging (see docs/eks-runbook.md).',
   );
   test.setTimeout(60_000);
-  await signInAndSelectOrganisation(page);
-  await page.goto('/settings/people');
-  await page.getByLabel('Initial role').selectOption({ label: 'Applicant' });
-  const applicantRoleId = await page.getByLabel('Initial role').inputValue();
-  const addApplicant = await page.request.post('/api/memberships', {
-    data: { email: APPLICANT_EMAIL, roleId: applicantRoleId },
+  const pageErrors = watchForPageErrors(page);
+  await test.step('evidence upload quarantine', async () => {
+    await signInAndSelectOrganisation(page);
+    await page.goto('/settings/people');
+    await page.getByLabel('Initial role').selectOption({ label: 'Applicant' });
+    const applicantRoleId = await page.getByLabel('Initial role').inputValue();
+    const addApplicant = await page.request.post('/api/memberships', {
+      data: { email: APPLICANT_EMAIL, roleId: applicantRoleId },
+    });
+    expect(addApplicant.status()).toBe(201);
+
+    await page.goto('/applications');
+    const stamp = Date.now();
+    const applicantName = `Linked E2E applicant ${stamp}`;
+    await page.getByLabel('Name as provided').fill(applicantName);
+    await page.getByLabel('Applicant account (optional)').selectOption({
+      label: `Dev Staff Member (${APPLICANT_EMAIL})`,
+    });
+    await page.getByRole('button', { name: 'Start application' }).click();
+    await expect(page).toHaveURL(/\/applications\/[0-9a-f-]+$/);
+
+    if (!baseURL) throw new Error('Playwright baseURL is required for this test.');
+    const applicantContext = await browser.newContext({ baseURL });
+    const applicantPage = await applicantContext.newPage();
+    const applicantErrors = watchForPageErrors(applicantPage);
+    await isolateSignInClient(applicantPage);
+    await applicantPage.goto('/sign-in');
+    await applicantPage.getByLabel('Email').fill(APPLICANT_EMAIL);
+    await applicantPage.getByLabel('Password').fill(APPLICANT_PASSWORD);
+    await applicantPage.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(applicantPage).toHaveURL(/\/(?:select-organisation|portal)/);
+    if (/\/select-organisation/.test(applicantPage.url())) {
+      await applicantPage
+        .getByRole('button', { name: /BlakPath Development Organisation/ })
+        .click();
+    }
+    await expect(applicantPage).toHaveURL(/\/portal$/);
+    await expect(
+      applicantPage.getByRole('navigation', { name: 'Primary navigation' }),
+    ).toHaveCount(0);
+    await applicantPage.getByRole('link', { name: new RegExp(applicantName) }).click();
+    await expect(applicantPage).toHaveURL(/\/portal\/[0-9a-f-]+$/);
+
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+    await applicantPage.getByLabel('Upload supporting evidence').setInputFiles({
+      name: `supporting-record-${stamp}.png`,
+      mimeType: 'image/png',
+      buffer: png,
+    });
+    const completedResponse = applicantPage.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        /\/api\/evidence\/[0-9a-f-]+\/complete$/.test(response.url()),
+    );
+    await applicantPage.getByRole('button', { name: 'Upload evidence' }).click();
+    const completed = await completedResponse;
+    expect(completed.status()).toBe(200);
+    const payload = (await completed.json()) as { evidence: { id: string } };
+
+    await expect(
+      applicantPage.getByText(
+        'Your file has been sent. It is checked for safety before the organisation can open it.',
+      ),
+    ).toBeVisible();
+    await expect(applicantPage.getByRole('link', { name: 'Download' })).toHaveCount(0);
+
+    const deniedDownload = await applicantPage.request.get(
+      `/api/evidence/${payload.evidence.id}/download`,
+    );
+    expect(deniedDownload.status()).toBe(403);
+    await expect(deniedDownload.json()).resolves.toMatchObject({ error: 'Forbidden' });
+    await expectNoSeriousAccessibilityViolations(applicantPage);
+    expectNoPageErrors(applicantErrors);
+    await applicantContext.close();
   });
-  expect(addApplicant.status()).toBe(201);
-
-  await page.goto('/applications');
-  const stamp = Date.now();
-  const applicantName = `Linked E2E applicant ${stamp}`;
-  await page.getByLabel('Name as provided').fill(applicantName);
-  await page.getByLabel('Applicant account (optional)').selectOption({
-    label: `Dev Staff Member (${APPLICANT_EMAIL})`,
-  });
-  await page.getByRole('button', { name: 'Start application' }).click();
-  await expect(page).toHaveURL(/\/applications\/[0-9a-f-]+$/);
-
-  if (!baseURL) throw new Error('Playwright baseURL is required for this test.');
-  const applicantContext = await browser.newContext({ baseURL });
-  const applicantPage = await applicantContext.newPage();
-  await isolateSignInClient(applicantPage);
-  await applicantPage.goto('/sign-in');
-  await applicantPage.getByLabel('Email').fill(APPLICANT_EMAIL);
-  await applicantPage.getByLabel('Password').fill(APPLICANT_PASSWORD);
-  await applicantPage.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(applicantPage).toHaveURL(/\/(?:select-organisation|portal)/);
-  if (/\/select-organisation/.test(applicantPage.url())) {
-    await applicantPage
-      .getByRole('button', { name: /BlakPath Development Organisation/ })
-      .click();
-  }
-  await expect(applicantPage).toHaveURL(/\/portal$/);
-  await expect(
-    applicantPage.getByRole('navigation', { name: 'Primary navigation' }),
-  ).toHaveCount(0);
-  await applicantPage.getByRole('link', { name: new RegExp(applicantName) }).click();
-  await expect(applicantPage).toHaveURL(/\/portal\/[0-9a-f-]+$/);
-
-  const png = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-    'base64',
-  );
-  await applicantPage.getByLabel('Upload supporting evidence').setInputFiles({
-    name: `supporting-record-${stamp}.png`,
-    mimeType: 'image/png',
-    buffer: png,
-  });
-  const completedResponse = applicantPage.waitForResponse(
-    (response) =>
-      response.request().method() === 'POST' &&
-      /\/api\/evidence\/[0-9a-f-]+\/complete$/.test(response.url()),
-  );
-  await applicantPage.getByRole('button', { name: 'Upload evidence' }).click();
-  const completed = await completedResponse;
-  expect(completed.status()).toBe(200);
-  const payload = (await completed.json()) as { evidence: { id: string } };
-
-  await expect(
-    applicantPage.getByText(
-      'Your file has been sent. It is checked for safety before the organisation can open it.',
-    ),
-  ).toBeVisible();
-  await expect(applicantPage.getByRole('link', { name: 'Download' })).toHaveCount(0);
-
-  const deniedDownload = await applicantPage.request.get(
-    `/api/evidence/${payload.evidence.id}/download`,
-  );
-  expect(deniedDownload.status()).toBe(403);
-  await expect(deniedDownload.json()).resolves.toMatchObject({ error: 'Forbidden' });
-  await expectNoSeriousAccessibilityViolations(applicantPage);
-  await applicantContext.close();
+  expectNoPageErrors(pageErrors);
 });
 
 test('staff can progress a case through review and a human committee decision', async ({
   page,
 }) => {
   test.setTimeout(90_000);
+  const pageErrors = watchForPageErrors(page);
   await signInAndSelectOrganisation(page);
   await page.goto('/applications');
 
@@ -376,4 +395,5 @@ test('staff can progress a case through review and a human committee decision', 
   await expect(denied.json()).resolves.toMatchObject({ error: 'Forbidden' });
 
   await expectNoSeriousAccessibilityViolations(page);
+  expectNoPageErrors(pageErrors);
 });

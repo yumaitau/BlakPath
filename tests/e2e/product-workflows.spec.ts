@@ -1,7 +1,7 @@
 import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { ADMIN_PASSWORD, signInAndSelectOrganisation } from './helpers/auth';
-import { watchForPageErrors } from './helpers/page-errors';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 test('task changes persist and are reflected on the dashboard', async ({ page }) => {
   const pageErrors = watchForPageErrors(page);
@@ -31,7 +31,7 @@ test('task changes persist and are reflected on the dashboard', async ({ page })
     page.getByRole('img', { name: /Tasks by board column.*Done \d/i }),
   ).toBeVisible();
   await expectNoWcagViolations(page);
-  expect(pageErrors.map((error) => error.message)).toEqual([]);
+  expectNoPageErrors(pageErrors);
 });
 
 test('staff can import, view and export a committee meeting', async ({ page }) => {
@@ -84,7 +84,7 @@ test('staff can import, view and export a committee meeting', async ({ page }) =
 
   await page.goto('/dashboard');
   await expect(page.getByText('scheduled ahead').first()).toBeVisible();
-  expect(pageErrors.map((error) => error.message)).toEqual([]);
+  expectNoPageErrors(pageErrors);
 });
 
 test('a form can be authored, completed once, reviewed and revoked', async ({ page }) => {
@@ -163,7 +163,7 @@ test('a form can be authored, completed once, reviewed and revoked', async ({ pa
     page.getByRole('heading', { name: 'This link is no longer valid' }),
   ).toBeVisible();
   await expectNoWcagViolations(page);
-  expect(pageErrors.map((error) => error.message)).toEqual([]);
+  expectNoPageErrors(pageErrors);
 });
 
 test('account security fails safely and sign-out ends the session', async ({ page }) => {
@@ -171,16 +171,21 @@ test('account security fails safely and sign-out ends the session', async ({ pag
   await signInAndSelectOrganisation(page);
   await page.goto('/settings/security');
   await expect(page.getByRole('heading', { name: 'Account security' })).toBeVisible();
-  // The seed enrols a bootstrap passkey so the administrator meets staff MFA.
-  await expect(page.getByText('Development bootstrap passkey')).toBeVisible();
 
-  await page
-    .getByLabel('Confirm your password to continue')
-    .fill(`${ADMIN_PASSWORD}-incorrect`);
-  await page.getByRole('button', { name: 'Set up two-step verification' }).click();
-  await expect(
-    page.getByRole('region', { name: 'Account security' }).getByRole('alert'),
-  ).toContainText('We couldn’t start two-step verification.');
+  await test.step('bootstrap passkey listed', async () => {
+    // The seed enrols a bootstrap passkey so the administrator meets staff MFA.
+    await expect(page.getByText('Development bootstrap passkey')).toBeVisible();
+  });
+
+  await test.step('MFA fail-safe', async () => {
+    await page
+      .getByLabel('Confirm your password to continue')
+      .fill(`${ADMIN_PASSWORD}-incorrect`);
+    await page.getByRole('button', { name: 'Set up two-step verification' }).click();
+    await expect(
+      page.getByRole('region', { name: 'Account security' }).getByRole('alert'),
+    ).toContainText('We couldn’t start two-step verification.');
+  });
 
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/sign-in$/);
@@ -188,5 +193,5 @@ test('account security fails safely and sign-out ends the session', async ({ pag
   expect(protectedResponse.status()).toBe(401);
   await page.goto('/dashboard');
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
-  expect(pageErrors.map((error) => error.message)).toEqual([]);
+  expectNoPageErrors(pageErrors);
 });
