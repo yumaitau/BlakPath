@@ -101,6 +101,7 @@ export function StaffShell({
       if (!response.ok) return;
       // Full navigation so an applicant-only organisation never paints the
       // staff shell that is already on screen.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full document load so Server Components read the switched session row
       window.location.assign('/home');
     } finally {
       setSwitching(false);

@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { conflictDeclarations, decisions, decisionVotes } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import {
   beforeConditionalWrite,
   nextRowVersion,
@@ -59,13 +60,6 @@ import { resolveMeetingLink } from './meeting-link';
 
 export type DecisionRow = typeof decisions.$inferSelect;
 export type DecisionVoteRow = typeof decisionVotes.$inferSelect;
-
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
 
 async function loadDecision(id: string): Promise<DecisionRow | null> {
   const loaded = await loadDecisionClaim(id);
@@ -186,7 +180,7 @@ export async function proposeDecision(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'decision');
+    const created = expectRow(inserted[0], 'decision');
 
     await recordAudit(
       {
@@ -201,7 +195,7 @@ export async function proposeDecision(
     return created;
   });
   const [row] = await openDecisionRows(scope.organisationId, [stored]);
-  return must(row, 'decision');
+  return expectRow(row, 'decision');
 }
 
 /** Cast or change a committee vote on a proposed decision. */
@@ -247,7 +241,7 @@ export async function castVote(
           scope.where(decisionVotes.organisationId, eq(decisionVotes.id, existing.id)),
         )
         .returning();
-      const row = must(updated[0], 'vote');
+      const row = expectRow(updated[0], 'vote');
       await recordAudit(
         {
           action: 'vote.changed',
@@ -271,7 +265,7 @@ export async function castVote(
         }),
       )
       .returning();
-    const row = must(inserted[0], 'vote');
+    const row = expectRow(inserted[0], 'vote');
     await recordAudit(
       {
         action: 'vote.cast',
@@ -376,7 +370,7 @@ export async function finaliseDecision(
         'This decision changed while you were working. Refresh and try again.',
       );
     }
-    const row = must(updated[0], 'decision');
+    const row = expectRow(updated[0], 'decision');
     const transition = await applyApplicationTransition(
       tx,
       decision.applicationId,
@@ -417,7 +411,7 @@ export async function finaliseDecision(
   });
 
   const [opened] = await openDecisionRows(scope.organisationId, [committed.row]);
-  return must(opened, 'decision');
+  return expectRow(opened, 'decision');
 }
 
 /** List decisions for an application the actor may read. */

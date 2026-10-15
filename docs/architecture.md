@@ -26,8 +26,8 @@ tenancy, authorisation and audit gates.
 
 ## Domains (modules)
 
-Phase 1 lands the platform spine. Later phases add case-management domains on top
-of the same tenancy/authorisation/audit foundation.
+Phase 1 landed the platform spine. Case-management domains sit on the same
+tenancy, authorisation and audit foundation.
 
 | Domain                | Responsibility                                                                                                                                                                                                                                                                                    | Status      |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
@@ -36,11 +36,11 @@ of the same tenancy/authorisation/audit foundation.
 | **Membership & RBAC** | Memberships, roles, permission catalogue, role grants, representative authorisations (`src/db/schema/membership.ts`)                                                                                                                                                                              | Phase 1     |
 | **Audit & Integrity** | Append-only hash-chained audit trail, integrity checkpoints, break-glass requests (`src/db/schema/audit.ts`)                                                                                                                                                                                      | Phase 1     |
 | **Applications**      | CoA application intake and status lifecycle. Outbound correspondence is a human Send (`src/domains/correspondence`): templates per organisation, case log, email or printed letter. Outcome letters cannot be sent before the decision is finalised, and finalising a decision does not send one. | In progress |
-| **Evidence**          | Secure document upload, quarantine → scan → serve lifecycle (`docs/evidence-scanning-design.md`)                                                                                                                                                                                                  | Phase 3     |
-| **Genealogy**         | Family/ancestry records supporting an application                                                                                                                                                                                                                                                 | Later phase |
-| **Decisions**         | Human-recorded determinations and certificate issuance                                                                                                                                                                                                                                            | Later phase |
-| **Consent**           | Consent ledger; ties representative access to recorded consent                                                                                                                                                                                                                                    | Later phase |
-| **Notifications**     | Email and in-app messaging (via the worker)                                                                                                                                                                                                                                                       | Later phase |
+| **Evidence**          | Secure document upload, quarantine → scan → serve lifecycle (`docs/evidence-scanning-design.md`)                                                                                                                                                                                                  | Shipped     |
+| **Genealogy**         | Family-link records supporting an application (`src/domains/family-links`). Links are human-recorded, never inferred                                                                                                                                                                              | Shipped     |
+| **Decisions**         | Human-recorded determinations and certificate issuance (`src/domains/decisions`). The software never decides                                                                                                                                                                                      | Shipped     |
+| **Consent**           | Consent ledger; ties representative access to recorded consent (`src/domains/consent`)                                                                                                                                                                                                            | Shipped     |
+| **Notifications**     | Email and in-app messaging (via the worker) (`src/domains/notifications`)                                                                                                                                                                                                                         | Shipped     |
 
 Every future tenant-owned table uses the shared helpers (`organisationId()`,
 `primaryId()`, `timestamps`) and is reached through the tenant-scoped data access

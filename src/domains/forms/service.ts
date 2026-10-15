@@ -19,6 +19,7 @@ import {
   formResponses,
 } from '@/db/schema';
 import { currentScope, scopeFor } from '@/db/tenant-db';
+import { expectRow } from '@/db/expect-row';
 import { recordAudit, type RecordAuditInput } from '@/domains/audit/service';
 import { createApplication, getApplication } from '@/domains/applications/service';
 import {
@@ -96,13 +97,6 @@ function presentInvitation(row: FormInvitationRow): PublicFormInvitation {
 /** Capabilities allowed to author/manage forms and read responses. */
 const FORM_MANAGE = ['application:read-any', 'application:update-intake'] as const;
 
-function must<T>(row: T | undefined, what: string): T {
-  if (row === undefined) {
-    throw new Error(`Expected ${what} to be returned from the database.`);
-  }
-  return row;
-}
-
 /** SHA-256 hex of a token. Same one-way transform on write and on lookup. */
 function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
@@ -153,7 +147,7 @@ export async function createForm(rawInput: CreateFormInput): Promise<FormRow> {
         }),
       )
       .returning();
-    const row = must(inserted[0], 'form');
+    const row = expectRow(inserted[0], 'form');
 
     await recordAudit(
       {
@@ -192,7 +186,7 @@ export async function updateForm(
       .set(patch)
       .where(scope.where(forms.organisationId, eq(forms.id, formId)))
       .returning();
-    const row = must(updated[0], 'form');
+    const row = expectRow(updated[0], 'form');
 
     await recordAudit(
       {
@@ -240,7 +234,7 @@ async function setFormStatus(
         'This form changed while you were working. Refresh and try again.',
       );
     }
-    const row = must(updated[0], 'form');
+    const row = expectRow(updated[0], 'form');
 
     await recordAudit(
       {
@@ -322,7 +316,7 @@ export async function createInvitation(
         }),
       )
       .returning();
-    const created = must(inserted[0], 'invitation');
+    const created = expectRow(inserted[0], 'invitation');
 
     await recordAudit(
       {
@@ -398,7 +392,7 @@ export async function revokeInvitation(
     if (updated.length === 0) {
       throw new ConcurrencyConflictError('This invitation can no longer be revoked.');
     }
-    const revoked = must(updated[0], 'invitation');
+    const revoked = expectRow(updated[0], 'invitation');
 
     await recordAudit(
       {
