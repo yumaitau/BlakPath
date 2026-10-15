@@ -37,6 +37,14 @@ const SCAN_SWEEP_JOB_OPTS: ScheduledJobOpts = {
   removeOnFail: { age: 7 * 24 * 3600 },
 };
 
+/** The export sweep is periodic too; the next run retries. */
+const EXPORT_SWEEP_JOB_OPTS: ScheduledJobOpts = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 2_000 },
+  removeOnComplete: { age: 24 * 3600, count: 100 },
+  removeOnFail: { age: 7 * 24 * 3600 },
+};
+
 /** The webhook sweep is periodic; the next run retries, so keep it short. */
 const WEBHOOK_SWEEP_JOB_OPTS: ScheduledJobOpts = {
   attempts: 3,
@@ -67,6 +75,8 @@ export interface SchedulerIntervals {
   keyHealthMs?: number;
   /** How often to redrive stuck evidence scans. Default 5 minutes. */
   evidenceScanSweepMs?: number;
+  /** How often to expire and recover exports. Default 15 minutes. */
+  exportSweepMs?: number;
 }
 
 export interface ReconcileSchedulesInput {
@@ -79,6 +89,8 @@ export interface ReconcileSchedulesInput {
   keyHealthQueue?: ScheduledQueue;
   /** Malware-scan queue. Its repeatable job is the evidence recovery sweep. */
   malwareScanQueue?: ScheduledQueue;
+  /** Export queue. Its repeatable job is the expire/recover sweep. */
+  exportQueue?: ScheduledQueue;
   intervals: SchedulerIntervals;
   /** Also schedule the platform (null organisation) chain. */
   includePlatformChain?: boolean;
@@ -91,6 +103,7 @@ export interface ReconcileSchedulesResult {
   webhookSweepSchedulers: number;
   keyHealthSchedulers: number;
   scanSchedulers: number;
+  exportSchedulers: number;
   removedSchedulers: number;
 }
 
@@ -194,6 +207,7 @@ export async function reconcileTenantSchedules(
     webhookSweepRemoved,
     keyHealthRemoved,
     scanRemoved,
+    exportRemoved,
   ] = await Promise.all([
     reconcileQueue(
       input.auditQueue,
@@ -244,6 +258,16 @@ export async function reconcileTenantSchedules(
           SCAN_SWEEP_JOB_OPTS,
         )
       : Promise.resolve(0),
+    input.exportQueue
+      ? reconcileQueue(
+          input.exportQueue,
+          QueueName.Export,
+          organisationIds,
+          input.intervals.exportSweepMs ?? 900_000,
+          [],
+          EXPORT_SWEEP_JOB_OPTS,
+        )
+      : Promise.resolve(0),
   ]);
 
   return {
@@ -253,13 +277,15 @@ export async function reconcileTenantSchedules(
     webhookSweepSchedulers: input.webhookQueue ? organisationIds.length : 0,
     keyHealthSchedulers: input.keyHealthQueue ? organisationIds.length : 0,
     scanSchedulers: input.malwareScanQueue ? organisationIds.length : 0,
+    exportSchedulers: input.exportQueue ? organisationIds.length : 0,
     removedSchedulers:
       auditRemoved +
       retentionRemoved +
       reminderRemoved +
       webhookSweepRemoved +
       keyHealthRemoved +
-      scanRemoved,
+      scanRemoved +
+      exportRemoved,
   };
 }
 
@@ -278,6 +304,7 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
     webhookQueue: getQueue(QueueName.Webhook),
     keyHealthQueue: getQueue(QueueName.KeyHealth),
     malwareScanQueue: getQueue(QueueName.MalwareScan),
+    exportQueue: getQueue(QueueName.Export),
     intervals: {
       auditVerifyMs: env.AUDIT_VERIFY_INTERVAL_MS,
       retentionSweepMs: env.RETENTION_SWEEP_INTERVAL_MS,
@@ -285,6 +312,7 @@ export async function syncTenantSchedules(): Promise<ReconcileSchedulesResult> {
       webhookSweepMs: env.WEBHOOK_SWEEP_INTERVAL_MS,
       keyHealthMs: env.KEY_HEALTH_INTERVAL_MS,
       evidenceScanSweepMs: env.EVIDENCE_SCAN_SWEEP_INTERVAL_MS,
+      exportSweepMs: env.EXPORT_SWEEP_INTERVAL_MS,
     },
     includePlatformChain: true,
   });

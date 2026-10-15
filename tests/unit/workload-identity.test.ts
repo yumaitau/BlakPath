@@ -281,13 +281,19 @@ describe('EKS Pod Identity roles', () => {
       'kms:GenerateDataKey',
       'kms:GetPublicKey',
       'kms:Sign',
+      's3:AbortMultipartUpload',
       's3:DeleteObject',
       's3:DeleteObjectVersion',
       's3:GetObject',
       's3:ListBucket',
       's3:ListBucketVersions',
       's3:PutObject',
+      's3:PutObjectTagging',
     ]);
+    // Export lifecycle actions stay on export keys only.
+    expect(workerStatements.get('ExportLifecycle')).toContain(
+      "Resource: !Sub '${EvidenceBucketArn}/*/exports/*'",
+    );
     const signers = [...workerStatements.entries()].filter(
       ([, body]) => /^\s*Effect:\s*Allow\s*$/m.test(body) && body.includes('kms:Sign'),
     );

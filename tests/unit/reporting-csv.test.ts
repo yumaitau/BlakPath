@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toCsv } from '@/domains/reporting/csv';
+import { toCsv, toCsvLine } from '@/domains/reporting/csv';
 import { REPORT_COLUMNS, REPORT_TYPES, isReportType } from '@/domains/reporting/reports';
 import {
   exportRange,
@@ -110,5 +110,12 @@ describe('report registry + schema', () => {
     const range = exportRange({ from: '2026-03-01', to: '2026-03-01' });
     expect(range.start?.toISOString()).toBe('2026-03-01T00:00:00.000Z');
     expect(range.end?.toISOString()).toBe('2026-03-01T23:59:59.999Z');
+  });
+});
+
+describe('streamed csv lines', () => {
+  it('serialises a single line with its terminator, matching the document form', () => {
+    expect(toCsvLine(['a', 'b,c', null])).toBe('a,"b,c",\r\n');
+    expect(toCsv(['h'], [['x']])).toBe(toCsvLine(['h']) + toCsvLine(['x']));
   });
 });

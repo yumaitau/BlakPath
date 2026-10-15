@@ -330,6 +330,13 @@
       "when": 1792029304187,
       "tag": "0046_workflow_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1792031891087,
+      "tag": "0047_export_lifecycle",
+      "breakpoints": true
     }
   ]
 }
