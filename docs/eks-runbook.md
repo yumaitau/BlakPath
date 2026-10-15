@@ -317,6 +317,49 @@ manifest is `infra/k8s/base/service-ingress.yaml`. The example stack is
    client certificate is rejected. A request that presents the secret records
    `CF-Connecting-IP`. A different `X-Forwarded-For` value does not change it.
 
+## Rollouts and the database connection budget
+
+The namespace label `elbv2.k8s.aws/pod-readiness-gate-inject: enabled` tells the
+AWS Load Balancer Controller to inject a target-health readiness gate. Install
+that controller before the first deploy. Without it the label does nothing and
+the ALB can still route to a pod that is not registered. Both the production
+and staging namespace overlays set the label.
+
+Web pods sleep 15 seconds in `preStop`. That matches the Ingress attribute
+`deregistration_delay.timeout_seconds=15`, so in-flight requests finish before
+SIGTERM. `terminationGracePeriodSeconds` on web is 40. The kubelet counts the
+sleep against that period, then the process still has 25 seconds to exit.
+
+Workers do not sleep in `preStop`. SIGTERM starts their job drain
+(`WORKER_SHUTDOWN_GRACE_SECONDS`, 25 seconds). Their grace period is 30 seconds.
+
+Web, worker and ClamAV use `topologySpreadConstraints` on
+`topology.kubernetes.io/zone` and `kubernetes.io/hostname` with `maxSkew: 1`
+and `whenUnsatisfiable: DoNotSchedule`. The node group must already span at
+least two AZs, with a schedulable node in each, or the second web or worker
+replica stays Pending.
+
+Pool sizes, HPA max and the 225-connection floor are in
+`src/db/connection-budget.ts`, in the section below. Do not raise
+`maxReplicas` without changing that module.
+
+### Check a rollout
+
+Applying these manifests, and the load test below, is a human step. This
+repository does not apply them to a cluster.
+
+On a cluster whose nodes already span two AZs:
+
+1. Send load through the ALB at `https://blakpath.yumait.au/api/ready`.
+2. Roll web (`kubectl rollout restart deployment/blakpath-app -n blakpath`)
+   and drain one node.
+3. ALB `HTTPCode_Target_5XX_Count` and `HTTPCode_ELB_5XX_Count` stay at 0
+   for that window.
+4. `kubectl get pods -n blakpath -o wide` shows web and worker pods in at
+   least two zones.
+5. RDS `DatabaseConnections` stays at or under the connection budget (157, 70%
+   of 225) while the HPA is at max and a rollout is in progress.
+
 ## Secrets and keys
 
 - Dedicated folder: every BlakPath production secret lives under
@@ -412,7 +455,10 @@ Record who rotated, when, and which keys. Do not record the values.
   Settings and apply steps: `docs/data-tier-capacity.md`. Apply it in
   `ap-southeast-2`, then deploy the namespace through the CD pipeline (#57).
   `/api/ready` is the post-deploy check.
-- RDS Postgres with point-in-time recovery. RDS Proxy in front for failover.
+- RDS Postgres with point-in-time recovery. `infra/aws/backup-plan.example.yaml`
+  keeps 35-day continuous point-in-time recovery and a 90-day daily snapshot in
+  a compliance-locked vault. Do not also enrol the instance in another
+  continuous backup plan. RDS Proxy in front for failover.
   Two roles: `blakpath_migrator` (owner, migrate Job only) and
   `blakpath_app` (runtime DML). See `infra/postgres/audit-roles.sql`.
   Clients connect to the proxy hostname, not an IP and not a CNAME that is
@@ -433,9 +479,9 @@ Record who rotated, when, and which keys. Do not record the values.
   older proxies pinned named protocol statements. The client never issues those.
 - ElastiCache Redis TLS and AUTH token, two nodes, Multi-AZ failover,
   `maxmemory-policy noeviction`, snapshot retention 0. Ephemeral only:
-  queues, rate limits, schedulers.
+  queues, rate limits, schedulers. Not in the backup plan.
 - S3 evidence + quarantine buckets: block public access, enforce TLS,
-  versioning on, AWS Backup coverage. The bucket default CMK is
+  versioning on. Both buckets are in that backup plan. The bucket default CMK is
   `alias/blakpath-prod-evidence`. Per-object SSE-KMS uses the tenant CMK.
   Certificates and exports are objects in the evidence bucket. MinIO exists
   for local dev only and does not send SSE headers.
@@ -628,8 +674,12 @@ refuses in production.
 
 ## Restore drill (EKS variant)
 
-1. Snapshot RDS + S3 point-in-time into an isolated namespace with a
-   separate secret copy. Never restore into `blakpath` or `blakpath-staging`.
+1. Restore RDS and both buckets from a recovery point in the locked BlakPath
+   vault into an isolated namespace with a separate secret copy. Never restore
+   into `blakpath` or `blakpath-staging`. Quarantine objects stay unscanned.
+   Re-apply audited deletions newer than the recovery point
+   (`docs/offboarding.md`). `docs/operations-runbook.md` has the
+   `list-protected-resources` check.
 2. Run migrations, sign in as seeded admin, confirm records present.
    Re-establish the client CMK grant before expecting tenant plaintext. A
    restored backup does not recreate a deleted key.
@@ -675,7 +725,9 @@ same availability zone as their volumes, on two different nodes.
 Audit divergence, oldest quarantined-evidence age
 (`blakpath-oldest-quarantined-age`, 30 minutes), malware-scan dead-letter depth
 (`blakpath-malware-scan-dlq`), dead-letter email/export/retention/webhook jobs,
-backup failures, sustained 5xx / readiness failures, ClamAV signature age above
-48 hours. See `infra/aws/operational-alerts.example.yaml` for signal mapping.
+backup failures (`blakpath-backup-job-failed`), sustained 5xx / readiness
+failures, ClamAV signature age above 48 hours. See
+`infra/aws/operational-alerts.example.yaml` for application log signals and
+`infra/aws/backup-plan.example.yaml` for the backup-job alarm.
 The evidence sweep redrives stuck scans; the age alarm means that redrive is
 not draining.

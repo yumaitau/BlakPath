@@ -329,7 +329,9 @@ When something goes wrong, BlakPath **denies rather than exposes**:
   placement, backups and patching are enforced in the `ap-southeast-2`
   deployment. Secret sync and the API
   endpoint contract are in `docs/eks-runbook.md`. The dedicated cluster is
-  `docs/adr/0001-dedicated-cluster.md`.
+  `docs/adr/0001-dedicated-cluster.md`. Backup coverage, the compliance vault
+  lock and how long erased data remains in recovery points are specified in
+  `infra/aws/backup-plan.example.yaml` and `docs/offboarding.md`.
 - A compromised Tier 1 pod reads plaintext in memory for every tenant whose
   key the workload role can still use. Memory zeroisation is not a control
   against that. Tier 2 (#124, not built) is the only mode in the ADR where the

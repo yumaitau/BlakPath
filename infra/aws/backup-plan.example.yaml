@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  BlakPath AWS Backup vault (CMK, compliance lock) and plan for RDS and the
+  evidence and quarantine buckets. Deploy only in ap-southeast-2.
+
+# Compliance lock: ChangeableForDays is the cooling-off window. After it ends
+# the lock cannot be removed or relaxed, including by the account root.
+# Every rule DeleteAfterDays must sit between MinRetentionDays and
+# MaxRetentionDays. Continuous backup cannot exceed 35 days.
+# Do not add a cross-region copy or cold storage. Do not deny backup:DeleteRecoveryPoint;
+# expiry of recovery points is what enforces the 90-day maximum.
+
+Rules:
+  SydneyOnly:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'ap-southeast-2']
+        AssertDescription: Deploy this stack only in ap-southeast-2.
+
+Parameters:
+  BackupVaultName:
+    Type: String
+    Default: blakpath-production
+    AllowedPattern: '^[A-Za-z0-9\-_]{2,50}$'
+    Description: Vault name. Unique in the account and region.
+  BackupVaultKmsKeyArn:
+    Type: String
+    AllowedPattern: '^arn:aws:kms:ap-southeast-2:[0-9]{12}:key/[0-9a-fA-F-]{36}$'
+    Description: BlakPath CMK that encrypts the vault. Not an alias and not an AWS-managed key.
+  RdsInstanceArn:
+    Type: String
+    AllowedPattern: '^arn:aws:rds:ap-southeast-2:[0-9]{12}:(db|cluster):.+$'
+    Description: RDS PostgreSQL instance ARN, or the cluster ARN when the deployment is Aurora.
+  EvidenceBucketArn:
+    Type: String
+    AllowedPattern: '^arn:aws:s3:::[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$'
+    Description: Versioned evidence bucket ARN.
+  QuarantineBucketArn:
+    Type: String
+    AllowedPattern: '^arn:aws:s3:::[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$'
+    Description: Versioned quarantine bucket ARN. Included because uploads can hold personal information before scanning.
+  OnCallTopicArn:
+    Type: String
+    AllowedPattern: '^arn:aws:sns:ap-southeast-2:[0-9]{12}:.+$'
+    Description: Existing ap-southeast-2 SNS topic integrated with the on-call channel.
+
+Resources:
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BackupVaultName: !Ref BackupVaultName
+      EncryptionKeyArn: !Ref BackupVaultKmsKeyArn
+      LockConfiguration:
+        ChangeableForDays: 7
+        MinRetentionDays: 35
+        MaxRetentionDays: 90
+      AccessPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyCopyOutOfVault
+            Effect: Deny
+            Principal: '*'
+            Action: [backup:CopyFromBackupVault]
+            Resource: '*'
+      BackupVaultTags:
+        Application: BlakPath
+        DataResidency: ap-southeast-2
+
+  BackupServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: blakpath-backup-service
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: backup.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForS3Backup
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForS3Restore
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlanTags:
+        Application: BlakPath
+        DataResidency: ap-southeast-2
+      BackupPlan:
+        BackupPlanName: !Ref BackupVaultName
+        BackupPlanRule:
+          - RuleName: continuous-pitr
+            TargetBackupVault: !Ref BackupVault
+            EnableContinuousBackup: true
+            ScheduleExpression: cron(0 2 * * ? *)
+            ScheduleExpressionTimezone: Australia/Sydney
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle:
+              DeleteAfterDays: 35
+            RecoveryPointTags:
+              Application: BlakPath
+              DataResidency: ap-southeast-2
+              BackupTier: continuous
+          - RuleName: daily-snapshot
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: cron(0 3 * * ? *)
+            ScheduleExpressionTimezone: Australia/Sydney
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 720
+            Lifecycle:
+              DeleteAfterDays: 90
+            RecoveryPointTags:
+              Application: BlakPath
+              DataResidency: ap-southeast-2
+              BackupTier: daily
+
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: blakpath-rds-and-buckets
+        IamRoleArn: !GetAtt BackupServiceRole.Arn
+        Resources:
+          - !Ref RdsInstanceArn
+          - !Ref EvidenceBucketArn
+          - !Ref QuarantineBucketArn
+
+  BackupJobFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: blakpath-backup-job-failed
+      AlarmDescription: >-
+        An AWS Backup job for the BlakPath vault failed, was aborted, or
+        expired. Follow docs/operations-runbook.md. Do not delete recovery
+        points to clear this alarm.
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OnCallTopicArn]
+      Metrics:
+        - Id: failed
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Backup
+              MetricName: NumberOfBackupJobsFailed
+              Dimensions:
+                - Name: BackupVaultName
+                  Value: !Ref BackupVault
+            Period: 300
+            Stat: Sum
+        - Id: aborted
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Backup
+              MetricName: NumberOfBackupJobsAborted
+              Dimensions:
+                - Name: BackupVaultName
+                  Value: !Ref BackupVault
+            Period: 300
+            Stat: Sum
+        - Id: expired
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Backup
+              MetricName: NumberOfBackupJobsExpired
+              Dimensions:
+                - Name: BackupVaultName
+                  Value: !Ref BackupVault
+            Period: 300
+            Stat: Sum
+        - Id: failures
+          Label: BlakPathBackupJobFailures
+          Expression: failed + aborted + expired
+          ReturnData: true
+
+Outputs:
+  BackupVaultName:
+    Value: !Ref BackupVault
+  BackupVaultArn:
+    Value: !GetAtt BackupVault.BackupVaultArn
+  BackupPlanId:
+    Value: !Ref BackupPlan
+  BackupJobFailedAlarmName:
+    Value: !Ref BackupJobFailedAlarm
+  VaultLockMode:
+    Value: compliance
+  MinRetentionDays:
+    Value: '35'
+  MaxRetentionDays:
+    Value: '90'

@@ -29,6 +29,8 @@ metadata:
     # Target-group health checks hit pod IPs directly (not this listener rule)
     # on /api/ready, so the edge 403 below does not fail the ALB.
     alb.ingress.kubernetes.io/healthcheck-path: /api/ready
+    # Matches the web preStop sleep. In-flight requests finish before SIGTERM.
+    alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=15
     alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
     alb.ingress.kubernetes.io/actions.health-forbidden: >
       {"type":"fixed-response","fixedResponseConfig":{"contentType":"application/json","statusCode":"403","messageBody":"{\"error\":\"Forbidden\"}"}}

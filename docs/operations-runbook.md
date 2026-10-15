@@ -134,6 +134,59 @@ have been verified. Re-establish the client key grant before reading tenant
 ciphertext. If the key was deleted, AWS Backup copies of that ciphertext are not
 readable ([`key-lifecycle.md`](key-lifecycle.md)).
 
+### `blakpath-backup-job-failed`
+
+`infra/aws/backup-plan.example.yaml` creates alarm `blakpath-backup-job-failed`.
+It pages the on-call SNS topic when a backup job for the BlakPath vault fails,
+is aborted, or expires. AWS Backup publishes those metrics only for a non-zero
+count, so the alarm treats missing data as not breaching.
+
+1. In `ap-southeast-2`, open the failed job. Record the resource ARN, job id and
+   status. Do not copy object bodies, query results or applicant data into the
+   ticket.
+2. Leave the vault lock in place. Do not delete recovery points, shorten
+   retention, or remove the lock to clear the alarm.
+3. Common causes: the backup role cannot use the RDS or bucket CMK, bucket
+   versioning is off, the database is already in another continuous backup plan,
+   or the job overlapped an RDS maintenance window.
+4. Fix the cause and wait for the next successful job. `list-protected-resources`
+   must still include the RDS instance, the evidence bucket and the quarantine
+   bucket. A protected resource appears only after a successful job.
+5. Keep any restore isolated. Re-apply audited deletions that happened after the
+   recovery point before anyone can use the restored data
+   (`docs/offboarding.md`). Restored quarantine objects stay unscanned.
+
+### Prove the alarm path
+
+Deploy the stack first. Test-fire the alarm once, confirm the on-call channel
+receives it, then reset the state. This checks the notification path. It does
+not create a backup job.
+
+```bash
+aws cloudwatch set-alarm-state \
+  --region ap-southeast-2 \
+  --alarm-name blakpath-backup-job-failed \
+  --state-value ALARM \
+  --state-reason "BlakPath backup alarm test fire"
+aws cloudwatch set-alarm-state \
+  --region ap-southeast-2 \
+  --alarm-name blakpath-backup-job-failed \
+  --state-value OK \
+  --state-reason "BlakPath backup alarm test fire reset"
+```
+
+### Confirm the vault after the first successful jobs
+
+```bash
+aws backup describe-backup-vault \
+  --region ap-southeast-2 \
+  --backup-vault-name blakpath-production
+aws backup list-protected-resources --region ap-southeast-2
+```
+
+The vault lock is compliance mode, minimum 35 days and maximum 90 days. The
+protected-resource list includes the RDS instance ARN and both bucket ARNs.
+
 ## Tenant key unavailable
 
 1. Staff see a lock, not a generic 500. Public forms and verify pages say the

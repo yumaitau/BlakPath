@@ -22,6 +22,28 @@ export const WEB_MAX_SURGE = 1;
 export const WORKER_REPLICAS = 2;
 export const WORKER_MAX_SURGE = 1;
 export const MIGRATION_CONNECTIONS = 1;
+/**
+ * ALB target-group deregistration delay, in seconds. The web preStop sleeps
+ * for the same interval so the process outlives in-flight requests.
+ */
+export const ALB_DRAIN_SECONDS = 15;
+/**
+ * How long worker/index.ts waits for in-flight jobs after SIGTERM.
+ * Workers do not use a preStop sleep: SIGTERM is what starts this drain.
+ */
+export const WORKER_SHUTDOWN_GRACE_SECONDS = 25;
+/**
+ * Worker terminationGracePeriodSeconds. No preStop, so the whole period is
+ * available after SIGTERM. Must exceed WORKER_SHUTDOWN_GRACE_SECONDS.
+ */
+export const WORKER_TERMINATION_GRACE_PERIOD_SECONDS = 30;
+/**
+ * Web terminationGracePeriodSeconds. The kubelet starts this clock at
+ * deletion and preStop runs inside it, so the period is the ALB drain plus
+ * the worker's post-SIGTERM shutdown window.
+ */
+export const WEB_TERMINATION_GRACE_PERIOD_SECONDS =
+  ALB_DRAIN_SECONDS + WORKER_SHUTDOWN_GRACE_SECONDS;
 /** Minimum `max_connections` this budget is checked against. */
 export const RDS_MAX_CONNECTIONS = 225;
 export const CONNECTION_BUDGET_FRACTION = 0.7;

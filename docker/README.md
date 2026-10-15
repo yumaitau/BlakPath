@@ -108,14 +108,18 @@ docker build --target worker -t blakpath-worker:0.1.0 .
 
 ## Backups & data residency pointers
 
-- **Postgres**: use managed automated backups / PITR (e.g. RDS snapshots) with
-  retention per your data-retention policy. All snapshots stay in
-  ap-southeast-2. Test restores regularly.
-- **Object storage (evidence)**: enable S3 versioning and, if required,
-  cross-region-restricted replication that stays within Australian regions. The
-  evidence bucket is versioned locally to mirror this behaviour.
+Local Compose is not the production backup system. Production recovery points
+are the compliance-locked vault in `infra/aws/backup-plan.example.yaml`
+(`ap-southeast-2` only): 35-day point-in-time recovery and 90-day daily
+snapshots. `docs/offboarding.md` states how long deleted data remains there.
+
+- **Postgres**: RDS is in that plan. Test restores against a managed recovery
+  point before production use. Snapshots stay in ap-southeast-2.
+- **Object storage**: the evidence and quarantine buckets are both in that plan.
+  The local evidence bucket is versioned to mirror the production prerequisite.
+  Do not add a cross-region replica.
 - **Redis**: treated as ephemeral (queues/state). No durable data should live
-  only in Redis; jobs are re-drivable.
+  only in Redis; jobs are re-drivable. Redis is not backed up.
 - **Audit logs**: retained per policy in durable storage; never truncate
   audit history as part of routine ops.
 

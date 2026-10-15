@@ -1,5 +1,8 @@
 import type { ConnectionOptions, Worker } from 'bullmq';
-import { WORKER_QUEUE_CONCURRENCY } from '@/db/connection-budget';
+import {
+  WORKER_QUEUE_CONCURRENCY,
+  WORKER_SHUTDOWN_GRACE_SECONDS,
+} from '@/db/connection-budget';
 import { getOrganisationKey } from '@/domains/organisation-keys/service';
 import { redis } from '@/lib/redis';
 import { logger } from '@/lib/observability/logger';
@@ -57,8 +60,12 @@ const workerLogger = logger.child({ component: 'worker' });
  */
 const connection = redis as unknown as ConnectionOptions;
 
-/** Maximum time to wait for in-flight jobs on shutdown before forcing exit. */
-const SHUTDOWN_GRACE_MS = 25_000;
+/**
+ * Maximum time to wait for in-flight jobs on shutdown before forcing exit.
+ * The worker Deployment's terminationGracePeriodSeconds must be longer than
+ * this. Workers have no preStop sleep — SIGTERM starts the drain.
+ */
+const SHUTDOWN_GRACE_MS = WORKER_SHUTDOWN_GRACE_SECONDS * 1000;
 
 /**
  * Mail-sending queues are paced beneath the sender quota (Redis-backed, so the

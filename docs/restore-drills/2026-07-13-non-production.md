@@ -7,6 +7,10 @@
 - Source and target: separate disposable local Compose projects with isolated
   PostgreSQL and MinIO volumes; no production or personal data was used.
 
+This record is the local logical drill. A production drill uses a recovery
+point from the compliance-locked vault in `infra/aws/backup-plan.example.yaml`,
+checked with `list-protected-resources` (`docs/operations-runbook.md`).
+
 ## Result
 
 - PostgreSQL logical backup and restore: passed.
