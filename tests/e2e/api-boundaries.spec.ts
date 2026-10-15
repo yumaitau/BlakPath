@@ -1,4 +1,6 @@
 import { expect, test } from './helpers/page';
+import { expectNoWcagViolations } from './helpers/accessibility';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 test('sensitive APIs consistently reject anonymous requests', async ({ request }) => {
   // One request per route; the dev server compiles each route on first hit.
@@ -89,26 +91,44 @@ test('sensitive APIs consistently reject anonymous requests', async ({ request }
 });
 
 test('public operational endpoints expose only their intended status', async ({
+  page,
   request,
 }) => {
-  const live = await request.get('/api/live');
-  expect(live.status()).toBe(200);
-  await expect(live.json()).resolves.toMatchObject({ status: 'ok' });
+  const pageErrors = watchForPageErrors(page);
 
-  const externalHealth = await request.get('/api/health', {
-    headers: { 'x-forwarded-for': '203.0.113.10', 'cf-connecting-ip': '203.0.113.10' },
+  await test.step('liveness is ok', async () => {
+    const live = await request.get('/api/live');
+    expect(live.status()).toBe(200);
+    await expect(live.json()).resolves.toEqual({ status: 'ok' });
   });
-  expect(externalHealth.status()).toBe(403);
-  await expect(externalHealth.json()).resolves.toEqual({ error: 'Forbidden' });
 
-  // Direct call, same shape as a VPC client that did not traverse the edge.
-  const health = await request.get('/api/health');
-  expect([200, 503]).toContain(health.status());
-  const healthPayload = (await health.json()) as { status: string; checks: object };
-  expect(healthPayload.status).toMatch(/^(healthy|degraded)$/);
-  expect(healthPayload.checks).toBeTruthy();
+  await test.step('readiness is refused through the edge', async () => {
+    const externalHealth = await request.get('/api/health', {
+      headers: { 'x-forwarded-for': '203.0.113.10', 'cf-connecting-ip': '203.0.113.10' },
+    });
+    expect(externalHealth.status()).toBe(403);
+    await expect(externalHealth.json()).resolves.toEqual({ error: 'Forbidden' });
+  });
+
+  await test.step('readiness status matches the payload', async () => {
+    // Direct call, same shape as a VPC client that did not traverse the edge.
+    const health = await request.get('/api/health');
+    const healthPayload = (await health.json()) as { status: string; checks: object };
+    if (healthPayload.status === 'healthy') {
+      expect(health.status()).toBe(200);
+    } else {
+      expect(healthPayload.status).toBe('degraded');
+      expect(health.status()).toBe(503);
+    }
+    expect(healthPayload.checks).toBeTruthy();
+  });
 
   const missingCertificate = await request.get('/verify/not-a-real-certificate');
   expect(missingCertificate.status()).toBe(200);
   expect(await missingCertificate.text()).toContain('Certificate not found');
+
+  await page.goto('/sign-in');
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expectNoWcagViolations(page);
+  expectNoPageErrors(pageErrors);
 });

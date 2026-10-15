@@ -1,13 +1,15 @@
 import { expect, test } from './helpers/page';
 import { expectNoWcagViolations } from './helpers/accessibility';
 import { signInAndSelectOrganisation } from './helpers/auth';
-import { watchForPageErrors } from './helpers/page-errors';
+import { expectNoPageErrors, watchForPageErrors } from './helpers/page-errors';
 
 test('auth: anonymous users hit sign-in gate, keeping their destination', async ({
   page,
 }) => {
+  const pageErrors = watchForPageErrors(page);
   await page.goto('/dashboard');
   await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
+  expectNoPageErrors(pageErrors);
 });
 
 test('auth: unknown pages show the branded 404', async ({ page }) => {
@@ -21,29 +23,44 @@ test('auth: unknown pages show the branded 404', async ({ page }) => {
 
 test('auth: sign-in, org picker, security, sign-out journey', async ({ page }) => {
   const pageErrors = watchForPageErrors(page);
-  await signInAndSelectOrganisation(page);
+  await test.step('sign-in and org picker', async () => {
+    await signInAndSelectOrganisation(page);
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  });
 
   await page.goto('/settings/security');
   await expect(page.getByRole('heading', { name: 'Account security' })).toBeVisible();
   await expectNoWcagViolations(page);
 
-  await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await test.step('sign-out session end', async () => {
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(page).toHaveURL(/\/sign-in$/);
+    const protectedResponse = await page.request.get('/api/notifications');
+    expect(protectedResponse.status()).toBe(401);
+    await page.goto('/dashboard');
+    await expect(page).toHaveURL(/\/sign-in\?returnTo=%2Fdashboard$/);
+  });
 
-  const protectedResponse = await page.request.get('/api/notifications');
-  expect(protectedResponse.status()).toBe(401);
-
-  expect(pageErrors.map((error) => error.message)).toEqual([]);
+  expectNoPageErrors(pageErrors);
 });
 
 test('auth: open sign-up stays closed and explains invite-only', async ({
   page,
   request,
 }) => {
-  await page.goto('/sign-up');
-  await expect(
-    page.getByRole('heading', { name: 'BlakPath is invite-only' }),
-  ).toBeVisible();
+  const pageErrors = watchForPageErrors(page);
+  await test.step('sign-up stays invite-only', async () => {
+    await page.goto('/sign-up');
+    await expect(
+      page.getByRole('heading', { name: 'BlakPath is invite-only' }),
+    ).toBeVisible();
+  });
+
+  await test.step('verify-email gate', async () => {
+    await page.goto('/verify-email');
+    await expect(page.getByRole('heading', { name: 'Verify your email' })).toBeVisible();
+    await expect(page.getByText('Sign in first')).toBeVisible();
+  });
   await expectNoWcagViolations(page);
 
   // Framework registration endpoint refuses direct signups.
@@ -55,4 +72,5 @@ test('auth: open sign-up stays closed and explains invite-only', async ({
     },
   });
   expect(direct.status()).toBe(400);
+  expectNoPageErrors(pageErrors);
 });

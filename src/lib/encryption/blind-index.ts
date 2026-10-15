@@ -25,11 +25,7 @@ const PURPOSE = 'blind-index';
 
 function httpStatus(
   status:
-    | 'active'
-    | 'disabled'
-    | 'pending_deletion'
-    | 'unavailable'
-    | 'pending_validation',
+    'active' | 'disabled' | 'pending_deletion' | 'unavailable' | 'pending_validation',
 ): 423 | 503 | null {
   switch (status) {
     case 'active':

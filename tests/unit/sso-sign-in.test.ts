@@ -84,7 +84,7 @@ describe('flow cookie', () => {
 describe('resolveMember', () => {
   function store(over: Partial<SsoAccountStore> = {}): SsoAccountStore {
     return {
-      findAccountByProviderId: vi.fn(async () => null),
+      findAccountByKey: vi.fn(async () => null),
       findUserByEmail: vi.fn(async () => ({
         user: { id: 'user-1', emailVerified: true },
       })),
@@ -123,7 +123,7 @@ describe('resolveMember', () => {
 
   it('resolves later sign-ins by subject without relinking', async () => {
     const accounts = store({
-      findAccountByProviderId: vi.fn(async () => ({ userId: 'user-9' })),
+      findAccountByKey: vi.fn(async () => ({ userId: 'user-9' })),
     });
     await expect(
       resolveMember({ accounts, isActiveMember: member }, binding, {

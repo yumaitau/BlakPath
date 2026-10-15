@@ -8,9 +8,7 @@ import {
 } from './key-provider';
 
 export type KeyValidationFailureCode =
-  | 'round_trip_mismatch'
-  | 'wrong_context_allowed'
-  | 'unexpected_error';
+  'round_trip_mismatch' | 'wrong_context_allowed' | 'unexpected_error';
 
 /** Encryption-context purpose for the handshake and the health canary. */
 export const KEY_VALIDATION_PURPOSE = 'key_validation';

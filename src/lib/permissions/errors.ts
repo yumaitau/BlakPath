@@ -10,10 +10,7 @@
 
 /** Stable machine-readable codes for authorisation failures. */
 export type AuthorizationErrorCode =
-  | 'PERMISSION_DENIED'
-  | 'SEPARATION_OF_DUTIES'
-  | 'CONFLICT_OF_INTEREST'
-  | 'POLICY_DENIED';
+  'PERMISSION_DENIED' | 'SEPARATION_OF_DUTIES' | 'CONFLICT_OF_INTEREST' | 'POLICY_DENIED';
 
 /**
  * Raised when an actor is not permitted to perform an action. The `message` is

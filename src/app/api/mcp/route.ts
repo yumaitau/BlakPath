@@ -52,8 +52,7 @@ export const POST = tenantHandler(async function POST(
   }
 
   const body = (await request.json().catch(() => undefined)) as
-    | JsonRpcRequest
-    | undefined;
+    JsonRpcRequest | undefined;
 
   const response = await withApiKey(
     request,
