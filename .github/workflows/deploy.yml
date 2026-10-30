@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '24.21.0'
+  NODE_VERSION: '24.22.1'
   PNPM_VERSION: '9.12.0'
   IMAGE_REPOSITORY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blakpath
 
