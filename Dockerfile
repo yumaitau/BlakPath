@@ -32,7 +32,7 @@ ENV PATH="${PNPM_HOME}:${PATH}"
 # provides pgrep for the worker HEALTHCHECK. Upgrade first so the worker is
 # not stuck on the Alpine snapshot baked into the pinned Node image.
 RUN apk upgrade --no-cache \
-  && apk add --no-cache tini curl ca-certificates procps
+  && apk add --no-cache tini curl ca-certificates procps 'brotli-libs>=1.2.1-r0'
 # npm and Yarn ship with the Node image and are unused. Drop them here so the
 # base image (and the worker's OS layer) does not carry npm's dependency tree.
 # The web runtime repeats this because it starts from a fresh Node image.
@@ -91,7 +91,7 @@ RUN pnpm build
 # packages here so the web runtime is not stuck on that snapshot.
 FROM node:${NODE_VERSION}-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 RUN apk upgrade --no-cache \
-  && apk add --no-cache tini curl ca-certificates
+  && apk add --no-cache tini curl ca-certificates 'brotli-libs>=1.2.1-r0'
 # npm, Corepack, and Yarn are build tooling; the standalone server executes
 # directly with node. Removing them avoids shipping their unused dependency
 # trees in the production image.
