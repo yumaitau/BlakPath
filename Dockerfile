@@ -21,10 +21,10 @@
 
 # Node 24 LTS (Krypton). The digest is the multi-arch index for this exact
 # build (linux/amd64 and linux/arm64). Bump the version and both digests together.
-ARG NODE_VERSION=24.21.0
+ARG NODE_VERSION=24.22.1
 
 ########################################  base  ###############################
-FROM node:${NODE_VERSION}-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS base
+FROM node:${NODE_VERSION}-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH="${PNPM_HOME}:${PATH}"
 # tini gives us a real init for signal handling; ca-certificates for TLS to
@@ -32,7 +32,7 @@ ENV PATH="${PNPM_HOME}:${PATH}"
 # provides pgrep for the worker HEALTHCHECK. Upgrade first so the worker is
 # not stuck on the Alpine snapshot baked into the pinned Node image.
 RUN apk upgrade --no-cache \
-  && apk add --no-cache tini curl ca-certificates procps
+  && apk add --no-cache tini curl ca-certificates procps 'brotli-libs>=1.2.1-r0'
 # npm and Yarn ship with the Node image and are unused. Drop them here so the
 # base image (and the worker's OS layer) does not carry npm's dependency tree.
 # The web runtime repeats this because it starts from a fresh Node image.
@@ -89,9 +89,9 @@ RUN pnpm build
 # Keep build tooling (Corepack/pnpm and its transitive dependencies) out of the
 # production image. The Node image is pinned by digest above; upgrade Alpine
 # packages here so the web runtime is not stuck on that snapshot.
-FROM node:${NODE_VERSION}-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS runtime
+FROM node:${NODE_VERSION}-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 RUN apk upgrade --no-cache \
-  && apk add --no-cache tini curl ca-certificates
+  && apk add --no-cache tini curl ca-certificates 'brotli-libs>=1.2.1-r0'
 # npm, Corepack, and Yarn are build tooling; the standalone server executes
 # directly with node. Removing them avoids shipping their unused dependency
 # trees in the production image.

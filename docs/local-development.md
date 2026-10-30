@@ -7,7 +7,7 @@ the same on your machine as in `ap-southeast-2`.
 
 ## Prerequisites
 
-- **Node.js** `24.21.0` (see `.nvmrc`; engines require `>= 24.21.0`)
+- **Node.js** `24.22.1` (see `.nvmrc`; engines require `>= 24.22.1`)
 - **pnpm** `9` (`packageManager: pnpm@9.12.0`) — `corepack enable` will pin it
 - **Docker** + **Docker Compose** (for Postgres, Redis, MinIO, ClamAV, Mailpit)
 - **OpenSSL** (to generate secrets)
