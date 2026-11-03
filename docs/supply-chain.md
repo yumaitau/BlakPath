@@ -19,6 +19,7 @@ used, because it can float a patched package onto a later major.
 | `@grpc/grpc-js@<1.14.5`        | `^1.14.5`             | Security floor for the OpenTelemetry gRPC transitive.                                   |
 | `sharp@<0.35.5`                | `^0.35.5`             | Security floor for the Next.js image optimiser.                                         |
 | `source-map-js@<1.2.2`         | `^1.2.2`              | Security floor.                                                                         |
+| `systeminformation@<5.33.16`   | `^5.33.16`            | Security floor for the OpenTelemetry host-metrics transitive.                           |
 | `ioredis`, `form-data`, `vite` | existing caret ranges | Already capped. `vite` stays on 6.x for the current Vitest toolchain.                   |
 
 The `next@<16.3.8` override was removed. `next` is pinned exactly to `16.3.8`, which is the same floor. Further Next bumps stay on #33.
