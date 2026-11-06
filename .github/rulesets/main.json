@@ -30,7 +30,6 @@
           { "context": "Typecheck, lint & format" },
           { "context": "Unit & integration tests" },
           { "context": "Production build" },
-          { "context": "Browser and accessibility acceptance" },
           { "context": "Validate Kubernetes manifests" },
           { "context": "Dependency scan" },
           { "context": "Secret scan" },

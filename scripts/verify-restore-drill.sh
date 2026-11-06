@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Same digest as docker-compose.yml and .github/workflows/ci.yml.
+# Same digest as docker-compose.yml and .github/workflows/e2e-nightly.yml.
 # `--user 0:0` on the mirror containers: this image defaults to uid 65532, and
 # the backup volume is created root-owned.
 object_storage_image="chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56"
