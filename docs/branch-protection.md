@@ -23,9 +23,11 @@ gh api -X PUT repos/yumaitau/BlakPath/rulesets/<id> --input .github/rulesets/mai
 - Squash merges only, so history stays linear.
 
 Required checks: typecheck/lint/format, unit and integration tests, production
-build, browser and accessibility acceptance, Kubernetes manifest validation,
-dependency scan, secret scan, container scan and SBOM, Trivy repository scan
-and Node base image scan. CodeRabbit is advisory and not required.
+build, Kubernetes manifest validation, dependency scan, secret scan, container
+scan and SBOM, Trivy repository scan and Node base image scan. CodeRabbit is
+advisory and not required. Browser and accessibility acceptance runs nightly in
+`e2e-nightly.yml`, never on pull requests or the merge queue, so it is not a
+required check.
 
 All three workflows (`ci.yml`, `security.yml`, `trivy.yml`) run on
 `merge_group`. A new required check must run on `pull_request` and
