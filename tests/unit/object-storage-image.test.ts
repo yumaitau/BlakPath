@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
-/** Multi-arch manifest digest. CI, Compose, and the restore drill must match. */
+/** Multi-arch manifest digest. Nightly e2e, Compose, and the restore drill must match. */
 const OBJECT_STORAGE_IMAGE =
   'chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56';
 
@@ -15,8 +15,8 @@ function read(relativePath: string): string {
 }
 
 describe('object storage image pin', () => {
-  it('uses one digest in CI, Compose, and the restore drill', () => {
-    const ci = read('.github/workflows/ci.yml');
+  it('uses one digest in nightly e2e, Compose, and the restore drill', () => {
+    const ci = read('.github/workflows/e2e-nightly.yml');
     const compose = read('docker-compose.yml');
     const drill = read('scripts/verify-restore-drill.sh');
 
