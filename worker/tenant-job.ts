@@ -4,11 +4,13 @@ import { db } from '@/db/client';
 import { organisations } from '@/db/schema';
 import { recordAudit, recordPlatformAudit } from '@/domains/audit/service';
 import { tenantJobSchema } from '@/lib/queues/tenant-job';
+import { isOrganisationOperational } from '@/lib/tenancy/organisation-status';
 
 /**
  * Gate for a consumed job. The Redis payload is untrusted: parse it, then
- * confirm the organisation exists and is active before any tenant scope is
- * opened. Anything else is dropped (not retried) and written to the audit
+ * confirm the organisation exists and may still do tenant work (draft,
+ * onboarding or active; see `organisation-status.ts`) before any tenant scope
+ * is opened. Anything else is dropped (not retried) and written to the audit
  * trail. Payload bodies are never logged or audited — they can carry mail.
  */
 
@@ -80,7 +82,7 @@ export async function acceptTenantJob(
     return false;
   }
 
-  if (organisation.status !== 'active') {
+  if (!isOrganisationOperational(organisation.status)) {
     logger.warn(
       {
         jobId: job.id,
@@ -88,7 +90,7 @@ export async function acceptTenantJob(
         organisationId,
         status: organisation.status,
       },
-      'job organisation not active — dropping',
+      'job organisation unavailable — dropping',
     );
     await recordAudit({
       action: 'job.rejected',
