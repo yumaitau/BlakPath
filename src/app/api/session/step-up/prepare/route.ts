@@ -35,6 +35,7 @@ export async function POST(): Promise<Response> {
     const value = sealStepUpContext(
       {
         userId: session.user.id,
+        sessionId: session.session.id,
         organisationId,
         exp: Date.now() + STEP_UP_CONTEXT_TTL_MS,
       },

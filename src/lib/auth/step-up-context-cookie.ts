@@ -6,6 +6,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * The passkey sign-in mints a new session and drops `activeOrganisationId`.
  * The sealed payload carries the user and organisation from the previous
  * server session so completion can copy them only when the user id matches.
+ * It also carries the id of the session that started the re-authentication,
+ * so completion can tell that a different (new) session is finishing it.
  * The secret is passed in; callers read it from `env`.
  */
 
@@ -14,6 +16,7 @@ export const STEP_UP_CONTEXT_TTL_MS = 5 * 60 * 1000;
 
 export interface StepUpContextPayload {
   userId: string;
+  sessionId: string;
   organisationId: string | null;
   exp: number;
 }
@@ -43,10 +46,14 @@ export function openStepUpContext(
     if (typeof parsed !== 'object' || parsed === null) return null;
     const record = parsed as {
       userId?: unknown;
+      sessionId?: unknown;
       organisationId?: unknown;
       exp?: unknown;
     };
     if (typeof record.userId !== 'string' || record.userId.length === 0) return null;
+    if (typeof record.sessionId !== 'string' || record.sessionId.length === 0) {
+      return null;
+    }
     if (
       typeof record.exp !== 'number' ||
       !Number.isFinite(record.exp) ||
@@ -59,6 +66,7 @@ export function openStepUpContext(
     }
     return {
       userId: record.userId,
+      sessionId: record.sessionId,
       organisationId: record.organisationId ?? null,
       exp: record.exp,
     };
