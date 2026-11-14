@@ -5,8 +5,10 @@ import { consentRecords, organisationSettings } from '@/db/schema';
 import { currentScope } from '@/db/tenant-db';
 import { expectRow } from '@/db/expect-row';
 import { recordAudit } from '@/domains/audit/service';
-import { requireTenantContext } from '@/lib/tenancy/context';
+import { requireTenantContext, type TenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
+import { AuthorizationError } from '@/lib/permissions/errors';
+import { isApplicantOnlyRoleSet } from '@/lib/permissions/roles';
 import { openConsentRows, sealWordingSnapshot } from '@/lib/encryption/tenant-fields';
 import { CONSENT_READ_PERMISSIONS, CONSENT_WRITE_PERMISSIONS } from './permissions';
 
@@ -25,12 +27,36 @@ const recordSchema = z.object({
   notes: z.string().trim().max(2000).optional(),
 });
 
+/**
+ * Applicant portal accounts may only act on consent about themselves. Staff
+ * record consent on a person's behalf; an applicant may not do that for
+ * someone else.
+ */
+async function refuseForeignSubject(
+  ctx: TenantContext,
+  subjectUserId: string | null | undefined,
+  action: 'consent.recorded' | 'consent.viewed' | 'consent.withdrawn',
+  resourceId: string | null,
+): Promise<void> {
+  if (!isApplicantOnlyRoleSet(ctx.roles)) return;
+  if (subjectUserId === ctx.userId) return;
+  await recordAudit({
+    action,
+    resourceType: 'consent',
+    resourceId,
+    result: 'denied',
+    reason: 'consent.subject_not_self',
+  });
+  throw new AuthorizationError('POLICY_DENIED');
+}
+
 export async function recordConsent(
   raw: z.input<typeof recordSchema>,
 ): Promise<ConsentRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_WRITE_PERMISSIONS);
   const input = recordSchema.parse(raw);
+  await refuseForeignSubject(ctx, input.subjectUserId, 'consent.recorded', null);
   const scope = currentScope();
   const wordingRows = await scope.db
     .select({ consentWording: organisationSettings.consentWording })
@@ -79,6 +105,15 @@ export async function withdrawConsent(id: string): Promise<ConsentRow> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_WRITE_PERMISSIONS);
   const scope = currentScope();
+  if (isApplicantOnlyRoleSet(ctx.roles)) {
+    const owner = await scope.db
+      .select({ subjectUserId: consentRecords.subjectUserId })
+      .from(consentRecords)
+      .where(scope.where(consentRecords.organisationId, eq(consentRecords.id, id)))
+      .limit(1);
+    // A missing row is refused the same way as a foreign one.
+    await refuseForeignSubject(ctx, owner[0]?.subjectUserId, 'consent.withdrawn', id);
+  }
   const stored = await scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(consentRecords)
@@ -86,10 +121,7 @@ export async function withdrawConsent(id: string): Promise<ConsentRow> {
       .where(scope.where(consentRecords.organisationId, eq(consentRecords.id, id)))
       .returning();
     const withdrawn = updated[0];
-    if (!withdrawn) {
-      const { AuthorizationError } = await import('@/lib/permissions/errors');
-      throw new AuthorizationError('POLICY_DENIED');
-    }
+    if (!withdrawn) throw new AuthorizationError('POLICY_DENIED');
     await recordAudit(
       {
         action: 'consent.withdrawn',
@@ -108,6 +140,7 @@ export async function withdrawConsent(id: string): Promise<ConsentRow> {
 export async function listConsents(subjectUserId: string): Promise<ConsentRow[]> {
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), CONSENT_READ_PERMISSIONS);
+  await refuseForeignSubject(ctx, subjectUserId, 'consent.viewed', null);
   const scope = currentScope();
   const rows = await scope.db
     .select()
