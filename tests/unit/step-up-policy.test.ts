@@ -33,6 +33,8 @@ const LISTED_ROUTES = [
   'POST /api/webhooks',
   'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
   'POST /api/sso/providers',
+  'POST /api/scim/credentials',
+  'POST /api/scim/credentials/[id]/rotate',
   'POST /api/organisation-domains',
   'POST /api/organisation-domains/[id]/verify',
   'DELETE /api/organisation-domains/[id]',
@@ -88,6 +90,10 @@ describe('step-up route map', () => {
       STEP_UP_ROUTES['POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver'],
     ).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['POST /api/sso/providers']).toBe(STEP_UP_WINDOWS.privileged);
+    expect(STEP_UP_ROUTES['POST /api/scim/credentials']).toBe(STEP_UP_WINDOWS.privileged);
+    expect(STEP_UP_ROUTES['POST /api/scim/credentials/[id]/rotate']).toBe(
+      STEP_UP_WINDOWS.privileged,
+    );
     expect(STEP_UP_ROUTES['DELETE /api/retention/holds/[id]']).toBe(
       STEP_UP_WINDOWS.destructive,
     );
