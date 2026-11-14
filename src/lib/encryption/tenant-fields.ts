@@ -433,20 +433,30 @@ export async function sealWebhookSecret(
   return sealed;
 }
 
+/** The stored signing secret can never be opened. Retrying will not help. */
+export class WebhookSecretInvalidError extends Error {
+  readonly code = 'WEBHOOK_SECRET_INVALID' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'WebhookSecretInvalidError';
+  }
+}
+
 /** Refuses anything that is not an envelope; a signing secret is never plaintext. */
 export async function openWebhookSecret(
   organisationId: string,
   rowId: string,
   stored: string,
 ): Promise<string> {
-  if (!parseStoredEnvelope(stored)) throw new Error('Webhook secret is not ciphertext');
+  if (!parseStoredEnvelope(stored))
+    throw new WebhookSecretInvalidError('Webhook secret is not ciphertext');
   const scope = await scopeFor(organisationId);
   const secret = await openText(
     scope,
     bind('webhook_endpoints', 'secret', rowId),
     stored,
   );
-  if (secret === null) throw new Error('Webhook secret is missing');
+  if (secret === null) throw new WebhookSecretInvalidError('Webhook secret is missing');
   return secret;
 }
 

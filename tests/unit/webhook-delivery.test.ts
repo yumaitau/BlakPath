@@ -57,8 +57,17 @@ vi.mock('@/domains/audit/service', () => ({
 }));
 
 // The endpoint secret is sealed under the tenant key; open it to the fixture.
+const secret = vi.hoisted(() => {
+  class WebhookSecretInvalidError extends Error {}
+  return {
+    open: vi.fn(async (): Promise<string> => 'endpoint-signing-secret'),
+    WebhookSecretInvalidError,
+  };
+});
+
 vi.mock('@/lib/encryption/tenant-fields', () => ({
-  openWebhookSecret: vi.fn(async () => SECRET),
+  openWebhookSecret: secret.open,
+  WebhookSecretInvalidError: secret.WebhookSecretInvalidError,
 }));
 
 // Skip the DNS-backed destination policy and route the request through the
@@ -88,6 +97,8 @@ const { processWebhookDelivery, verifyPayload, webhookAttemptOffsetMs, MAX_ATTEM
 const HOUR = 3_600_000;
 
 beforeEach(() => {
+  secret.open.mockReset();
+  secret.open.mockResolvedValue(SECRET);
   state.audits = [];
   state.endpoint = {
     id: 'endpoint-1',
@@ -169,5 +180,54 @@ describe('processWebhookDelivery', () => {
     });
     expect(state.delivery?.status).toBe('failed');
     expect(state.delivery?.attempts).toBe(MAX_ATTEMPTS);
+  });
+
+  it('keeps the delivery pending and retries when the secret is temporarily unavailable', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    secret.open.mockRejectedValueOnce(new Error('KMS throttled'));
+    await expect(
+      processWebhookDelivery({
+        organisationId: 'org-a',
+        deliveryId: 'delivery-1',
+        correlationId: 'corr-1',
+      }),
+    ).rejects.toThrow(/webhook delivery failed/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.delivery?.status).toBe('pending');
+    expect(state.delivery?.attempts).toBe(1);
+    expect(state.delivery?.lastError).toBe('endpoint secret unavailable');
+    expect(state.audits).toHaveLength(1);
+  });
+
+  it('fails without throwing when the secret is still unavailable on the last attempt', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    state.delivery = { ...state.delivery, attempts: MAX_ATTEMPTS - 1 };
+    secret.open.mockRejectedValueOnce(new Error('tenant key unavailable'));
+    await processWebhookDelivery({
+      organisationId: 'org-a',
+      deliveryId: 'delivery-1',
+      correlationId: 'corr-1',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.delivery?.status).toBe('failed');
+    expect(state.delivery?.attempts).toBe(MAX_ATTEMPTS);
+  });
+
+  it('fails at once when the stored secret can never be opened', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    secret.open.mockRejectedValueOnce(
+      new secret.WebhookSecretInvalidError('Webhook secret is not ciphertext'),
+    );
+    await processWebhookDelivery({
+      organisationId: 'org-a',
+      deliveryId: 'delivery-1',
+      correlationId: 'corr-1',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.delivery?.status).toBe('failed');
+    expect(state.delivery?.attempts).toBe(1);
   });
 });
