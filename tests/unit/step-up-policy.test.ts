@@ -33,6 +33,8 @@ const LISTED_ROUTES = [
   'POST /api/webhooks',
   'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver',
   'POST /api/sso/providers',
+  'POST /api/scim/credentials',
+  'POST /api/scim/credentials/[id]/rotate',
   'POST /api/organisation-domains',
   'POST /api/organisation-domains/[id]/verify',
   'DELETE /api/organisation-domains/[id]',
@@ -88,6 +90,10 @@ describe('step-up route map', () => {
       STEP_UP_ROUTES['POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver'],
     ).toBe(STEP_UP_WINDOWS.privileged);
     expect(STEP_UP_ROUTES['POST /api/sso/providers']).toBe(STEP_UP_WINDOWS.privileged);
+    expect(STEP_UP_ROUTES['POST /api/scim/credentials']).toBe(STEP_UP_WINDOWS.privileged);
+    expect(STEP_UP_ROUTES['POST /api/scim/credentials/[id]/rotate']).toBe(
+      STEP_UP_WINDOWS.privileged,
+    );
     expect(STEP_UP_ROUTES['DELETE /api/retention/holds/[id]']).toBe(
       STEP_UP_WINDOWS.destructive,
     );
@@ -227,9 +233,19 @@ describe('authenticator codes and step-up retry', () => {
 
   it('seals a passkey context and rejects tamper or expiry', () => {
     const secret = 'test-secret-value-at-least-32-characters-long';
-    const payload = { userId: 'user-1', organisationId: 'org-1', exp: 5_000 };
+    const payload = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organisationId: 'org-1',
+      exp: 5_000,
+    };
     const token = sealStepUpContext(payload, secret);
     expect(openStepUpContext(token, secret, 5_000)).toEqual(payload);
+    const legacy = sealStepUpContext(
+      { userId: 'user-1', organisationId: 'org-1', exp: 5_000 } as never,
+      secret,
+    );
+    expect(openStepUpContext(legacy, secret, 1)).toBeNull();
     expect(openStepUpContext(token, secret, 5_001)).toBeNull();
     expect(openStepUpContext(`${token}x`, secret, 1)).toBeNull();
     const [body, sig] = token.split('.');

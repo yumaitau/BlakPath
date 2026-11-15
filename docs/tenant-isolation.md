@@ -127,9 +127,10 @@ tenant can never address another tenant's objects
 
 BullMQ job payloads are **untrusted input**. Every payload is validated with Zod
 (`tenantJobSchema`) at enqueue and parsed again when the worker consumes it.
-The worker then loads the organisation and drops the job unless that row is
-`active`, auditing the drop, before a processor opens a tenant scope. A forged,
-malformed, or stale message cannot widen access.
+The worker then loads the organisation and drops the job when that row is
+missing, suspended or closed, auditing the drop, before a processor opens a
+tenant scope. Draft and onboarding organisations are processed so a tenant can
+be set up. A forged, malformed, or stale message cannot widen access.
 
 ### 10. Cache & rate-limit key prefixing
 

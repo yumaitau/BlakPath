@@ -25,6 +25,8 @@ import { GET as downloadExport } from '@/app/api/reports/exports/[id]/download/r
 import { DELETE as releaseHold } from '@/app/api/retention/holds/[id]/route';
 import { DELETE as deletePolicy } from '@/app/api/retention/policies/[id]/route';
 import { POST as createSso } from '@/app/api/sso/providers/route';
+import { POST as createScimCredential } from '@/app/api/scim/credentials/route';
+import { POST as rotateScimCredential } from '@/app/api/scim/credentials/[id]/rotate/route';
 import { POST as createWebhook } from '@/app/api/webhooks/route';
 import { POST as sendLetter } from '@/app/api/applications/[id]/correspondence/[correspondenceId]/send/route';
 import { POST as notifyEvidenceRequest } from '@/app/api/applications/[id]/evidence-requests/[requestId]/notify/route';
@@ -123,6 +125,16 @@ describe('listed routes require a fresh session', () => {
     await expectStale(
       createSso(post() as never),
       STEP_UP_ROUTES['POST /api/sso/providers'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      createScimCredential(post() as never),
+      STEP_UP_ROUTES['POST /api/scim/credentials'],
+    );
+    requireRecentAuth.mockClear();
+    await expectStale(
+      rotateScimCredential(post(), params),
+      STEP_UP_ROUTES['POST /api/scim/credentials/[id]/rotate'],
     );
     requireRecentAuth.mockClear();
     await expectStale(

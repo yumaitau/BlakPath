@@ -111,7 +111,10 @@ export function StepUpDialog({
     setPending(true);
     setError(null);
     try {
-      const prepared = await fetch('/api/session/step-up/prepare', { method: 'POST' });
+      const prepared = await fetch('/api/session/step-up/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
       if (!prepared.ok) {
         setError('The passkey check could not start. Try again.');
         return;
@@ -121,7 +124,10 @@ export function StepUpDialog({
         setError('The passkey was not accepted.');
         return;
       }
-      const completed = await fetch('/api/session/step-up/complete', { method: 'POST' });
+      const completed = await fetch('/api/session/step-up/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
       if (!completed.ok) {
         setError('The passkey was accepted, but the session could not be confirmed.');
         return;

@@ -38,6 +38,12 @@ const { TenantContextError, runWithTenantContext } =
   await import('@/lib/tenancy/context');
 
 const SUBJECT = '00000000-0000-4000-8000-000000000001';
+const OTHER = '00000000-0000-4000-8000-0000000000ee';
+const asApplicant = <T>(fn: () => Promise<T>) =>
+  runWithTenantContext(
+    { ...tenantContext(['application:create']), roles: ['applicant'] },
+    fn,
+  );
 
 beforeEach(() => {
   script.reset();
@@ -168,5 +174,90 @@ describe('consent', () => {
         hasLiveConsent(SUBJECT, 'representative-access'),
       ),
     ).resolves.toBe(true);
+  });
+});
+
+describe('applicant-only callers', () => {
+  it('refuses to record consent in another person name before any query', async () => {
+    await expect(
+      asApplicant(() =>
+        recordConsent({ subjectUserId: OTHER, purpose: 'representative-access' }),
+      ),
+    ).rejects.toMatchObject({ code: 'POLICY_DENIED' });
+    expect(script.ops).toEqual([]);
+    expect(audit.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'consent.recorded',
+        result: 'denied',
+        reason: 'consent.subject_not_self',
+      }),
+    );
+  });
+
+  it('records consent about themselves', async () => {
+    script.results.push(
+      [],
+      [{ id: 'consent-9', status: 'granted', wordingSnapshot: null }],
+    );
+    await expect(
+      asApplicant(() =>
+        recordConsent({ subjectUserId: USER_ID, purpose: 'representative-access' }),
+      ),
+    ).resolves.toMatchObject({ id: 'consent-9', status: 'granted' });
+    expect(script.ops).toEqual(['select', 'insert']);
+    expect(script.writes[0]?.payload).toMatchObject({
+      subjectUserId: USER_ID,
+      recordedByUserId: USER_ID,
+    });
+  });
+
+  it('refuses to list another person consent', async () => {
+    await expect(asApplicant(() => listConsents(OTHER))).rejects.toMatchObject({
+      code: 'POLICY_DENIED',
+    });
+    expect(script.ops).toEqual([]);
+  });
+
+  it('lists their own consent', async () => {
+    script.results.push([{ id: 'consent-1', subjectUserId: USER_ID }]);
+    await expect(asApplicant(() => listConsents(USER_ID))).resolves.toEqual([
+      { id: 'consent-1', subjectUserId: USER_ID },
+    ]);
+  });
+
+  it('refuses to withdraw another person consent without updating', async () => {
+    script.results.push([{ subjectUserId: OTHER }]);
+    await expect(asApplicant(() => withdrawConsent('consent-1'))).rejects.toMatchObject({
+      code: 'POLICY_DENIED',
+    });
+    expect(script.ops).toEqual(['select']);
+  });
+
+  it('refuses a missing record the same way as a foreign one', async () => {
+    script.results.push([]);
+    await expect(asApplicant(() => withdrawConsent('missing'))).rejects.toMatchObject({
+      code: 'POLICY_DENIED',
+    });
+    expect(script.ops).toEqual(['select']);
+  });
+
+  it('withdraws their own consent', async () => {
+    script.results.push(
+      [{ subjectUserId: USER_ID }],
+      [{ id: 'consent-1', status: 'withdrawn' }],
+    );
+    await expect(asApplicant(() => withdrawConsent('consent-1'))).resolves.toMatchObject({
+      status: 'withdrawn',
+    });
+    expect(script.ops).toEqual(['select', 'update']);
+  });
+
+  it('leaves staff able to read consent for any person', async () => {
+    script.results.push([{ id: 'consent-1', subjectUserId: OTHER }]);
+    await expect(
+      runWithTenantContext(tenantContext(['application:update-intake']), () =>
+        listConsents(OTHER),
+      ),
+    ).resolves.toEqual([{ id: 'consent-1', subjectUserId: OTHER }]);
   });
 });

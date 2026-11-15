@@ -134,4 +134,44 @@ describe('acceptTenantJob', () => {
     expect(state.recordAudit).not.toHaveBeenCalled();
     expect(state.recordPlatformAudit).not.toHaveBeenCalled();
   });
+
+  it.each(['draft', 'onboarding', 'active'])(
+    'accepts a job for an organisation that is %s',
+    async (status) => {
+      const organisationId = randomUUID();
+      state.orgs = [{ id: organisationId, status }];
+      const accepted = await acceptTenantJob(
+        {
+          id: `job-${status}`,
+          queueName: 'email',
+          data: { organisationId, correlationId: 'corr-1' },
+        },
+        logger(),
+      );
+      expect(accepted).toBe(true);
+      expect(state.recordAudit).not.toHaveBeenCalled();
+      expect(state.recordPlatformAudit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('drops a job for a closed organisation and audits that tenant', async () => {
+    const organisationId = randomUUID();
+    state.orgs = [{ id: organisationId, status: 'closed' }];
+    const accepted = await acceptTenantJob(
+      {
+        id: 'job-closed',
+        queueName: 'email',
+        data: { organisationId, correlationId: 'corr-closed' },
+      },
+      logger(),
+    );
+    expect(accepted).toBe(false);
+    expect(state.recordPlatformAudit).not.toHaveBeenCalled();
+    expect(state.recordAudit).toHaveBeenCalledOnce();
+    expect(state.recordAudit.mock.calls[0]?.[0]).toMatchObject({
+      action: 'job.rejected',
+      reason: 'organisation_not_active',
+      after: { data: { status: 'closed' } },
+    });
+  });
 });

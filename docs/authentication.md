@@ -152,11 +152,11 @@ an authenticator is enrolled, a TOTP or backup code — or a passkey. That check
 mints a new session and retries the action. It does not sign the person out.
 
 The mapped routes are evidence download, report export create and download,
-certificate revoke and re-issue, meeting pack read, API key create, webhook create, SSO provider create,
-organisation domain claim, DNS check and removal,
-retention hold release, retention policy delete, and break-glass request,
-activate, approve, deny, revoke and review. Certificate signing and membership
-changes are gated the same way.
+certificate revoke and re-issue, meeting pack read, API key create, webhook
+create, SSO provider create, SCIM credential create and rotate, organisation
+domain claim, DNS check and removal, retention hold release, retention policy
+delete, and break-glass request, activate, approve, deny, revoke and review.
+Certificate signing and membership changes are gated the same way.
 
 Break-glass reads during a live grant use the operator session (with staff MFA)
 plus the grant's own expiry. The step-up window is 5 minutes and a grant may
