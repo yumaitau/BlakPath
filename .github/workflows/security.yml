@@ -132,16 +132,14 @@ jobs:
             ENCRYPTION_MASTER_KEY=Ymxha3BhdGgtY2ktdGVzdC1tYXN0ZXIta2V5LTMyYiE=
             S3_ACCESS_KEY_ID=test
             S3_SECRET_ACCESS_KEY=test-secret
+            OS_REFRESH=${{ github.run_id }}
+          # A new OS_REFRESH each run re-runs the runtime stage's `apk upgrade`
+          # and every runner layer after it, so Trivy scans current Alpine
+          # packages rather than a cached snapshot. `no-cache-filters` did not
+          # do this: the cached runner layers came back with the old runtime.
+          # The pnpm and Next.js build stages stay cached.
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Rebuild the runtime and runner stages every run. A cached
-          # `apk upgrade` layer keeps the Alpine packages from whenever it was
-          # first built, and cached runner layers carry that old runtime with
-          # them, so Trivy would scan stale OS packages. The pnpm and Next.js
-          # build stages stay cached; the runner stage is only file copies.
-          no-cache-filters: |
-            runtime
-            runner
 
       # Record the OS package versions actually in the image, so a scan result
       # can be checked against what was built.
