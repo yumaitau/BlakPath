@@ -134,6 +134,11 @@ jobs:
             S3_SECRET_ACCESS_KEY=test-secret
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Rebuild the runtime stage every run. A cached `apk upgrade` layer
+          # keeps the Alpine packages from whenever it was first built, so
+          # Trivy would scan stale OS packages. The pnpm and Next.js build
+          # stages stay cached.
+          no-cache-filters: runtime
 
       - name: Trivy vulnerability scan (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
