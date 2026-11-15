@@ -205,6 +205,10 @@ describe('applicant-only callers', () => {
       ),
     ).resolves.toMatchObject({ id: 'consent-9', status: 'granted' });
     expect(script.ops).toEqual(['select', 'insert']);
+    expect(script.writes[0]?.payload).toMatchObject({
+      subjectUserId: USER_ID,
+      recordedByUserId: USER_ID,
+    });
   });
 
   it('refuses to list another person consent', async () => {
