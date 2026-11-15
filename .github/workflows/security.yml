@@ -134,11 +134,14 @@ jobs:
             S3_SECRET_ACCESS_KEY=test-secret
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Rebuild the runtime stage every run. A cached `apk upgrade` layer
-          # keeps the Alpine packages from whenever it was first built, so
-          # Trivy would scan stale OS packages. The pnpm and Next.js build
-          # stages stay cached.
-          no-cache-filters: runtime
+          # Rebuild the runtime and runner stages every run. A cached
+          # `apk upgrade` layer keeps the Alpine packages from whenever it was
+          # first built, and cached runner layers carry that old runtime with
+          # them, so Trivy would scan stale OS packages. The pnpm and Next.js
+          # build stages stay cached; the runner stage is only file copies.
+          no-cache-filters: |
+            runtime
+            runner
 
       # Record the OS package versions actually in the image, so a scan result
       # can be checked against what was built.
@@ -149,12 +152,6 @@ jobs:
 
       - name: Trivy vulnerability scan (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          # Keep layer analysis in memory. The persisted cache (restored from
-          # GitHub Actions with a `cache-trivy-` prefix fallback) reported
-          # Alpine packages older than the ones this build installed. The
-          # vulnerability database is still cached.
-          TRIVY_CACHE_BACKEND: memory
         with:
           image-ref: blakpath:ci
           format: sarif
@@ -171,8 +168,6 @@ jobs:
 
       - name: Trivy scan (gate — fail on CRITICAL,HIGH)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_CACHE_BACKEND: memory
         with:
           image-ref: blakpath:ci
           format: table
