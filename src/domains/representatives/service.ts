@@ -7,6 +7,7 @@ import { recordAudit } from '@/domains/audit/service';
 import { requireTenantContext } from '@/lib/tenancy/context';
 import { requireAny, subjectFromContext } from '@/lib/permissions/check';
 import { AuthorizationError } from '@/lib/permissions/errors';
+import { isApplicantOnlyRoleSet } from '@/lib/permissions/roles';
 import {
   REPRESENTATIVE_ACCESS_PERMISSIONS,
   REPRESENTATIVE_LIST_PERMISSIONS,
@@ -78,6 +79,18 @@ export async function requestRepresentativeAccess(
   if (input.subjectUserId === input.representativeUserId) {
     throw new AuthorizationError('POLICY_DENIED');
   }
+  // Applicant portal accounts may only manage representative access for
+  // themselves; staff act on a person's behalf.
+  if (isApplicantOnlyRoleSet(ctx.roles) && input.subjectUserId !== ctx.userId) {
+    await recordAudit({
+      action: 'representative.requested',
+      resourceType: 'representative_authorisation',
+      resourceId: null,
+      result: 'denied',
+      reason: 'representative.subject_not_self',
+    });
+    throw new AuthorizationError('POLICY_DENIED');
+  }
   const scope = currentScope();
   if (!(await liveConsent(scope, input.consentRecordId, input.subjectUserId))) {
     await recordAudit({
@@ -136,6 +149,16 @@ export async function activateRepresentativeAccess(
   const existing = scope.assertOwned(rows[0]);
   if (!existing || existing.status !== 'pending')
     throw new AuthorizationError('POLICY_DENIED');
+  if (isApplicantOnlyRoleSet(ctx.roles) && existing.subjectUserId !== ctx.userId) {
+    await recordAudit({
+      action: 'representative.activated',
+      resourceType: 'representative_authorisation',
+      resourceId: id,
+      result: 'denied',
+      reason: 'representative.subject_not_self',
+    });
+    throw new AuthorizationError('POLICY_DENIED');
+  }
   if (
     !existing.consentRecordId ||
     !(await liveConsent(scope, existing.consentRecordId, existing.subjectUserId))
@@ -178,6 +201,29 @@ export async function revokeRepresentativeAccess(id: string): Promise<Representa
   const ctx = requireTenantContext();
   requireAny(subjectFromContext(ctx), REPRESENTATIVE_ACCESS_PERMISSIONS);
   const scope = currentScope();
+  if (isApplicantOnlyRoleSet(ctx.roles)) {
+    const owner = await scope.db
+      .select({ subjectUserId: representativeAuthorisations.subjectUserId })
+      .from(representativeAuthorisations)
+      .where(
+        scope.where(
+          representativeAuthorisations.organisationId,
+          eq(representativeAuthorisations.id, id),
+        ),
+      )
+      .limit(1);
+    // A missing row is refused the same way as a foreign one.
+    if (owner[0]?.subjectUserId !== ctx.userId) {
+      await recordAudit({
+        action: 'representative.revoked',
+        resourceType: 'representative_authorisation',
+        resourceId: id,
+        result: 'denied',
+        reason: 'representative.subject_not_self',
+      });
+      throw new AuthorizationError('POLICY_DENIED');
+    }
+  }
   return scope.db.transaction(async (tx) => {
     const updated = await tx
       .update(representativeAuthorisations)

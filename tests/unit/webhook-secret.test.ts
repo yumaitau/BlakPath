@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { openWebhookSecret, sealWebhookSecret } from '@/lib/encryption/tenant-fields';
+import {
+  openWebhookSecret,
+  sealWebhookSecret,
+  WebhookSecretInvalidError,
+} from '@/lib/encryption/tenant-fields';
 import { DEV_TENANT_KEY_ARN } from '@/lib/encryption/provider';
 import { toWebhookEndpointView } from '@/domains/webhooks/view';
 import { encryptFieldV1 } from '../helpers/legacy-envelope';
@@ -47,6 +51,9 @@ describe('webhook signing secret at rest', () => {
     await expect(openWebhookSecret(ORG_A, 'endpoint-1', plaintext)).rejects.toThrow(
       /ciphertext/,
     );
+    await expect(
+      openWebhookSecret(ORG_A, 'endpoint-1', plaintext),
+    ).rejects.toBeInstanceOf(WebhookSecretInvalidError);
   });
 
   it('refuses a tampered ciphertext', async () => {

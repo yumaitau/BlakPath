@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { requireRecentAuth } from '@/lib/auth/session';
+import { STEP_UP_ROUTES } from '@/lib/auth/step-up-policy';
 import { rotateScimCredential } from '@/domains/scim';
 import { withRequestTenant } from '@/lib/http/tenant-route';
 import { tenantHandler } from '@/lib/http/error-response';
@@ -11,6 +13,7 @@ export const POST = tenantHandler(async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+  await requireRecentAuth(STEP_UP_ROUTES['POST /api/scim/credentials/[id]/rotate']);
   const { id } = await params;
   const result = await withRequestTenant(() => rotateScimCredential(id));
   return NextResponse.json({

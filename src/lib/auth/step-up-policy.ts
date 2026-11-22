@@ -44,6 +44,9 @@ export const STEP_UP_ROUTES = {
   'POST /api/webhooks': STEP_UP_WINDOWS.privileged,
   'POST /api/webhooks/[id]/deliveries/[deliveryId]/redeliver': STEP_UP_WINDOWS.privileged,
   'POST /api/sso/providers': STEP_UP_WINDOWS.privileged,
+  // A SCIM token provisions users and roles for up to two years.
+  'POST /api/scim/credentials': STEP_UP_WINDOWS.privileged,
+  'POST /api/scim/credentials/[id]/rotate': STEP_UP_WINDOWS.privileged,
   // A verified domain is what lets an SSO binding sign staff in.
   'POST /api/organisation-domains': STEP_UP_WINDOWS.privileged,
   'POST /api/organisation-domains/[id]/verify': STEP_UP_WINDOWS.privileged,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ORG_ID, tenantContext } from './helpers/tenant';
+import { ORG_ID, USER_ID, tenantContext } from './helpers/tenant';
 import { expectAuditedInTransaction, script, trackAudit } from './helpers/scripted-db';
 
 const audit = vi.hoisted(() => ({
@@ -38,6 +38,13 @@ const request = {
 
 function asIntake<T>(fn: () => Promise<T>): Promise<T> {
   return runWithTenantContext(tenantContext(['application:create']), fn);
+}
+
+function asApplicant<T>(fn: () => Promise<T>): Promise<T> {
+  return runWithTenantContext(
+    { ...tenantContext(['application:create']), roles: ['applicant'] },
+    fn,
+  );
 }
 
 beforeEach(() => {
@@ -198,5 +205,70 @@ describe('representative access', () => {
       expect.anything(),
     );
     expectAuditedInTransaction('representative.revoked');
+  });
+});
+
+describe('representative access for applicant-only callers', () => {
+  it('refuses a request for another subject before any query', async () => {
+    await expect(
+      asApplicant(() => requestRepresentativeAccess(request)),
+    ).rejects.toMatchObject({ code: 'POLICY_DENIED' });
+    expect(script.ops).toEqual([]);
+    expect(audit.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'representative.requested',
+        result: 'denied',
+        reason: 'representative.subject_not_self',
+      }),
+    );
+  });
+
+  it('refuses to activate a pending row about another subject', async () => {
+    script.results.push([
+      {
+        id: AUTH_ID,
+        organisationId: ORG_ID,
+        status: 'pending',
+        consentRecordId: CONSENT,
+        subjectUserId: SUBJECT,
+      },
+    ]);
+    await expect(
+      asApplicant(() => activateRepresentativeAccess(AUTH_ID)),
+    ).rejects.toMatchObject({ code: 'POLICY_DENIED' });
+    expect(script.ops).toEqual(['select']);
+    expect(audit.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'representative.activated',
+        result: 'denied',
+        reason: 'representative.subject_not_self',
+      }),
+    );
+  });
+
+  it('refuses to revoke a row about another subject without updating', async () => {
+    script.results.push([{ subjectUserId: SUBJECT }]);
+    await expect(
+      asApplicant(() => revokeRepresentativeAccess(AUTH_ID)),
+    ).rejects.toMatchObject({ code: 'POLICY_DENIED' });
+    expect(script.ops).toEqual(['select']);
+    expect(audit.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'representative.revoked',
+        result: 'denied',
+        reason: 'representative.subject_not_self',
+      }),
+    );
+  });
+
+  it('revokes their own authorisation', async () => {
+    script.results.push(
+      [{ subjectUserId: USER_ID }],
+      [{ id: AUTH_ID, status: 'revoked' }],
+    );
+    await expect(
+      asApplicant(() => revokeRepresentativeAccess(AUTH_ID)),
+    ).resolves.toMatchObject({ status: 'revoked' });
+    expect(script.ops).toEqual(['select', 'update']);
   });
 });

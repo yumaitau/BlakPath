@@ -90,6 +90,9 @@ RUN pnpm build
 # production image. The Node image is pinned by digest above; upgrade Alpine
 # packages here so the web runtime is not stuck on that snapshot.
 FROM node:${NODE_VERSION}-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8 AS runtime
+# Set OS_REFRESH to a new value (CI uses the run id) to re-run the upgrade
+# instead of reusing a cached layer. Unset, the build behaves as before.
+ARG OS_REFRESH=
 RUN apk upgrade --no-cache \
   && apk add --no-cache tini curl ca-certificates
 # npm, Corepack, and Yarn are build tooling; the standalone server executes

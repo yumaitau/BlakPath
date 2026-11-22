@@ -385,9 +385,9 @@ const keyRewrapProcessor: ProcessorFn = async (job, logger) => {
 };
 
 /**
- * Parse the payload and require an active organisation before the processor
- * opens a tenant scope. A rejected job returns normally so BullMQ does not
- * retry it.
+ * Parse the payload and require an operational organisation (draft, onboarding
+ * or active) before the processor opens a tenant scope. A rejected job returns
+ * normally so BullMQ does not retry it.
  */
 function withActiveTenant(processor: ProcessorFn): ProcessorFn {
   return async (job, logger) => {

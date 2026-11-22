@@ -3,7 +3,10 @@ import { webhookDeliveries, webhookEndpoints } from '@/db/schema';
 import { scopeFor } from '@/db/tenant-db';
 import { auditReason } from '@/domains/audit/hash';
 import { recordAudit, type AuditTransaction } from '@/domains/audit/service';
-import { openWebhookSecret } from '@/lib/encryption/tenant-fields';
+import {
+  openWebhookSecret,
+  WebhookSecretInvalidError,
+} from '@/lib/encryption/tenant-fields';
 import { logger } from '@/lib/observability/logger';
 import { isDestinationRejection } from './destination';
 import { deliverWebhookRequest, deliveryDisposition } from './dispatch';
@@ -125,10 +128,14 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
         endpoint.id,
         endpoint.secretCiphertext,
       );
-    } catch {
+    } catch (secretError) {
+      // Only a secret that can never be opened is terminal. A key, KMS or
+      // database fault is temporary: keep the delivery pending and retry.
+      const terminal =
+        secretError instanceof WebhookSecretInvalidError || attempts >= MAX_ATTEMPTS;
       await settle(
         {
-          status: 'failed',
+          status: terminal ? 'failed' : 'pending',
           attempts,
           lastError: 'endpoint secret unavailable',
         },
@@ -140,7 +147,12 @@ export async function processWebhookDelivery(input: DeliverInput): Promise<void>
           reason: 'webhook.secret_unavailable',
         },
       );
-      return;
+      if (terminal) return;
+      logger.warn(
+        { organisationId, deliveryId, attempts },
+        'webhook signing secret unavailable; will retry',
+      );
+      throw new Error('webhook delivery failed: secret unavailable');
     }
 
     const signature = signPayload(signingSecret, body);
