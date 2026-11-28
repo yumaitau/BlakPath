@@ -129,7 +129,7 @@
     "eslint": "^9.13.0",
     "eslint-config-next": "16.4.6",
     "eslint-config-prettier": "^9.1.0",
-    "jsdom": "^25.0.1",
+    "jsdom": "^31.0.1",
     "jsqr": "^1.4.0",
     "knip": "^6.46.1",
     "pdfjs-dist": "^4.10.38",
